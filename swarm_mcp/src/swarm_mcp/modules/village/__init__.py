@@ -4,6 +4,9 @@ Data: gzipped JSONL in ``$SWARM_DATA_DIR/ai-village/`` (override with
 ``SWARM_VILLAGE_DIR``). Small tables load on first use; chat (~183k rows,
 ~2 s) loads on the first chat tool call and is cached for the process.
 agent_memories and events are intentionally not loaded.
+
+Chat messages are event ids ``village:chat:<chat_messages.id>``; ``core_get_event`` expands them with the
+neighbouring messages in the same room.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
+from swarm_mcp.events import EventNotFound, event_record
 from swarm_mcp.modules.village.data import (
     AGENTS_FILE,
     CHAT_FILE,
@@ -166,19 +170,48 @@ def register(mcp, ctx) -> None:
             return m.agent_name(msg.agent_id)
         return f"human:{(msg.user_id or '?')[:8]}"
 
+    def chat_event_id(msg: Msg) -> str:
+        return ctx.event_id("chat", msg.id)
+
     def msg_dict(msg: Msg, m: Meta, max_chars: int) -> dict[str, Any]:
+        """A chat message as a standard event record (see swarm_mcp.events)."""
         text, cut = truncate(ctx.scrub(msg.content), max_chars)
-        d: dict[str, Any] = {
-            "id": msg.id,
-            "time": iso(msg.ts),
-            "speaker": speaker(msg, m),
-            "speaker_type": msg.speaker_type,
-            "room": m.room_name(msg.room_id),
-            "content": text,
+        return event_record(
+            chat_event_id(msg),
+            time=iso(msg.ts),
+            actor=speaker(msg, m),
+            actor_type=msg.speaker_type,
+            location=m.room_name(msg.room_id),
+            text=text,
+            truncated=cut,
+        )
+
+    def chat_index() -> dict[str, int]:
+        return ctx.lazy("chat_index", lambda: {msg.id: i for i, msg in enumerate(chat().msgs)})
+
+    # ------------------------------------------------------------------ event ids
+
+    @ctx.event_source(
+        kinds={"chat": "a chat message (chat_messages table); context = neighbouring messages in the same room"},
+        description="AI Village records.",
+    )
+    def resolve_event(kind: str, local_id: str, *, before: int, after: int, max_chars: int) -> dict[str, Any]:
+        m, c = meta(), chat()
+        i = chat_index().get(local_id)
+        if i is None:
+            raise EventNotFound(local_id)
+        msg = c.msgs[i]
+        seq = c.by_room.get(msg.room_id) if msg.room_id else None
+        if seq is None:  # no room: fall back to the global timeline
+            seq, pos = range(len(c.msgs)), i
+        else:
+            pos = bisect.bisect_left(seq, i)
+        return {
+            "event": msg_dict(msg, m, max_chars),
+            "before": [msg_dict(c.msgs[j], m, max_chars) for j in seq[max(0, pos - before) : pos]],
+            "after": [msg_dict(c.msgs[j], m, max_chars) for j in seq[pos + 1 : pos + 1 + after]],
+            "context": "previous/next messages in the same room" if msg.room_id else "previous/next messages overall",
         }
-        if cut:
-            d["truncated"] = True
-        return d
 
     # ------------------------------------------------------------------ tools
 
@@ -314,12 +347,13 @@ def register(mcp, ctx) -> None:
             snippet = ("…" if a > 0 else "") + clean[a:b].replace("\n", " ") + ("…" if b < len(clean) else "")
             results.append(
                 {
-                    "id": msg.id,
+                    "event_id": chat_event_id(msg),
                     "time": iso(msg.ts),
-                    "speaker": speaker(msg, m),
-                    "room": m.room_name(msg.room_id),
+                    "actor": speaker(msg, m),
+                    "location": m.room_name(msg.room_id),
                     "snippet": snippet,
-                    "message_chars": len(msg.content),
+                    "match": mt.group(0) if mt else None,
+                    "text_chars": len(msg.content),
                 }
             )
         if since:
@@ -336,7 +370,7 @@ def register(mcp, ctx) -> None:
             "results": results,
             "notes": _notes(
                 note,
-                "snippets are trimmed; use village_messages around a result's time for full context"
+                "snippets are trimmed; pass a result's event_id to core_get_event for the full message and its context"
                 if results
                 else None,
             ),

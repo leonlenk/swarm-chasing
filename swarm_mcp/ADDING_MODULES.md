@@ -81,10 +81,50 @@ Every outcome is recorded with its reason, logged to stderr and shown by
 | `ctx.config`, `ctx.data_dir`, `ctx.setting(key)` | global config, the resolved data path, and per-module env settings |
 | `ctx.limit(limit, default=None)` | returns `(effective_limit, note)`. It clamps to [1, max] and says when it did |
 | `ctx.scrub(text)` | masks emails as `[email]` (except allow-listed domains) and phone-like strings as `[phone]` |
+| `ctx.event_id(kind, local_id)` | builds an event id owned by this module (see below) |
+| `@ctx.event_source(kinds={...})` | registers the resolver that makes this module's event ids retrievable through `core_get_event` |
 | `ctx.log` | a logger that writes to stderr |
 | `ctx.registry` | records for all modules (used by `core`) |
 
 Helpers in `swarm_mcp.toolkit` are `ToolInputError`, `truncate`, `parse_time` and `iso`.
+
+## Event ids and shared retrieval
+
+Every piece of evidence a tool returns carries an `event_id` of the form
+`<source>:<kind>:<local_id>`, e.g. `village:chat:16b4ab90-…`. `source` is the
+dataset (by default the module's `NAME`), `kind` the record type within it, and
+`local_id` the source's own id (it may contain `:`). Callers treat ids as opaque
+and pass them back: `core_get_event` returns the original record plus its
+surrounding context, and `core_get_events` fetches up to 50 at once. Derived
+results (search hits, subtasks, handoffs, claims) should cite event ids rather
+than copy text, so every finding can be expanded and checked.
+
+Records use one shape across sources, built with `swarm_mcp.events.event_record`:
+
+| key | meaning |
+|---|---|
+| `event_id`, `source`, `kind` | identity |
+| `time` | ISO UTC with `Z` |
+| `actor`, `actor_type` | who produced it (agent name, `human:<id>`...) and what kind of actor |
+| `location` | where it happened: room, channel, repo... |
+| `text` | the content, scrubbed and truncated (`truncated: true` when cut) |
+
+Modules may add keys after these. To make a module's ids retrievable:
+
+```python
+from swarm_mcp.events import EventNotFound, event_record
+
+@ctx.event_source(kinds={"thing": "one line on what a thing is and what its context is"})
+def resolve(kind, local_id, *, before, after, max_chars):
+    rec = lookup(local_id)                      # raise EventNotFound if missing
+    return {"event": event_record(ctx.event_id(kind, local_id), time=..., actor=..., text=...),
+            "before": [...], "after": [...],     # up to `before`/`after` neighbouring records
+            "context": "previous/next things in the same room"}
+```
+
+A source name can only be registered once, and a module whose `register()` fails
+has its sources removed along with its tools. `core_event_sources` lists what is
+loaded.
 
 Register everything through `ctx.*`. The raw `mcp` argument is passed only to
 satisfy the contract, and its API depends on the SDK version. `swarm_mcp/sdk.py`
