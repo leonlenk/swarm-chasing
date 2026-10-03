@@ -53,12 +53,12 @@ def test_goals(app):
 def test_search_basic_filters_and_snippet(app):
     out = call(app, "village_search_chat", query="genuinely")
     assert out["total_matches"] == 2
-    assert {r["speaker"] for r in out["results"]} == {"GPT-5.2", "Claude Opus 4.5"}
+    assert {r["actor"] for r in out["results"]} == {"GPT-5.2", "Claude Opus 4.5"}
     assert all("genuinely" in r["snippet"] for r in out["results"])
     out = call(app, "village_search_chat", query="genuinely", agent="Opus 4.5")  # short form
     assert out["total_matches"] == 1 and out["filters"]["agent"] == "Claude Opus 4.5"
     out = call(app, "village_search_chat", query="GPT", room="rest")
-    assert out["total_matches"] == 1 and out["results"][0]["room"] == "rest"
+    assert out["total_matches"] == 1 and out["results"][0]["location"] == "rest"
     out = call(app, "village_search_chat", query="genuinely", since="2026-01-10")
     assert out["total_matches"] == 1
     out = call(app, "village_search_chat", query="genuinely", until="2026-01-05")  # bare date = whole day
@@ -67,7 +67,7 @@ def test_search_basic_filters_and_snippet(app):
     snip = out["results"][0]["snippet"]
     assert snip.startswith("…") and snip.endswith("THE END") and len(snip) < 120
     out = call(app, "village_search_chat", query="charity", agent="human")
-    assert out["total_matches"] == 1 and out["results"][0]["speaker"].startswith("human:")
+    assert out["total_matches"] == 1 and out["results"][0]["actor"].startswith("human:")
 
 
 def test_search_regex_paging_and_limits(app):
@@ -96,31 +96,31 @@ def test_privacy_scrubbing(app):
     snip = out["results"][0]["snippet"]
     assert "bob.smith" not in snip and "[email]" in snip
     msgs = call(app, "village_messages", start="2026-01-05", end="2026-01-07")["messages"]
-    text = {m["id"]: m["content"] for m in msgs}
+    text = {m["event_id"].removeprefix("village:chat:"): m["text"] for m in msgs}
     assert "help@agentvillage.org" in text["m0001"]  # allow-listed domain kept
     assert text["m0004"] == "Contact [email] or call [phone] / [phone]."
     # dates, versions and counts are not phone numbers
-    nine = call(app, "village_messages", start="2026-01-15", end="2026-01-15")["messages"][0]["content"]
+    nine = call(app, "village_messages", start="2026-01-15", end="2026-01-15")["messages"][0]["text"]
     assert "1.234.5" in nine and "2026-01-15" in nine and "21,596" in nine
 
 
 def test_scrubbing_can_be_disabled(data_dir: Path):
     app = build_server(config_for(data_dir, SWARM_MCP_SCRUB="0"))
     msgs = call(app, "village_messages", start="2026-01-06", end="2026-01-06")["messages"]
-    assert "bob.smith@gmail.com" in msgs[0]["content"]
+    assert "bob.smith@gmail.com" in msgs[0]["text"]
 
 
 def test_messages_window_paging_and_truncation(app):
     out = call(app, "village_messages", start="2026-01-05", end="2026-01-07")  # bare end date = whole day
-    assert [m["id"] for m in out["messages"]] == ["m0001", "m0002", "m0003", "m0004", "m0005"]  # chronological
+    assert [m["event_id"] for m in out["messages"]] == [f"village:chat:m000{i}" for i in range(1, 6)]  # chronological
     assert out["has_more"] is False and out["next_start"] is None
     out = call(app, "village_messages", start="2026-01-21", limit=10)
     assert out["returned"] == 10 and out["total_in_window"] == 250 and out["has_more"]
     nxt = call(app, "village_messages", start=out["next_start"], limit=1)
-    assert nxt["messages"][0]["content"] == "filler message 10"
+    assert nxt["messages"][0]["text"] == "filler message 10"
     out = call(app, "village_messages", start="2026-01-13", end="2026-01-14", max_chars=100)
     m = out["messages"][0]
-    assert m["truncated"] is True and "[truncated," in m["content"] and len(m["content"]) < 160
+    assert m["truncated"] is True and "[truncated," in m["text"] and len(m["text"]) < 160
     assert any("truncated to 100 chars" in n for n in out["notes"])
     out = call(app, "village_messages", start="2026-01-01", agent="gpt 5.2", room="rest")
     assert out["returned"] == 0
