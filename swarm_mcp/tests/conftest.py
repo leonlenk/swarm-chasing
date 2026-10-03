@@ -141,18 +141,81 @@ def make_village(root: Path) -> Path:
         for i in range(250)
     ]
     _write(d / "chat_messages.jsonl.gz", list(reversed(rows)))  # file order != time order
+    _write(d / "events.jsonl.gz", EVENTS)
     (d / "SCHEMA.md").write_text("# schema\nsynthetic\n")
     return d
 
 
+def _event(i: int, ts: str, data: dict[str, Any]) -> dict[str, Any]:
+    return {"id": f"e{i:04d}", "event_index": i, "created_at": ts, "updated_at": ts, "village_id": "v1", "data": data}
+
+
+EVENTS = [
+    _event(
+        1,
+        "2026-01-05 13:30:00.000000",
+        {
+            "actionType": "START_USING_COMPUTER",
+            "agentId": A_OPUS,
+            "computerUseSessionId": "s1",
+            "sessionGoal": "Research charities",
+        },
+    ),
+    _event(2, "2026-01-05 13:45:00.000000", {"actionType": "AGENT_TALK", "speakerId": A_OPUS, "content": "noise"}),
+    _event(
+        3,
+        "2026-01-05 14:30:00.000000",
+        {
+            "actionType": "STOP_USING_COMPUTER",
+            "agentId": A_OPUS,
+            "summary": "Found GiveDirectly; mail bob.smith@gmail.com",
+        },
+    ),
+    _event(
+        4,
+        "2026-01-06 10:00:00.000000",
+        {
+            "actionType": "CONSOLIDATE",
+            "agentId": A_GPT,
+            "computerUseSessionId": "s2",
+            "nextSessionGoal": "Draft the vote",
+        },
+    ),
+    _event(5, "2026-01-06 11:00:00.000000", {"actionType": "WAIT", "agentId": A_GPT}),
+]
+
+
+def build_store(data_dir: Path) -> Path:
+    """Ingest the synthetic village under ``data_dir`` into ``data_dir/swarmscope.duckdb``."""
+    from swarm_mcp.scope.ingest import ingest
+
+    db = data_dir / "swarmscope.duckdb"
+    ingest("ai_village", data_dir / "ai-village", db, progress=lambda _m: None)
+    return db
+
+
 @pytest.fixture
-def data_dir(tmp_path: Path) -> Path:
+def raw_data_dir(tmp_path: Path) -> Path:
+    """Synthetic raw dataset only (no store)."""
     make_village(tmp_path / "data")
     return tmp_path / "data"
 
 
+@pytest.fixture
+def data_dir(raw_data_dir: Path) -> Path:
+    """Synthetic raw dataset plus the ingested store at the default location."""
+    build_store(raw_data_dir)
+    return raw_data_dir
+
+
+@pytest.fixture
+def store_path(data_dir: Path) -> Path:
+    return data_dir / "swarmscope.duckdb"
+
+
 def config_for(data_dir: Path, **env: str) -> Config:
-    return Config.from_env({"SWARM_DATA_DIR": str(data_dir), **env})
+    base = {"SWARM_DATA_DIR": str(data_dir), "SWARMSCOPE_FINDINGS_DIR": str(data_dir.parent / "findings")}
+    return Config.from_env({**base, **env})
 
 
 @pytest.fixture

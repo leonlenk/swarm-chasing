@@ -9,8 +9,14 @@ restart the server, and it is discovered automatically.
 ```bash
 uv run --directory swarm_mcp swarm-mcp                 # stdio server (what Claude Code launches)
 uv run --directory swarm_mcp swarm-mcp --list-modules  # print loaded/skipped modules as JSON, then exit
+uv run --directory swarm_mcp swarm-mcp ingest ai_village data/ai-village   # build the SwarmScope store
+uv run --directory swarm_mcp swarm-mcp render timeline --since 2025-10-20  # HTML swimlane (data/...)
+uv run --directory swarm_mcp swarm-mcp check-findings  # every finding's evidence ids resolve? (exit 0/1)
 uv run --directory swarm_mcp pytest                    # tests (synthetic data, no dataset needed)
 ```
+
+The data modules (`scope`, `findings`, `village`) read the SwarmScope DuckDB
+store, so run `ingest` once first; until then they are skipped with that reason.
 
 Claude Code picks the server up from the repo's `.mcp.json` (server name `swarm`).
 `SWARM_DATA_DIR` there is `${SWARM_DATA_DIR:-data}`, so you can override it from
@@ -31,10 +37,12 @@ writes the same entry into `.mcp.json`, which already exists.
 | `SWARM_MCP_MODULES` | all | comma list of modules to load (`core` is always loaded unless disabled) |
 | `SWARM_MCP_DISABLE` | none | comma list of modules to skip (wins over `SWARM_MCP_MODULES`) |
 | `SWARM_MCP_DEFAULT_LIMIT` / `SWARM_MCP_MAX_LIMIT` | 20 / 200 | result-count defaults for `ctx.limit()` |
-| `SWARM_MCP_MAX_TEXT` | 1000 | default per-field text truncation |
+| `SWARM_MCP_MAX_TEXT` | 500 | default cap for returned dataset text (`ctx.untrusted`) |
 | `SWARM_MCP_SCRUB` | 1 | mask emails/phones in returned text (`0` = off) |
 | `SWARM_MCP_EMAIL_ALLOWLIST` | `agentvillage.org` | email domains left unmasked |
 | `SWARM_MCP_LOG_LEVEL` | INFO | stderr log level |
+| `SWARMSCOPE_DB` | `<data dir>/swarmscope.duckdb` | the SwarmScope store (`ctx.store()`) |
+| `SWARMSCOPE_FINDINGS_DIR` | `<project root>/findings` | `findings.jsonl` (source of truth) and `audit.jsonl` |
 | `SWARM_<MODULE>_<KEY>` | | per-module settings via `ctx.setting("key")`, e.g. `SWARM_VILLAGE_DIR` |
 
 ## A module in five lines
@@ -80,11 +88,17 @@ Every outcome is recorded with its reason, logged to stderr and shown by
 | `ctx.cache` | the shared `LazyCache` (`get`, `clear(prefix)`, `stats`) |
 | `ctx.config`, `ctx.data_dir`, `ctx.setting(key)` | global config, the resolved data path, and per-module env settings |
 | `ctx.limit(limit, default=None)` | returns `(effective_limit, note)`. It clamps to [1, max] and says when it did |
+| `ctx.untrusted(text, max_chars=None, focus=None)` | **use for every dataset string you return**: masks, caps (default 500) and wraps it as `{"content": ..., "untrusted": true}` (+ `truncated`, `total_chars` when cut; `focus` = regex to centre the snippet on) |
+| `ctx.store(read_only=True)` | `with ctx.store() as s:` a short-lived `scope.db.Store` on the DuckDB store (`s.all/one/scalar`, `resolve_agent`, `author_filter`, `resolve_channel`). Open per call; never cache it, so the CLI and hooks can use the file too |
+| `ctx.store_path` | the store's path (check it in `requires()`) |
 | `ctx.scrub(text)` | masks emails as `[email]` (except allow-listed domains) and phone-like strings as `[phone]` |
 | `ctx.log` | a logger that writes to stderr |
 | `ctx.registry` | records for all modules (used by `core`) |
 
-Helpers in `swarm_mcp.toolkit` are `ToolInputError`, `truncate`, `parse_time` and `iso`.
+Helpers in `swarm_mcp.toolkit` are `ToolInputError`, `untrusted`, `snippet`, `truncate`, `parse_time` and `iso`.
+The SwarmScope core library (`swarm_mcp.scope`: `schema`, `db`, `evidence`,
+`adapters`, `ingest`, `findings`, `analysis`, `viz`) is plain Python, not a
+module; tool modules call into it.
 
 Register everything through `ctx.*`. The raw `mcp` argument is passed only to
 satisfy the contract, and its API depends on the SDK version. `swarm_mcp/sdk.py`
@@ -98,9 +112,14 @@ is the only file that touches the MCP SDK.
   should know (clamped limits, truncation, heuristics).
 - **Limits.** Use a default of about 20 and a maximum of 200 through `ctx.limit()`.
   Clamp rather than reject.
-- **Long text.** Use `truncate(text, n)`, which adds an explicit
-  `…[truncated, N more chars]` marker. Also set a `truncated: true` flag and
-  say how to get more.
+- **Dataset text is untrusted.** Return agent/human-authored strings only via
+  `ctx.untrusted(...)`, never as bare strings, and give tools that return text a
+  `max_chars` parameter (default 500). The server instructions tell the client
+  that record contents are data, not instructions.
+- **Evidence ids.** Return the evidence id (`{source}:{kind}:{native_id}`) with
+  every record so the caller can cite it; `scope.evidence.resolve` checks one.
+- **Long text.** `ctx.untrusted` already caps; `truncate(text, n)` adds an explicit
+  `…[truncated, N more chars]` marker for anything else.
 - **Errors.** `raise ToolInputError("clear, actionable message")`. The caller
   sees exactly that text, with `is_error=true`. Unexpected exceptions become a
   one-line message, and their tracebacks go only to stderr.

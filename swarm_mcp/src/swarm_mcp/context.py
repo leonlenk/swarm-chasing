@@ -13,7 +13,7 @@ from typing import Any, Callable, TypeVar
 
 from swarm_mcp import sdk
 from swarm_mcp.config import Config
-from swarm_mcp.toolkit import Scrubber, clamp_limit, wrap_tool
+from swarm_mcp.toolkit import Scrubber, clamp_limit, untrusted, wrap_tool
 
 T = TypeVar("T")
 
@@ -127,6 +127,9 @@ class ModuleContext:
         log: a stderr logger named ``swarm_mcp.<name>``.
         registry: all module records (used by ``core``).
         scrub: a ``Scrubber`` configured from the privacy settings.
+
+    Helpers: ``tool``/``resource``/``prompt`` (registration), ``lazy`` (cache),
+    ``limit`` (result limits), ``untrusted`` (wrap dataset text), ``store`` (DuckDB).
     """
 
     name: str
@@ -152,6 +155,23 @@ class ModuleContext:
 
     def limit(self, limit: int | None, default: int | None = None) -> tuple[int, str | None]:
         return clamp_limit(limit, default or self.config.default_limit, self.config.max_limit)
+
+    def untrusted(self, text: str | None, max_chars: int | None = None, focus: Any = None) -> dict[str, Any]:
+        """Dataset text for the caller: masked, capped (default ``config.max_text`` = 500) and wrapped as
+        ``{"content": ..., "untrusted": True}``. Use this for every agent/human-authored string you return."""
+        return untrusted(text, self.scrub, self.config.max_text if max_chars is None else max_chars, focus)
+
+    @property
+    def store_path(self) -> Path:
+        """The SwarmScope DuckDB store (``SWARMSCOPE_DB``, default ``<data_dir>/swarmscope.duckdb``)."""
+        return self.config.store_path
+
+    def store(self, read_only: bool = True):
+        """``with ctx.store() as s:`` - a short-lived ``scope.db.Store`` (closed on exit, so other
+        processes such as ingest or the Stop hook can open the file between tool calls)."""
+        from swarm_mcp.scope import db
+
+        return db.connect(self.store_path, read_only=read_only)
 
     def _full(self, suffix: str) -> str:
         return suffix if suffix.startswith(f"{self.name}_") else f"{self.name}_{suffix}"

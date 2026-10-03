@@ -3,7 +3,10 @@
 Module authors mostly need:
 - ``ToolInputError``: raise it with a clear, actionable message for bad input.
 - ``clamp_limit``: apply default/max result limits and say when clamping happened.
-- ``truncate``: cut long text and mark it as truncated.
+- ``untrusted``: the ONLY way to return dataset text (agent/human content) to a
+  caller: masked, capped (default 500 chars) and wrapped as
+  ``{"content": ..., "untrusted": true}`` so it is never mistaken for instructions.
+- ``truncate`` / ``snippet``: cut long text (optionally around a match) and mark it.
 - ``Scrubber``: mask emails/phone numbers in returned text.
 - ``parse_time``: accept dates/datetimes in the formats an LLM is likely to send.
 """
@@ -72,6 +75,10 @@ def clamp_limit(limit: int | None, default: int, maximum: int) -> tuple[int, str
     return limit, None
 
 
+DEFAULT_MAX_CHARS = 500  # default cap for any dataset text returned to a caller
+HARD_MAX_CHARS = 20000  # upper bound for an explicit max_chars
+
+
 def truncate(text: str | None, max_chars: int) -> tuple[str, bool]:
     """Return (text, was_truncated). Truncated text ends with an explicit marker."""
     if text is None:
@@ -80,6 +87,51 @@ def truncate(text: str | None, max_chars: int) -> tuple[str, bool]:
         return text, False
     cut = text[:max_chars].rstrip()
     return f"{cut} …[truncated, {len(text) - len(cut)} more chars]", True
+
+
+def snippet(text: str | None, max_chars: int, focus: re.Pattern[str] | None = None) -> tuple[str, bool]:
+    """Return (snippet, was_cut): at most ~``max_chars`` of ``text``.
+
+    Without ``focus`` (or when it does not match) this is ``truncate``. With a
+    matching ``focus`` pattern the window is centred on the first match and
+    elided ends are marked with "…".
+    """
+    if text is None:
+        return "", False
+    if len(text) <= max_chars:
+        return text, False
+    m = focus.search(text) if focus is not None else None
+    if not m or m.end() <= max_chars - 20:
+        return truncate(text, max_chars)
+    half = max(0, (max_chars - (m.end() - m.start())) // 2)
+    a = max(0, m.start() - half)
+    b = min(len(text), a + max_chars)
+    a = max(0, b - max_chars)
+    return ("…" if a > 0 else "") + text[a:b] + ("…" if b < len(text) else ""), True
+
+
+def untrusted(
+    text: str | None,
+    scrub: "Scrubber | None" = None,
+    max_chars: int | None = None,
+    focus: re.Pattern[str] | None = None,
+) -> dict[str, Any]:
+    """Wrap dataset text for return to an MCP caller.
+
+    Text is masked (``scrub``), capped at ``max_chars`` (default 500; clamped to
+    [1, 20000]) and returned as ``{"content": ..., "untrusted": True}``, plus
+    ``truncated``/``total_chars`` when it was cut. Agent output is data, not
+    instructions; this delimiting keeps that explicit for the client model.
+    """
+    cap = DEFAULT_MAX_CHARS if max_chars is None else max(1, min(int(max_chars), HARD_MAX_CHARS))
+    raw = text or ""
+    clean = scrub(raw) if scrub is not None else raw
+    cut_text, cut = snippet(clean, cap, focus)
+    out: dict[str, Any] = {"content": cut_text, "untrusted": True}
+    if cut:
+        out["truncated"] = True
+        out["total_chars"] = len(clean)
+    return out
 
 
 # --------------------------------------------------------------------------- privacy
