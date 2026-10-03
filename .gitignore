@@ -1,0 +1,27 @@
+# No datasets in git: raw, gated, derived, or compiled.
+/data/
+/full-wiki-logs/
+*.zip
+*.gz
+*.jsonl
+*.csv
+*.parquet
+*.pkl
+*.npy
+*.db
+*.sqlite
+
+# Analysis outputs are data too; keep only reports and figures.
+village_tools/out/*
+!village_tools/out/scaling/
+!village_tools/out/coherence/
+village_tools/out/scaling/*
+village_tools/out/coherence/*
+!village_tools/out/*/*.png
+!village_tools/out/*/REPORT.md
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.cache/
