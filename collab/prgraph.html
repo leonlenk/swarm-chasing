@@ -1,0 +1,409 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"></head><body style="margin:0">
+<title>RPG Week PR Graph</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: a git graph laid along working hours. main is the trunk at the top; every PR forks off as a branch,
+   carries its commits and reviews, and merges back. Below: inspector, per-agent ledger, saboteur days, matrices. */
+:root{
+  --bg:#f7f8f6; --surface:#fcfcfb; --fg:#101412; --fg-2:#4d5550; --muted:#858b86;
+  --grid:#e2e5e1; --axis:#c4c9c3; --alt:#f1f3f0; --ring:rgba(16,20,18,.10);
+  --f-claude:#2a78d6; --f-gpt:#eb6834; --f-gemini:#1baf7a; --f-other:#eda100; --f-ext:#a3a8a3;
+  --trunk:#101412; --egg:#d03b3b; --sel:#4a3aa7;
+  --seq-0:#cde2fb; --seq-1:#104281;
+  --f-display:"IBM Plex Sans Condensed","Arial Narrow",system-ui,sans-serif;
+  --f-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0e110f; --surface:#171a18; --fg:#f2f4f1; --fg-2:#c0c6bf; --muted:#8a908a;
+  --grid:#272b28; --axis:#3a3f3b; --alt:#1c201d; --ring:rgba(255,255,255,.10);
+  --f-claude:#3987e5; --f-gpt:#d95926; --f-gemini:#199e70; --f-other:#c98500; --f-ext:#5d635e;
+  --trunk:#e9ece8; --egg:#e66767; --sel:#9085e9; --seq-0:#1c2a3d; --seq-1:#86b6ef; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0e110f; --surface:#171a18; --fg:#f2f4f1; --fg-2:#c0c6bf; --muted:#8a908a;
+  --grid:#272b28; --axis:#3a3f3b; --alt:#1c201d; --ring:rgba(255,255,255,.10);
+  --f-claude:#3987e5; --f-gpt:#d95926; --f-gemini:#199e70; --f-other:#c98500; --f-ext:#5d635e;
+  --trunk:#e9ece8; --egg:#e66767; --sel:#9085e9; --seq-0:#1c2a3d; --seq-1:#86b6ef; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font:14px/1.5 var(--f-body)}
+.wrap{padding-inline:clamp(16px,2.5vw,32px);padding-block:20px 48px;display:grid;gap:16px}
+header{display:grid;gap:6px}
+.eyebrow{font:500 11px/1 var(--f-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+h1{font:600 clamp(24px,3.2vw,34px)/1.1 var(--f-display);margin:0;text-wrap:balance;letter-spacing:-.01em}
+.lede{color:var(--fg-2);margin:0;max-width:78ch}
+.stats{display:flex;flex-wrap:wrap;gap:6px 22px;margin-top:6px;font-variant-numeric:tabular-nums}
+.stat b{font:600 18px/1 var(--f-display);margin-right:5px}
+.stat span{color:var(--fg-2);font-size:13px}
+.controls{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center}
+.group{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+.lbl{font:500 11px/1 var(--f-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-right:4px}
+button{font:500 13px/1 var(--f-body);color:var(--fg);background:var(--surface);border:1px solid var(--ring);border-radius:6px;padding:7px 10px;cursor:pointer}
+button:hover{border-color:var(--axis)}
+button[aria-pressed="true"]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+button:focus-visible{outline:2px solid var(--sel);outline-offset:2px}
+.agents{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+.agents button{display:inline-flex;align-items:center;gap:6px;padding:5px 8px;font-size:12.5px}
+.agents button[aria-pressed="true"]{background:var(--surface);color:var(--fg);border-color:var(--sel);box-shadow:inset 0 0 0 1px var(--sel)}
+.dot{width:9px;height:9px;border-radius:50%;display:inline-block;flex:none}
+.key{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;color:var(--fg-2);font-size:12.5px}
+.key span{display:inline-flex;align-items:center;gap:6px}
+.key svg{flex:none}
+.panel{background:var(--surface);border:1px solid var(--ring);border-radius:8px}
+.graph{padding:8px 0 4px}
+#cv{display:block;width:100%;touch-action:pan-y;cursor:grab}
+#cv.drag{cursor:grabbing}
+.hint{display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px 14px;padding:6px 12px 2px;color:var(--muted);font-size:12px}
+.zoom{display:flex;gap:4px}.zoom button{padding:4px 9px}
+#tip{position:fixed;pointer-events:none;z-index:5;max-width:360px;background:var(--surface);color:var(--fg);border:1px solid var(--ring);border-radius:6px;padding:7px 9px;font-size:12.5px;line-height:1.4;box-shadow:0 4px 16px rgba(0,0,0,.12)}
+.k{color:var(--muted);font:11px/1.4 var(--f-mono)}
+.v{font-weight:600}
+.below{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);gap:16px;align-items:start}
+@media (max-width:960px){.below{grid-template-columns:minmax(0,1fr)}}
+.col{display:grid;gap:16px;min-width:0}
+.card{padding:14px 16px;display:grid;gap:10px;min-width:0}
+.card h2{font:600 15px/1.2 var(--f-display);margin:0;letter-spacing:.01em}
+.sub{color:var(--muted);font-size:12.5px;margin:-6px 0 0}
+.empty{color:var(--fg-2);margin:0}
+.meta{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12.5px;color:var(--fg-2)}
+.meta b{color:var(--fg);font-weight:600}
+.title{font:600 16px/1.3 var(--f-display);margin:0}
+.title a{color:inherit}
+.eggbox{border-left:3px solid var(--egg);padding:6px 10px;background:var(--alt);border-radius:0 6px 6px 0;font-size:13px}
+.evlist{max-height:300px;overflow:auto;font:12px/1.65 var(--f-mono);font-variant-numeric:tabular-nums}
+.evlist div{display:grid;grid-template-columns:62px 110px minmax(0,1fr);gap:8px}
+.evlist .a,.evlist .s{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.contrib{display:flex;flex-wrap:wrap;gap:5px}
+.pill{display:inline-flex;align-items:center;gap:5px;font:500 11.5px/1 var(--f-mono);padding:4px 7px;border-radius:4px;border:1px solid var(--ring)}
+.tablewrap{overflow-x:auto}
+table.ledger{border-collapse:collapse;font-size:12.5px;font-variant-numeric:tabular-nums;width:100%}
+table.ledger th{font:500 11px var(--f-mono);color:var(--muted);text-align:right;padding:4px 6px;border-bottom:1px solid var(--grid);white-space:nowrap}
+table.ledger td{text-align:right;padding:5px 6px;border-bottom:1px solid var(--grid)}
+table.ledger th:first-child,table.ledger td:first-child{text-align:left;white-space:nowrap}
+table.ledger tr{cursor:pointer}
+table.ledger tr:hover td{background:var(--alt)}
+table.ledger tr.on td{background:var(--alt);font-weight:600}
+.days{display:grid;gap:8px}
+.day{display:grid;grid-template-columns:86px minmax(0,1fr);gap:10px;font-size:13px;padding-bottom:8px;border-bottom:1px solid var(--grid)}
+.day:last-child{border-bottom:0}
+.day .d{font:500 12px var(--f-mono);color:var(--fg-2)}
+.day .d small{display:block;color:var(--muted);font-size:11px}
+.sab{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:baseline}
+.sab b{font-weight:600}
+.tag{font:500 11px/1 var(--f-mono);padding:3px 6px;border-radius:4px;border:1px solid var(--ring);color:var(--fg-2)}
+.tag.bad{border-color:var(--egg);color:var(--egg)}
+.daynote{color:var(--fg-2);font-size:12.5px}
+.prlink{font:500 12px var(--f-mono);padding:2px 6px}
+.mxwrap{overflow-x:auto}
+table.mx{border-collapse:separate;border-spacing:2px;font:11.5px var(--f-mono);font-variant-numeric:tabular-nums}
+table.mx th{font-weight:500;color:var(--fg-2);white-space:nowrap;padding:0 4px}
+table.mx thead th{writing-mode:vertical-rl;transform:rotate(180deg);text-align:left;height:150px;padding:4px 0}
+table.mx tbody th{text-align:right}
+table.mx td{width:24px;height:22px;text-align:center;border-radius:3px}
+table.mx td.z{background:var(--alt);color:transparent}
+.loading{padding:40px 16px;color:var(--fg-2)}
+a{color:var(--f-claude)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">AI Village · ai-village-agents/rpg-game · <span id="dates"></span></div>
+    <h1 id="h1">Develop a turn-based RPG together</h1>
+    <p class="lede">Thirteen agents built one browser RPG in a shared repo while a hidden saboteur game ran alongside: each morning an agent who rolled a 1 tried to slip egg references into the code. Every branch below is a pull request. Its color is the author's model family, dots are commits, diamonds are reviews, and it rejoins <b>main</b> where it was merged. Pick an agent to see everything they touched.</p>
+    <div class="stats" id="stats"></div>
+  </header>
+
+  <div class="controls">
+    <div class="group" id="days"><span class="lbl">Day</span></div>
+    <div class="group" id="show"><span class="lbl">Show</span>
+      <button data-k="unmerged" aria-pressed="true">Unmerged &amp; closed</button>
+      <button data-k="external" aria-pressed="false">Outsider PRs</button>
+      <button data-k="chat" aria-pressed="false">Chat mentions</button>
+    </div>
+  </div>
+  <div class="agents" id="agents"><span class="lbl">Agent</span></div>
+  <div class="key" id="key"></div>
+
+  <section class="panel graph">
+    <canvas id="cv" aria-label="Git graph of pull requests over time"></canvas>
+    <div class="hint"><span>Drag to pan · pinch or Ctrl/⌘ + scroll to zoom · click a branch or mark for details · times in Pacific</span>
+      <span class="zoom"><button id="zin" aria-label="Zoom in">+</button><button id="zout" aria-label="Zoom out">−</button><button id="zall">Whole week</button></span></div>
+    <div class="loading" id="loading">Loading…</div>
+  </section>
+
+  <div class="below">
+    <div class="col">
+      <section class="panel card" id="insp" aria-live="polite"><h2>Pull request</h2><p class="empty">Click a branch to see who wrote, reviewed and merged it.</p></section>
+      <section class="panel card"><h2>Saboteur days</h2><p class="sub">Reconstructed from the debrief reveals and votes in chat.</p><div class="days" id="sabdays"></div></section>
+    </div>
+    <div class="col">
+      <section class="panel card"><h2>Agent ledger</h2><p class="sub" id="ledsub">PRs in the visible window. Click a row to highlight that agent.</p><div class="tablewrap" id="ledger"></div></section>
+      <section class="panel card"><h2 id="mxh">Who reviews whose PRs</h2>
+        <div class="group" id="mxmode"><button data-m="review" aria-pressed="true">Reviews</button><button data-m="merge" aria-pressed="false">Merges</button><button data-m="commit" aria-pressed="false">Commits</button></div>
+        <p class="sub" id="mxsub">Rows wrote the PR; columns reviewed it. Counts are PRs in the visible window.</p><div class="mxwrap" id="mx"></div></section>
+    </div>
+  </div>
+</div>
+<div id="tip" hidden></div>
+
+<script>
+(async function(){
+const $=s=>document.querySelector(s);
+const el=(t,c,x)=>{const e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e;};
+let G;
+try{G=await (await fetch('out/rpg/prgraph.json')).json();}
+catch(e){$('#loading').textContent='Could not load out/rpg/prgraph.json. Serve the collab folder over http (python3 -m http.server) and reload.';return;}
+$('#loading').hidden=true;
+const A=G.agents, NA=A.filter(a=>!a.external).length;
+const short=n=>n.replace(/^Claude /,'').replace(' (Claude Code)',' (CC)');
+const FAMS=[['claude','Claude','--f-claude'],['gpt','GPT','--f-gpt'],['gemini','Gemini','--f-gemini'],['other','DeepSeek','--f-other'],['ext','Outside contributor','--f-ext']];
+const famOf=i=>i==null?'ext':(A[i].external?'ext':A[i].family);
+const T0=Date.parse(G.meta.start.replace(' ','T')+'Z');
+const fT=new Intl.DateTimeFormat('en-US',{timeZone:'America/Los_Angeles',hour:'numeric',minute:'2-digit'});
+const fD=new Intl.DateTimeFormat('en-US',{timeZone:'America/Los_Angeles',weekday:'short',month:'short',day:'numeric'});
+const tm=t=>fT.format(T0+t*1000), dy=t=>fD.format(T0+t*1000);
+const prs=G.prs; const byN={};prs.forEach(p=>byN[p.n]=p);
+const REPO='https://github.com/'+G.meta.repo+'/pull/';
+
+// ---------- header ----------
+$('#h1').textContent=(G.meta.goal||'').replace(/!$/,'');
+$('#dates').textContent=dy(G.segments[0][0])+' – '+dy(G.segments[G.segments.length-1][1]);
+{const own=prs.filter(p=>!p.external);const merged=own.filter(p=>p.state==='merged'||p.state==='landed');
+ const multi=own.filter(p=>contributors(p).size>1).length;
+ const eggs=prs.filter(p=>p.egg);const through=eggs.filter(p=>/undetected/.test(p.egg.outcome)).length;
+ [[own.length,'PRs'],[merged.length,'reached main'],[Math.round(100*multi/own.length)+'%','had more than one agent on them'],[own.reduce((s,p)=>s+p.reviews.filter(r=>r[2]==='approve').length,0),'approvals'],[eggs.length,'egg PRs'],[through,'got through undetected']]
+ .forEach(([b,s])=>{const d=el('div','stat');d.append(el('b',null,b),el('span',null,s));$('#stats').append(d);});}
+function contributors(p){const s=new Set();if(p.author!=null)s.add(p.author);p.commits.forEach(c=>s.add(c[1]));p.reviews.forEach(r=>s.add(r[1]));if(p.merger!=null)s.add(p.merger);return s;}
+
+// ---------- compressed time ----------
+const PAD=600, segs=G.segments.map(([a,b])=>[a-PAD,b+PAD]);
+const active=segs.reduce((s,[a,b])=>s+b-a,0), GAP=active*0.018;
+const off=[];{let u=0;for(const [a,b] of segs){off.push(u);u+=b-a+GAP;}}
+const U=off[off.length-1]+segs[segs.length-1][1]-segs[segs.length-1][0];
+function t2u(t){for(let i=0;i<segs.length;i++){const [a,b]=segs[i];if(t<a)return i?off[i]-GAP*.5:Math.max(-GAP*.4,off[0]-(a-t)*.02);if(t<=b)return off[i]+t-a;}return U+Math.min(GAP*.4,(t-segs[segs.length-1][1])*.02);}
+function u2t(u){for(let i=0;i<segs.length;i++){const [a,b]=segs[i];if(u<off[i])return a;if(u<=off[i]+b-a)return a+u-off[i];}return segs[segs.length-1][1];}
+
+// ---------- state ----------
+const S={u0:-GAP*.4,u1:U+GAP*.4,agent:null,sel:null,show:{unmerged:true,external:false,chat:false},mx:'review'};
+let col={};
+function readColors(){const cs=getComputedStyle(document.documentElement),g=v=>cs.getPropertyValue(v).trim();
+  col={fg:g('--fg'),fg2:g('--fg-2'),muted:g('--muted'),grid:g('--grid'),axis:g('--axis'),alt:g('--alt'),surf:g('--surface'),trunk:g('--trunk'),egg:g('--egg'),sel:g('--sel'),s0:g('--seq-0'),s1:g('--seq-1')};
+  col.fam={};FAMS.forEach(([k,,v])=>col.fam[k]=g(v));}
+readColors();
+const rethink=()=>{readColors();draw();renderSide();};
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change',rethink);
+new MutationObserver(rethink).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+
+// ---------- key ----------
+{const k=$('#key');
+ const sv=(w,h,inner)=>{const s=document.createElementNS('http://www.w3.org/2000/svg','svg');s.setAttribute('width',w);s.setAttribute('height',h);s.setAttribute('viewBox','0 0 '+w+' '+h);s.innerHTML=inner;return s;};
+ FAMS.slice(0,4).forEach(([f,lab,v])=>{const s=el('span');s.append(sv(18,8,`<line x1="1" y1="4" x2="17" y2="4" stroke="var(${v})" stroke-width="2.5" stroke-linecap="round"/>`),document.createTextNode(lab));k.append(s);});
+ const items=[[`<circle cx="7" cy="7" r="3.6" fill="var(--fg-2)"/>`,'commit'],[`<circle cx="7" cy="7" r="3.6" fill="var(--fg-2)" stroke="var(--fg)" stroke-width="1.6"/><circle cx="7" cy="7" r="5.6" fill="none" stroke="var(--fg-2)" stroke-width="1.2"/>`,'commit by another agent'],
+  [`<path d="M7 2.5 L11.5 7 L7 11.5 L2.5 7Z" fill="var(--fg-2)"/>`,'approval'],[`<path d="M7 2.5 L11.5 7 L7 11.5 L2.5 7Z" fill="none" stroke="var(--fg-2)" stroke-width="1.5"/>`,'changes requested / comment'],
+  [`<rect x="3" y="3" width="8" height="8" rx="1.5" fill="var(--fg-2)"/>`,'merge (colored by merger)'],[`<path d="M3 3 L11 11 M11 3 L3 11" stroke="var(--fg-2)" stroke-width="1.8"/>`,'closed'],
+  [`<line x1="1" y1="7" x2="13" y2="7" stroke="var(--fg-2)" stroke-width="2" stroke-dasharray="3 2"/>`,'landed via another merge'],[`<ellipse cx="7" cy="7" rx="4" ry="5.2" fill="none" stroke="var(--egg)" stroke-width="1.8"/>`,'egg attempt']];
+ items.forEach(([s,t])=>{const e=el('span');e.append(sv(14,14,s),document.createTextNode(t));k.append(e);});}
+
+// ---------- controls ----------
+function setDay(i){if(i<0){S.u0=-GAP*.4;S.u1=U+GAP*.4;}else{S.u0=off[i]-GAP*.25;S.u1=off[i]+segs[i][1]-segs[i][0]+GAP*.25;}compact();
+  document.querySelectorAll('#days button').forEach(b=>b.setAttribute('aria-pressed',+b.dataset.i===i));changed();}
+{const mk=(i,t)=>{const b=el('button',null,t);b.dataset.i=i;b.setAttribute('aria-pressed',i<0);b.onclick=()=>setDay(i);$('#days').append(b);};
+ mk(-1,'Whole week');G.segments.forEach((s,i)=>mk(i,dy(s[0]).replace(/^(\w+), /,'$1 ')));}
+document.querySelectorAll('#show button').forEach(b=>b.onclick=()=>{S.show[b.dataset.k]=!S.show[b.dataset.k];b.setAttribute('aria-pressed',S.show[b.dataset.k]);packGlobal();compact();changed();});
+const order=[...Array(NA).keys()].sort((a,b)=>FAMS.findIndex(f=>f[0]===A[a].family)-FAMS.findIndex(f=>f[0]===A[b].family)||A[a].name.localeCompare(A[b].name));
+order.forEach(i=>{const b=el('button');b.setAttribute('aria-pressed','false');const d=el('span','dot');d.style.background='var('+FAMS.find(f=>f[0]===A[i].family)[2]+')';
+  b.append(d,document.createTextNode(short(A[i].name)));b.onclick=()=>setAgent(S.agent===i?null:i);b.dataset.a=i;$('#agents').append(b);});
+function setAgent(a){S.agent=a;document.querySelectorAll('#agents button').forEach(b=>b.setAttribute('aria-pressed',+b.dataset.a===a));draw();renderSide();}
+document.querySelectorAll('#mxmode button').forEach(b=>b.onclick=()=>{S.mx=b.dataset.m;document.querySelectorAll('#mxmode button').forEach(x=>x.setAttribute('aria-pressed',x===b));renderSide();});
+$('#zin').onclick=()=>zoomAt(LW+(W-LW)/2,.5);$('#zout').onclick=()=>zoomAt(LW+(W-LW)/2,2);$('#zall').onclick=()=>setDay(-1);
+
+// ---------- geometry ----------
+// lanes: pack branches along the compressed time axis (stable), then compact to the lanes the view actually uses
+const AXIS_H=38, MAIN_Y=AXIS_H+18, LANE0=MAIN_Y+24, LANE_H=15;
+let nLanes=8, H=LANE0+nLanes*LANE_H+14, laneMap=new Map();
+const laneY=l=>LANE0+l*LANE_H+LANE_H/2;
+const endOf=p=>p.end!=null?p.end:p.last;
+function packGlobal(){const vis=prs.filter(visible).sort((a,b)=>t2u(a.start)-t2u(b.start));const ends=[];const gap=U*.0015;
+  for(const p of vis){const a=t2u(p.start),b=t2u(endOf(p));let l=ends.findIndex(e=>e+gap<a);if(l<0){l=ends.length;ends.push(b);}else ends[l]=b;p._g=l;}}
+function compact(){const used=[...new Set(prs.filter(p=>visible(p)&&p._g!=null&&t2u(endOf(p))>=S.u0&&t2u(p.start)<=S.u1).map(p=>p._g))].sort((a,b)=>a-b);
+  laneMap=new Map(used.map((g,i)=>[g,i]));const n=Math.max(6,used.length);if(n!==nLanes){nLanes=n;H=LANE0+nLanes*LANE_H+14;size();}}
+const cv=$('#cv'),ctx=cv.getContext('2d');let W=0,LW=56,dpr=1;
+function size(){dpr=devicePixelRatio||1;W=cv.clientWidth;LW=W<560?8:56;cv.style.height=H+'px';cv.width=W*dpr;cv.height=H*dpr;draw();}
+const X=u=>LW+(u-S.u0)/(S.u1-S.u0)*(W-LW-10), UX=x=>S.u0+(x-LW)/(W-LW-10)*(S.u1-S.u0);
+const XT=t=>X(t2u(t));
+let raf=0;function draw(){if(!raf)raf=requestAnimationFrame(()=>{raf=0;paint();});}
+
+function visible(p){if(p.external&&!S.show.external)return false;if(!S.show.unmerged&&(p.state==='closed'||p.state==='unmerged'))return false;return true;}
+function involvement(p,a){if(a==null)return 1;if(p.author===a)return 1;if(p.merger===a||p.commits.some(c=>c[1]===a)||p.reviews.some(r=>r[1]===a))return .75;if(S.show.chat&&p.chat.some(c=>c[1]===a))return .45;return 0;}
+let hits=[];  // [x,y,r,kind,payload]
+function diamond(c,x,y,r,fill,stroke){c.beginPath();c.moveTo(x,y-r);c.lineTo(x+r,y);c.lineTo(x,y+r);c.lineTo(x-r,y);c.closePath();if(fill){c.fillStyle=fill;c.fill();}if(stroke){c.strokeStyle=stroke;c.lineWidth=1.5;c.stroke();}}
+function paint(){
+  const c=ctx;c.setTransform(dpr,0,0,dpr,0,0);c.clearRect(0,0,W,H);hits=[];
+  // axis, days, gaps
+  const span=S.u1-S.u0,pps=(W-LW-10)/span;
+  const step=[300,900,1800,3600,7200,14400].find(s=>s*pps>=74)||14400;
+  segs.forEach(([a,b],i)=>{const ua=off[i],ub=off[i]+b-a;if(ub<S.u0||ua>S.u1)return;
+    if(i>0){const xg0=X(ua-GAP),xg1=X(ua);c.fillStyle=col.alt;c.fillRect(Math.max(LW,xg0),AXIS_H,Math.max(0,xg1-Math.max(LW,xg0)),H-AXIS_H);}
+    c.fillStyle=col.fg;c.font='600 11.5px "IBM Plex Sans Condensed", system-ui, sans-serif';c.textBaseline='middle';
+    const xa=Math.max(LW,X(ua));if(X(ub)-xa>40)c.fillText(dy(G.segments[i][0]),xa+4,10);
+    c.font='500 10.5px "IBM Plex Mono", ui-monospace, monospace';
+    let tk=Math.ceil((T0/1000+a)/step)*step;
+    for(;tk<=T0/1000+b;tk+=step){const t=tk-T0/1000,x=X(off[i]+t-a);if(x<LW||x>W-4)continue;
+      c.fillStyle=col.grid;c.fillRect(Math.round(x),AXIS_H-5,1,H-AXIS_H+5);
+      if(pps*step>=74){c.fillStyle=col.muted;c.fillText(tm(t),x+3,27);}}});
+  c.fillStyle=col.axis;c.fillRect(LW,AXIS_H-1,W-LW,1);
+  // trunk
+  c.strokeStyle=col.trunk;c.lineWidth=3;c.lineCap='round';c.beginPath();c.moveTo(LW,MAIN_Y);c.lineTo(W-6,MAIN_Y);c.stroke();
+  c.fillStyle=col.fg;c.font='600 12px "IBM Plex Mono", ui-monospace, monospace';c.textBaseline='middle';if(LW>20)c.fillText('main',8,MAIN_Y);
+  // direct commits on main
+  for(const d of G.direct){const x=XT(d[0]);if(x<LW||x>W)continue;const dim=S.agent!=null&&d[1]!==S.agent;
+    c.globalAlpha=dim?.2:1;c.fillStyle=col.fam[famOf(d[1])];c.beginPath();c.arc(x,MAIN_Y,3,0,7);c.fill();hits.push([x,MAIN_Y,6,'direct',d]);}
+  c.globalAlpha=1;
+  // branches: draw dimmed first, highlighted last
+  const vis=prs.filter(visible);
+  const sel=S.sel&&S.sel.pr;
+  const ranked=vis.map(p=>[p,involvement(p,S.agent)]).sort((a,b)=>(a[1]-b[1])||((a[0].n===sel)-(b[0].n===sel)));
+  for(const [p,inv] of ranked){
+    if(!laneMap.has(p._g))continue;
+    const y=laneY(laneMap.get(p._g)), x0=XT(p.start), endT=p.end!=null?p.end:p.last, x1=Math.max(x0+4,XT(endT));
+    if(x1<LW-20||x0>W+20)continue;
+    const isSel=p.n===sel;
+    const alpha=isSel?1:(S.agent==null?(p.state==='merged'||p.state==='landed'?.85:.55):(inv>=1?1:inv>=.7?.75:inv>0?.4:.08));
+    c.globalAlpha=alpha;
+    const colr=col.fam[famOf(p.author)];
+    c.strokeStyle=colr;c.lineWidth=isSel?3:(inv>=1&&S.agent!=null?2.4:1.8);
+    const r=Math.min(10,Math.max(4,(x1-x0)/4));
+    c.setLineDash(p.state==='unmerged'?[3,3]:[]);
+    c.beginPath();c.moveTo(x0,MAIN_Y);c.bezierCurveTo(x0,y,x0,y,x0+r,y);
+    if(p.state==='merged'){c.lineTo(x1-r,y);c.bezierCurveTo(x1,y,x1,y,x1,MAIN_Y);}
+    else c.lineTo(x1,y);
+    c.stroke();
+    if(p.state==='landed'){c.setLineDash([3,3]);c.beginPath();c.moveTo(x1,y);c.bezierCurveTo(x1+r,y,x1+r,y,x1+r,MAIN_Y);c.stroke();}
+    c.setLineDash([]);
+    hits.push([null,y,0,'branch',p,x0,x1]);
+    // closed marker
+    if(p.state==='closed'){c.strokeStyle=col.fg2;c.lineWidth=1.8;c.beginPath();c.moveTo(x1-3.5,y-3.5);c.lineTo(x1+3.5,y+3.5);c.moveTo(x1+3.5,y-3.5);c.lineTo(x1-3.5,y+3.5);c.stroke();}
+    // egg
+    if(p.egg){c.strokeStyle=col.egg;c.lineWidth=2;c.beginPath();c.ellipse(x0+r+2,y-0.5,4.5,6,0,0,7);c.stroke();
+      if(/undetected/.test(p.egg.outcome)){c.fillStyle=col.egg;c.beginPath();c.ellipse(x0+r+2,y-0.5,2,3,0,0,7);c.fill();}}
+    // chat ticks
+    if(S.show.chat&&alpha>.3){c.fillStyle=col.muted;for(const [t,a] of p.chat){const x=XT(t);if(S.agent!=null&&a!==S.agent&&inv<1)continue;c.fillRect(x-.5,y-7,1,3);}}
+    // commits
+    for(const cm of p.commits){const x=Math.min(Math.max(XT(cm[0]),x0+2),x1);const other=cm[1]!==p.author;
+      c.fillStyle=col.fam[famOf(cm[1])];c.beginPath();c.arc(x,y,3.3,0,7);c.fill();
+      c.strokeStyle=col.surf;c.lineWidth=1.2;c.stroke();
+      if(other){c.strokeStyle=col.fam[famOf(cm[1])];c.lineWidth=1.2;c.beginPath();c.arc(x,y,5.6,0,7);c.stroke();}
+      hits.push([x,y,7,'commit',[p,cm]]);}
+    // reviews (above the line)
+    for(const rv of p.reviews){const x=Math.min(Math.max(XT(rv[0]),x0),x1+8);const yy=y-5;const fc=col.fam[famOf(rv[1])];
+      if(rv[2]==='approve')diamond(c,x,yy,3.4,fc,col.surf);else diamond(c,x,yy,3.2,null,fc);hits.push([x,yy,7,'review',[p,rv]]);}
+    // merge node
+    if((p.state==='merged')&&x1>=LW){const fc=p.merger!=null?col.fam[famOf(p.merger)]:col.muted;c.fillStyle=fc;c.fillRect(x1-4,MAIN_Y-4,8,8);c.strokeStyle=col.surf;c.lineWidth=1.2;c.strokeRect(x1-4,MAIN_Y-4,8,8);hits.push([x1,MAIN_Y,7,'merge',p]);}
+    if(isSel){c.globalAlpha=1;c.fillStyle=col.fg;c.font='600 11px "IBM Plex Mono", ui-monospace, monospace';c.textBaseline='middle';c.fillText('#'+p.n,Math.max(LW+2,x0+r+10),y-9);}
+  }
+  c.globalAlpha=1;
+  // left gutter mask
+  if(LW>20){c.fillStyle=col.surf;c.fillRect(0,MAIN_Y+8,LW-2,H);c.fillStyle=col.muted;c.font='500 10.5px "IBM Plex Mono", ui-monospace, monospace';
+    c.save();c.translate(20,LANE0+nLanes*LANE_H/2);c.rotate(-Math.PI/2);c.textAlign='center';c.fillText('pull requests',0,0);c.restore();}
+}
+
+// ---------- interaction ----------
+function clampView(){const lo=-GAP*.4,hi=U+GAP*.4;const span=Math.min(hi-lo,Math.max(600,S.u1-S.u0));if(S.u0<lo){S.u0=lo;S.u1=lo+span;}if(S.u1>hi){S.u1=hi;S.u0=hi-span;}S.u1=S.u0+span;}
+function zoomAt(x,f){const u=UX(Math.max(LW,x));S.u0=u-(u-S.u0)*f;S.u1=u+(S.u1-u)*f;clampView();changed();}
+let sT;function changed(){draw();clearTimeout(sT);sT=setTimeout(()=>{compact();draw();renderSide();},150);}
+cv.addEventListener('wheel',e=>{if(!(e.ctrlKey||e.metaKey)&&Math.abs(e.deltaX)<=Math.abs(e.deltaY))return;e.preventDefault();
+  if(e.ctrlKey||e.metaKey)zoomAt(e.offsetX,Math.exp(e.deltaY*.0025));else{const du=e.deltaX/(W-LW)*(S.u1-S.u0);S.u0+=du;S.u1+=du;clampView();changed();}},{passive:false});
+let drag=null;
+cv.addEventListener('pointerdown',e=>{drag={x:e.clientX,u0:S.u0,u1:S.u1,moved:false,id:e.pointerId};});
+addEventListener('pointermove',e=>{if(drag){const dx=e.clientX-drag.x;if(Math.abs(dx)>3&&!drag.moved){drag.moved=true;cv.classList.add('drag');try{cv.setPointerCapture(drag.id)}catch(_){}}
+  if(drag.moved){const du=-dx/(W-LW-10)*(drag.u1-drag.u0);S.u0=drag.u0+du;S.u1=drag.u1+du;clampView();changed();tip.hidden=true;return;}}
+  if(e.target===cv)hover(e);});
+addEventListener('pointerup',e=>{if(!drag)return;cv.classList.remove('drag');if(!drag.moved&&e.target===cv){const h=find(e.offsetX,e.offsetY);if(h)selectPR(h.pr);else if(h===null&&!S.agent){}}drag=null;});
+cv.addEventListener('pointerleave',()=>tip.hidden=true);
+function find(x,y){let best=null,bd=1e9;
+  for(const h of hits){if(h[3]==='branch'){const p=h[4];if(Math.abs(y-h[1])<=6&&x>=h[5]-4&&x<=h[6]+4){const d=Math.abs(y-h[1])+4;if(d<bd){bd=d;best={kind:'branch',pr:p};}}continue;}
+    const d=Math.hypot(x-h[0],y-h[1]);if(d<=h[2]&&d<bd){bd=d;best={kind:h[3],pr:h[3]==='commit'||h[3]==='review'?h[4][0]:(h[3]==='merge'?h[4]:null),data:h[4]};}}
+  if(best&&best.kind==='direct')best.pr=null;
+  return best;}
+const tip=$('#tip');
+function hover(e){const h=find(e.offsetX,e.offsetY);if(!h){tip.hidden=true;return;}tip.replaceChildren();
+  const nm=i=>i==null?'unknown':A[i].name;
+  if(h.kind==='commit'){const [p,cm]=h.data;tip.append(el('div','k',tm(cm[0])+' · commit '+cm[3]+' · PR #'+p.n),el('div','v',nm(cm[1])),el('div',null,cm[2]));}
+  else if(h.kind==='review'){const [p,rv]=h.data;tip.append(el('div','k',tm(rv[0])+' · PR #'+p.n),el('div','v',nm(rv[1])),el('div',null,{approve:'approved',changes:'requested changes',comment:'commented',review:'reviewed'}[rv[2]]));}
+  else if(h.kind==='merge'){const p=h.data;tip.append(el('div','k',tm(p.end)+' · '+p.mergeKind+' merge'),el('div','v','PR #'+p.n+' merged'+(p.merger!=null?' by '+nm(p.merger):'')),el('div',null,p.title));}
+  else if(h.kind==='direct'){const d=h.data;tip.append(el('div','k',tm(d[0])+' · pushed straight to main · '+d[3]),el('div','v',nm(d[1])),el('div',null,d[2]));}
+  else{const p=h.pr;tip.append(el('div','k','PR #'+p.n+' · '+stateLabel(p)),el('div','v',p.title),el('div',null,'by '+nm(p.author)+' · '+contributors(p).size+' agents'));if(p.egg)tip.append(el('div','k','egg: '+p.egg.what));}
+  tip.hidden=false;const tw=tip.offsetWidth,th=tip.offsetHeight;tip.style.left=Math.min(innerWidth-tw-8,e.clientX+14)+'px';tip.style.top=(e.clientY+th+20>innerHeight?e.clientY-th-12:e.clientY+14)+'px';}
+function stateLabel(p){return {merged:'merged',landed:'landed via '+(p.via?'#'+p.via:'another merge'),closed:'closed without merging',unmerged:'never merged'}[p.state];}
+
+// ---------- inspector ----------
+function selectPR(p){if(!p)return;S.sel={pr:p.n};draw();renderPR(p);}
+function renderPR(p){const box=$('#insp');box.replaceChildren(el('h2',null,'Pull request'));
+  const t=el('p','title');const a=el('a',null,'#'+p.n+' ');a.href=REPO+p.n;a.target='_blank';a.rel='noopener';t.append(a,document.createTextNode(p.title));box.append(t);
+  const nm=i=>i==null?'unknown':A[i].name;const m=el('div','meta');
+  m.append(el('span',null,'written by '),el('b',null,nm(p.author)));
+  if(p.opener!=null&&p.opener!==p.author)m.append(el('span',null,'opened by '+nm(p.opener)));
+  m.append(el('span',null,stateLabel(p)+(p.merger!=null?' by '+nm(p.merger):'')));
+  m.append(el('span',null,dy(p.start)+', '+tm(p.start)+(p.end!=null?' → '+tm(p.end):'')));box.append(m);
+  if(p.egg){const e=el('div','eggbox');e.append(el('b',null,'Egg attempt by '+p.egg.agent+'. '),document.createTextNode(p.egg.what+'. Outcome: '+p.egg.outcome+'.'));box.append(e);}
+  // contributors
+  const roles=new Map();const add=(i,r)=>{if(i==null)return;if(!roles.has(i))roles.set(i,[]);roles.get(i).push(r);};
+  add(p.author,'author');p.commits.forEach(c=>c[1]!==p.author&&add(c[1],'commit'));p.reviews.forEach(r=>add(r[1],r[2]==='approve'?'approve':'review'));add(p.merger,'merge');
+  const cw=el('div','contrib');roles.forEach((rs,i)=>{const pl=el('span','pill');const d=el('span','dot');d.style.background=col.fam[famOf(i)];const cnt={};rs.forEach(r=>cnt[r]=(cnt[r]||0)+1);
+    pl.append(d,document.createTextNode(short(A[i].name)+' · '+Object.entries(cnt).map(([k,v])=>v>1?k+'×'+v:k).join(', ')));cw.append(pl);});box.append(cw);
+  if(p.chat.length){const by={};p.chat.forEach(c=>by[c[1]]=(by[c[1]]||0)+1);box.append(el('div','k','Mentioned in '+p.chat.length+' chat messages by '+Object.keys(by).length+' agents'));}
+  // event list
+  const ev=[...p.commits.map(c=>[c[0],c[1],'commit',c[2]]),...p.reviews.map(r=>[r[0],r[1],r[2]==='approve'?'approved':r[2]==='changes'?'requested changes':r[2],'']),
+    ...(p.state==='merged'&&p.end!=null?[[p.end,p.merger,'merged into main','']]:[]),...(p.state==='closed'&&p.end!=null?[[p.end,null,'closed','']]:[])].sort((a,b)=>a[0]-b[0]);
+  const L=el('div','evlist');ev.forEach(([t,a,k,s])=>{const r=el('div');r.append(el('span',null,tm(t)),el('span','a',a==null?'—':short(A[a].name)),el('span','s',k+(s?': '+s:'')));L.append(r);});box.append(L);
+  const clr=el('button',null,'Clear selection');clr.style.justifySelf='start';clr.onclick=()=>{S.sel=null;draw();box.replaceChildren(el('h2',null,'Pull request'),el('p','empty','Click a branch to see who wrote, reviewed and merged it.'));};box.append(clr);}
+
+// ---------- saboteur days ----------
+{const host=$('#sabdays');const idx={};A.forEach((a,i)=>idx[a.name]=i);
+ (G.saboteurs?G.saboteurs.days:[]).forEach(d=>{const row=el('div','day');const dd=el('div','d');const date=new Date(d.date+'T12:00:00');
+   dd.append(document.createTextNode(date.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'})),el('small',null,'village day '+d.villageDay));
+   const body=el('div');body.style.cssText='display:grid;gap:4px;min-width:0';
+   d.saboteurs.forEach(s=>{const line=el('div','sab');const nb=el('b',null,s.agent);nb.style.cursor='pointer';nb.onclick=()=>idx[s.agent]!=null&&setAgent(idx[s.agent]);line.append(nb);
+     line.append(el('span','tag',s.caught?'voted out':'not caught'));
+     if(!s.eggs.length)line.append(el('span','tag','no eggs'));
+     s.eggs.forEach(e=>{const ok=/undetected/.test(e.outcome);const b=el('button','prlink','#'+e.pr+(ok?' got through':' caught'));if(ok)b.style.cssText='border-color:var(--egg);color:var(--egg)';
+       b.title=e.what;b.onclick=()=>{const p=byN[e.pr];if(p){const u=t2u(p.start);const span=Math.max(5400,(t2u(p.end??p.last)-u)*1.6);S.u0=u-span*.3;S.u1=u+span*.7;clampView();changed();selectPR(p);}};line.append(b);});
+     body.append(line);});
+   if(d.note)body.append(el('div','daynote',d.note));
+   row.append(dd,body);host.append(row);});}
+
+// ---------- ledger + matrix (scoped to visible window) ----------
+function inScope(p){const [ta,tb]=[u2t(S.u0),u2t(S.u1)];const e=p.end!=null?p.end:p.last;return visible(p)&&!(e<ta||p.start>tb);}
+function renderSide(){const ps=prs.filter(p=>inScope(p)&&!p.external);
+  const st=A.slice(0,NA).map(()=>({auth:0,merged:0,mergedOthers:0,revGiven:0,revGot:0,commitsOthers:0,helpers:new Set()}));
+  for(const p of ps){if(p.author==null||p.author>=NA)continue;const s=st[p.author];s.auth++;if(p.state==='merged'||p.state==='landed')s.merged++;
+    if(p.merger!=null&&p.merger<NA&&p.merger!==p.author)st[p.merger].mergedOthers++;
+    const rv=new Set(p.reviews.filter(r=>r[1]!==p.author).map(r=>r[1]));rv.forEach(r=>{if(r<NA){st[r].revGiven++;s.helpers.add(r);}});s.revGot+=rv.size;
+    p.commits.forEach(c=>{if(c[1]!==p.author&&c[1]<NA){st[c[1]].commitsOthers++;s.helpers.add(c[1]);}});}
+  const tb=el('table','ledger');const hd=el('tr');['Agent','PRs written','reached main','reviews given','merged others’','commits on others’','helpers on own PRs'].forEach(h=>hd.append(el('th',null,h)));const th=el('thead');th.append(hd);tb.append(th);
+  const body=el('tbody');order.forEach(i=>{const s=st[i];const tr=el('tr');if(S.agent===i)tr.className='on';const n=el('td');const d=el('span','dot');d.style.cssText='background:'+col.fam[A[i].family]+';margin-right:7px';n.append(d,document.createTextNode(short(A[i].name)));
+    tr.append(n,...[s.auth,s.merged,s.revGiven,s.mergedOthers,s.commitsOthers,s.helpers.size].map(v=>el('td',null,v)));tr.onclick=()=>setAgent(S.agent===i?null:i);body.append(tr);});tb.append(body);$('#ledger').replaceChildren(tb);
+  // matrix
+  const M=A.slice(0,NA).map(()=>new Array(NA).fill(0));
+  for(const p of ps){if(p.author==null||p.author>=NA)continue;let set=new Set();
+    if(S.mx==='review')p.reviews.forEach(r=>r[1]<NA&&set.add(r[1]));else if(S.mx==='merge'){if(p.merger!=null&&p.merger<NA)set.add(p.merger);}else p.commits.forEach(c=>c[1]<NA&&c[1]!==p.author&&set.add(c[1]));
+    set.forEach(x=>M[p.author][x]++);}
+  $('#mxh').textContent={review:'Who reviews whose PRs',merge:'Who merges whose PRs',commit:'Who commits to whose PRs'}[S.mx];
+  $('#mxsub').textContent='Rows wrote the PR; columns '+{review:'reviewed it',merge:'merged it (the diagonal is self-merges)',commit:'pushed commits to it'}[S.mx]+'. Counts are PRs in the visible window.';
+  const mx=Math.max(1,...M.flat());const p2=h=>[1,3,5].map(i=>parseInt(h.slice(i,i+2),16));const a0=p2(col.s0),a1=p2(col.s1);
+  const sc=f=>'rgb('+a0.map((v,i)=>Math.round(v+(a1[i]-v)*f)).join(',')+')';
+  const t=el('table','mx');const hr=el('tr');hr.append(el('th'));order.forEach(c=>hr.append(el('th',null,short(A[c].name))));const h2=el('thead');h2.append(hr);t.append(h2);
+  const b2=el('tbody');order.forEach(r=>{const tr=el('tr');tr.append(el('th',null,short(A[r].name)));order.forEach(c=>{const v=M[r][c];const td=el('td');
+    if(!v){td.className='z';td.textContent='0';}else{const f=Math.sqrt(v/mx);td.style.background=sc(.15+.85*f);td.style.color=f>.55?'var(--bg)':'var(--fg)';td.textContent=v;}
+    td.title=short(A[r].name)+' ← '+short(A[c].name)+': '+v+' PRs';tr.append(td);});b2.append(tr);});t.append(b2);$('#mx').replaceChildren(t);}
+
+packGlobal();compact();
+new ResizeObserver(()=>size()).observe(cv);
+size();renderSide();
+// open on the day the visual egg landed, with that PR selected, so the first view tells a story
+{const p=byN[409];if(p){const i=segs.findIndex(([a,b])=>p.start>=a&&p.start<=b);if(i>=0)setDay(i);selectPR(p);}}
+})();
+</script>
+</body></html>
