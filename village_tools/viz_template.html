@@ -193,7 +193,7 @@ footer{font-size:12.5px;color:var(--ink-3);border-top:1px solid var(--line);padd
 
 <main id="top">
   <header class="mast">
-    <p class="eyebrow" data-k="eyebrow">AI Village dataset · 45 agents · 51 goals · Mar 2025 – Sep 2026</p>
+    <p class="eyebrow" data-k="eyebrow">AI Village dataset · 46 agents · 51 goals · Mar 2025 – Sep 2026</p>
     <h1>AI Village Idea Flow</h1>
     <p class="lede">AI Village is AI Digest’s long-running experiment in which frontier-model agents from Anthropic, OpenAI, Google and other labs share one group chat, keep their own saved memories and work through a new goal most weeks. This page follows <span data-k="agentMsgs">173,493</span> agent messages to see who the agents address, how a word one agent coins spreads to the rest, and what the agents keep about each other in memory.</p>
     <div class="tiles">
@@ -210,7 +210,7 @@ footer{font-size:12.5px;color:var(--ink-3);border-top:1px solid var(--line);padd
       <div class="tile">
         <div class="tile-label">Term adoptions by agents who joined later</div>
         <div class="tile-value" data-k="newcomerShare">40%</div>
-        <div class="tile-sub"><span data-k="newcomerN">6,385</span> of <span data-k="adoptN">15,978</span> adoptions came from agents who arrived after the term was coined</div>
+        <div class="tile-sub"><span data-k="newcomerN">6,565</span> of <span data-k="adoptN">16,265</span> adoptions came from agents who arrived after the term was coined</div>
       </div>
       <div class="tile">
         <div class="tile-label">Present agents adopting a new term within 14 days</div>
@@ -283,7 +283,7 @@ footer{font-size:12.5px;color:var(--ink-3);border-top:1px solid var(--line);padd
   <section id="ideas" aria-labelledby="h-ideas">
     <h2 id="h-ideas">How ideas spread</h2>
     <div class="prose">
-      <p>A term here is a word or two-word phrase that first shows up in the chat after the village was running: a tool name, a project name, a coinage. An agent adopts a term once it has used it in two messages. Of <span data-k="adoptN">15,978</span> adoptions, <span data-k="newcomerShare">40%</span> come from agents who joined after the term was coined. Much of the shared vocabulary is inherited from the chat history instead of picked up live.</p>
+      <p>A term here is a word or two-word phrase that first shows up in the chat after the village was running: a tool name, a project name, a coinage. An agent adopts a term once it has used it in two messages. Of <span data-k="adoptN">16,265</span> adoptions, <span data-k="newcomerShare">40%</span> come from agents who joined after the term was coined. Much of the shared vocabulary is inherited from the chat history instead of picked up live.</p>
       <p>As the village grew from about <span data-k="presFirst">4</span> to about <span data-k="presLast">26</span> agents present at a time, more new terms caught on with at least one other present agent within two weeks (<span data-k="anyFirst">37%</span> of terms coined in <span data-k="qFirst">Q2 2025</span>, <span data-k="anyLast">55%</span> in <span data-k="qLast">Q3 2026</span>). Each term reached a smaller share of the room, though: <span data-k="reachFirst">19%</span> of present agents on average, falling to <span data-k="reachLast">4%</span>.</p>
     </div>
 
@@ -363,7 +363,7 @@ footer{font-size:12.5px;color:var(--ink-3);border-top:1px solid var(--line);padd
   <section id="memory" aria-labelledby="h-memory">
     <h2 id="h-memory">What ends up in memory</h2>
     <div class="prose">
-      <p>Each agent keeps a saved memory that it rewrites during the day. We take the last version per agent per day (<span data-k="agentDays">4,604</span> agent-days). In the first month a memory named about <span data-k="namedFirst">3</span> other agents, <span data-k="namedShareFirst">94%</span> of those present. Over the last eight weeks a memory names about <span data-k="namedLast">15</span> agents, but only <span data-k="namedShareLast">54%</span> of those present.</p>
+      <p>Each agent keeps a saved memory that it rewrites during the day. We take the last version per agent per day (<span data-k="agentDays">4,604</span> agent-days). In the first month a memory named about <span data-k="namedFirst">3</span> other agents, <span data-k="namedShareFirst">92%</span> of those present. Over the last eight weeks a memory names about <span data-k="namedLast">15</span> agents, but only <span data-k="namedShareLast">53%</span> of those present.</p>
       <p>Little memory text is copied word for word between agents: <span data-k="sharedFirst">1.1%</span> in the first eight weeks, <span data-k="sharedPeak">4.7%</span> at the four-week high in <span data-k="sharedPeakWhen">Jan 2026</span>, and <span data-k="sharedLast">2.0%</span> in the last eight weeks.</p>
     </div>
 
@@ -397,10 +397,12 @@ footer{font-size:12.5px;color:var(--ink-3);border-top:1px solid var(--line);padd
     <h2 id="h-method">Method and limits</h2>
     <ul>
       <li><b>Data.</b> The chat, agent, goal and memory tables of the AI Village dataset in <code>data/ai-village/</code>, with <code>CHANGELOG.md</code> for scaffolding changes. Weeks start on Monday (UTC).</li>
+      <li><b>DeepSeek seat split.</b> The DeepSeek-V3.2 agent called DeepSeek’s <code>deepseek-reasoner</code> alias, which DeepSeek moved from V3.2 to V4-Flash on 24 April 2026. From then on the seat’s messages, memories and mentions are labelled “DeepSeek (reasoner alias, from 24 Apr 2026)”, so later behaviour isn’t credited to V3.2. It is the same seat with the same memory and history, so it keeps the seat’s December 2025 join date and the seat counts once among agents present. The alias was reportedly retired on 24 July 2026; which model ran the seat after that is unknown. A term the seat used before the switch can count again as an adoption under the new label.</li>
       <li><b>Mentions.</b> A message mentions an agent when it contains the agent’s name or a short form such as “Opus 4.5”. Bare family words such as “DeepSeek” count only when exactly one agent of that family was active at the time. Self-mentions are dropped. Reciprocity is the share of mentioning pairs where both agents mention each other. Homophily is the same-lab share of mentions minus the share expected from the mix of active speakers.</li>
       <li><b>Goal types.</b> Collaborative, competitive, individual or free choice, hand-labelled from the goal text (the list is in <code>common.py</code>).</li>
       <li><b>Language markers.</b> Keyword patterns for requests, division of labour, verification, gratitude and competition, counted once per message and reported per 100 agent messages. The “we” share counts we-words against I-words.</li>
-      <li><b>Terms and adoption.</b> Non-dictionary words and distinctive two-word phrases (lift ≥ <span data-k="minLift">30</span>), first seen at least <span data-k="noveltyWeeks">3</span> weeks in, not from goal text or the changelog. An agent adopts a term after using it in <span data-k="minUses">2</span> messages. A newcomer is an adopter who first appeared after the term was coined.</li>
+      <li><b>Terms and adoption.</b> Non-dictionary words and distinctive two-word phrases (lift ≥ <span data-k="minLift">30</span>), first seen at least <span data-k="noveltyWeeks">3</span> weeks in, not from goal text or the changelog. An agent adopts a term after using it in <span data-k="minUses">2</span> messages. A newcomer is an adopter who joined the village after the term was coined.</li>
+      <li><b>Presence.</b> An agent is present from the time it joined the village (its creation time in the agent table) until it left (the changelog roster’s “Left” date, or its last chat message if later), or to the end of the data if it is still there, whether or not it is posting.</li>
       <li><b>Spread speed.</b> For terms with at least <span data-k="minDocsSpeed">5</span> messages coined when at least two agents were present: the share of agents present at coinage who adopt within <span data-k="reachDays">14</span> days. Terms coined in the last 14 days of the data are excluded.</li>
       <li><b>Memory.</b> The last memory per agent per day (<span data-k="agentDays">4,604</span> agent-days). “Named” counts other village agents whose names appear. Verbatim overlap is the share of an agent’s 6-word runs that also appear in another agent’s memory from the same day.</li>
       <li><b>Limits.</b> “First use” means first in this chat; agents also meet ideas on the web and through computer use. These are correlations, not causal estimates. Agents can search the chat history, which helps explain inheritance by newcomers. Scaffolding changes recorded in the changelog shift volumes, notably chat rooms from February 2026 and longer working hours from June 2026.</li>
