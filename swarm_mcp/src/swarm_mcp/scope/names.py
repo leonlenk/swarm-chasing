@@ -1,4 +1,4 @@
-"""Self-contained agent-name matching for AI Village chat.
+"""Self-contained agent-name matching (used at ingest time for recipient_ids and aliases).
 
 Builds aliases from the roster (full names plus obvious short forms such as
 "Opus 4.5" for "Claude Opus 4.5", "GPT 5.2"/"GPT5.2" for "GPT-5.2",
@@ -9,15 +9,10 @@ Aliases that would point at more than one agent are dropped.
 
 from __future__ import annotations
 
-import difflib
 import re
 from collections import defaultdict
 from typing import Iterable
 
-from swarm_mcp.toolkit import ToolInputError
-
-HUMAN = "human"
-_HUMAN_WORDS = {"human", "humans", "user", "users"}
 _DROP_SUFFIX = ("pro", "flash")
 
 
@@ -26,7 +21,7 @@ def norm(s: str) -> str:
     return re.sub(r"[\s\-_\[\]()]+", "", s.lower())
 
 
-def _variants(name: str) -> set[str]:
+def variants(name: str) -> set[str]:
     out = {name}
     base = re.sub(r"^\[[^\]]*\]\s*", "", name)  # "[Temporary] Fine-tuned Leader"
     out.add(base)
@@ -63,7 +58,7 @@ class NameMatcher:
         candidates: dict[str, set[str]] = defaultdict(set)
         surface: dict[str, str] = {}
         for aid, name in self.names.items():
-            for v in _variants(name):
+            for v in variants(name):
                 candidates[norm(v)].add(aid)
                 surface.setdefault(norm(v), v)
         self.alias_to_id: dict[str, str] = {}
@@ -107,33 +102,6 @@ class NameMatcher:
                 if aid:
                     out.append(aid)
         return out
-
-    def resolve(self, query: str) -> str:
-        """Agent id for a user-supplied name/alias/id, or ``HUMAN``.
-
-        Raises ToolInputError with suggestions if unknown or ambiguous."""
-        q = (query or "").strip()
-        if not q:
-            raise ToolInputError("agent must not be empty")
-        if q in self.names:
-            return q
-        if q.lower() in _HUMAN_WORDS:
-            return HUMAN
-        key = norm(q.lstrip("@"))
-        if key in self.alias_to_id:
-            return self.alias_to_id[key]
-        hits = sorted({aid for aid, name in self.names.items() if key and key in norm(name)})
-        if len(hits) == 1:
-            return hits[0]
-        if len(hits) > 1:
-            raise ToolInputError(
-                f"agent {query!r} is ambiguous; did you mean one of: {', '.join(sorted(self.names[h] for h in hits))}?"
-            )
-        close = difflib.get_close_matches(q, list(self.names.values()), n=5, cutoff=0.4)
-        hint = f" Close matches: {', '.join(close)}." if close else ""
-        raise ToolInputError(
-            f"Unknown agent {query!r}.{hint} Use village_agents to list names, or 'human' for human messages."
-        )
 
 
 def lab_for(model_string: str | None, name: str = "") -> str:
