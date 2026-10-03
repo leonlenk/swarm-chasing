@@ -1,0 +1,382 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RPG Subtask Inference</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Subtask inference test bench. Each row is an inferred subtask (a cluster of PRs) laid along working hours.
+   Switch the inference method and granularity to see how the grouping changes; click a row for evidence. */
+:root{
+  --bg:#f7f8f6; --surface:#fcfcfb; --fg:#101412; --fg-2:#4d5550; --muted:#858b86;
+  --grid:#e2e5e1; --axis:#c4c9c3; --alt:#f1f3f0; --ring:rgba(16,20,18,.10);
+  --f-claude:#2a78d6; --f-gpt:#eb6834; --f-gemini:#1baf7a; --f-other:#eda100; --f-ext:#a3a8a3;
+  --sel:#4a3aa7; --seq-0:#cde2fb; --seq-1:#104281;
+  --f-display:"IBM Plex Sans Condensed","Arial Narrow",system-ui,sans-serif;
+  --f-body:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0e110f; --surface:#171a18; --fg:#f2f4f1; --fg-2:#c0c6bf; --muted:#8a908a;
+  --grid:#272b28; --axis:#3a3f3b; --alt:#1c201d; --ring:rgba(255,255,255,.10);
+  --f-claude:#3987e5; --f-gpt:#d95926; --f-gemini:#199e70; --f-other:#c98500; --f-ext:#5d635e;
+  --sel:#9085e9; --seq-0:#1c2a3d; --seq-1:#86b6ef; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0e110f; --surface:#171a18; --fg:#f2f4f1; --fg-2:#c0c6bf; --muted:#8a908a;
+  --grid:#272b28; --axis:#3a3f3b; --alt:#1c201d; --ring:rgba(255,255,255,.10);
+  --f-claude:#3987e5; --f-gpt:#d95926; --f-gemini:#199e70; --f-other:#c98500; --f-ext:#5d635e;
+  --sel:#9085e9; --seq-0:#1c2a3d; --seq-1:#86b6ef; color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 var(--f-body)}
+.wrap{padding-inline:clamp(16px,2.5vw,32px);padding-block:20px 48px;display:grid;gap:16px}
+.eyebrow{font:500 11px/1 var(--f-mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+h1{font:600 clamp(24px,3.2vw,32px)/1.1 var(--f-display);margin:6px 0 0;letter-spacing:-.01em}
+.lede{color:var(--fg-2);margin:6px 0 0;max-width:86ch}
+.controls{display:flex;flex-wrap:wrap;gap:10px 22px;align-items:center}
+.group{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+.lbl{font:500 11px/1 var(--f-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-right:4px}
+button,select{font:500 13px/1 var(--f-body);color:var(--fg);background:var(--surface);border:1px solid var(--ring);border-radius:6px;padding:7px 10px;cursor:pointer}
+select{padding:6px 8px}
+button:hover,select:hover{border-color:var(--axis)}
+button[aria-pressed="true"]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+button:focus-visible,select:focus-visible{outline:2px solid var(--sel);outline-offset:2px}
+.mdesc{color:var(--fg-2);font-size:13px;margin:0;max-width:100ch}
+.key{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;color:var(--fg-2);font-size:12.5px}
+.key span{display:inline-flex;align-items:center;gap:6px}
+.panel{background:var(--surface);border:1px solid var(--ring);border-radius:8px}
+.tracks{padding:6px 0 10px;overflow:hidden}
+#sv{display:block;width:100%}
+.row-bg{fill:transparent;cursor:pointer}
+.row-bg:hover{fill:var(--alt)}
+.row-sel .row-bg{fill:var(--alt)}
+.rname{font:500 12.5px/1 var(--f-body);fill:var(--fg)}
+.rmeta{font:11px/1 var(--f-mono);fill:var(--muted)}
+.axis text{font:11px/1 var(--f-mono);fill:var(--muted)}
+.bead{cursor:pointer}
+#tip{position:fixed;pointer-events:none;z-index:5;max-width:380px;background:var(--surface);color:var(--fg);border:1px solid var(--ring);border-radius:6px;padding:7px 9px;font-size:12.5px;line-height:1.4;box-shadow:0 4px 16px rgba(0,0,0,.12)}
+.k{color:var(--muted);font:11px/1.4 var(--f-mono)}
+.below{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:16px;align-items:start}
+@media (max-width:980px){.below{grid-template-columns:minmax(0,1fr)}}
+.col{display:grid;gap:16px;min-width:0}
+.card{padding:14px 16px;display:grid;gap:10px;min-width:0}
+.card h2{font:600 15px/1.2 var(--f-display);margin:0;letter-spacing:.01em}
+.card h3{font:600 13px/1.2 var(--f-display);margin:6px 0 0;color:var(--fg-2);letter-spacing:.02em;text-transform:uppercase}
+.sub{color:var(--muted);font-size:12.5px;margin:-6px 0 0}
+.empty{color:var(--fg-2);margin:0}
+.title{font:600 17px/1.3 var(--f-display);margin:0}
+.meta{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12.5px;color:var(--fg-2)}
+.meta b{color:var(--fg);font-weight:600}
+table{border-collapse:collapse;font-size:12.5px;width:100%}
+th{font:500 11px/1.2 var(--f-mono);color:var(--muted);text-align:right;padding:4px 6px;border-bottom:1px solid var(--grid);white-space:nowrap}
+td{padding:4px 6px;border-bottom:1px solid var(--grid);text-align:right;font-variant-numeric:tabular-nums}
+th:first-child,td:first-child{text-align:left}
+.tablewrap{overflow-x:auto}
+.list{font:12px/1.6 var(--f-mono);max-height:340px;overflow:auto;display:grid;gap:1px}
+.list .it{display:grid;grid-template-columns:76px minmax(0,1fr);gap:8px;padding:2px 4px;border-radius:4px;cursor:pointer}
+.list .it:hover{background:var(--alt)}
+.list .it.on{background:var(--alt);box-shadow:inset 2px 0 0 var(--sel)}
+.ell{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dot{width:9px;height:9px;border-radius:50%;display:inline-block;flex:none;vertical-align:middle}
+.ho{font-size:12.5px;display:grid;gap:4px;max-height:300px;overflow:auto}
+.ho div{display:grid;grid-template-columns:104px minmax(0,1fr);gap:8px}
+.ho .ty{font:500 11px/1.6 var(--f-mono);color:var(--fg-2)}
+.frag{display:grid;grid-template-columns:70px minmax(0,1fr);gap:8px;align-items:center;font-size:12.5px}
+.bar{display:flex;gap:2px;height:12px}
+.bar i{display:block;height:100%;background:var(--axis);border-radius:2px}
+.bar i:first-child{background:var(--fg-2)}
+.why{display:grid;gap:6px;font-size:12.5px}
+.why .nb{border-left:2px solid var(--grid);padding-left:8px}
+.why .sig{font:11px/1.5 var(--f-mono);color:var(--fg-2)}
+.pill{display:inline-flex;align-items:center;gap:5px;font:500 11.5px/1 var(--f-mono);padding:4px 7px;border-radius:4px;border:1px solid var(--ring);margin:0 4px 4px 0}
+.note{font-size:12.5px;color:var(--fg-2);margin:0}
+</style></head><body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow" id="eyebrow">AI Village · subtask inference</div>
+    <h1 id="h1">Which PRs belong to the same piece of work?</h1>
+    <p class="lede">Each row is a <b>subtask</b> inferred by clustering pull requests: one dot per PR at the time it started, colored by the author's model family, hollow if it never merged. Switch the method to see how each signal groups the week differently. Click a row to see who did what, the handoffs between agents, and how the other methods would split it.</p>
+  </header>
+
+  <div class="controls">
+    <div class="group" id="methods"><span class="lbl">Method</span></div>
+    <div class="group" id="levels"><span class="lbl">Granularity</span></div>
+    <div class="group"><span class="lbl">Pair lens</span>
+      <select id="pa" aria-label="First agent"><option value="">Any agent</option></select>
+      <select id="pb" aria-label="Second agent"><option value="">Any agent</option></select>
+    </div>
+  </div>
+  <p class="mdesc" id="mdesc"></p>
+  <div class="key" id="key"></div>
+
+  <div class="panel tracks"><svg id="sv" role="img" aria-label="Inferred subtasks over time"></svg></div>
+
+  <div class="below">
+    <div class="col">
+      <div class="panel card" id="detail"><h2>Subtask</h2><p class="empty">Click a row above.</p></div>
+      <div class="panel card" id="why"><h2>Why is this PR here?</h2><p class="empty">Click a dot in the selected row, or a PR in its list.</p></div>
+    </div>
+    <div class="col">
+      <div class="panel card" id="pair"><h2>Pair lens</h2><p class="empty">Pick two agents above to list what they worked on together.</p></div>
+      <div class="panel card"><h2>Method agreement</h2><p class="sub">Adjusted Rand index between methods at the middle granularity. 1 = identical grouping, 0 = no better than chance.</p><div class="tablewrap" id="agree"></div></div>
+    </div>
+  </div>
+</div>
+<div id="tip" hidden></div>
+<script>
+const METHOD_DESC = {
+  combined: 'Weighted blend: code 35%, title 25%, files 15%, explicit refs 15%, chat 10%.',
+  code: 'Words in the code each PR added: identifiers split camelCase, plus import targets. Separates "two PRs edit render.js" from "two PRs add talent code to render.js".',
+  title: 'PR title and commit subjects, with generic words (feat, fix, add, system, tests…) removed.',
+  files: 'Which paths each PR touched. Hub files like render.js count for little because nearly every PR touches them.',
+  chat: 'What agents said in chat messages that point at exactly one PR.',
+  refs: 'Explicit links only: "#N" in titles/commits, plus chat messages that name 2–4 PRs at once.'
+};
+const ORDER = ['combined', 'code', 'title', 'files', 'chat', 'refs'];
+const EDGE = {
+  integrates: {label: 'integrates', dash: '', desc: 'imports a module the other agent created'},
+  builds_on: {label: 'builds on', dash: '5 3', desc: 'edits a file the other agent created'},
+  tests: {label: 'tests', dash: '1.5 3', desc: 'adds tests for the other agent\'s module'},
+  fixes: {label: 'fixes', dash: '8 3 2 3', desc: 'fix/revert touching the other agent\'s files'},
+  resubmits: {label: 'resubmits', dash: '10 2', desc: 're-creates files the other agent created (took over their work)'},
+  duplicate: {label: 'duplicate', dash: '2 2', desc: 'near-identical work by another agent, not both merged'},
+};
+const $ = s => document.querySelector(s);
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const fam = n => { n = n.toLowerCase(); return /claude|opus|sonnet|haiku/.test(n) ? 'claude' : /gpt|^o\d/.test(n) ? 'gpt' : /gemini/.test(n) ? 'gemini' : 'other'; };
+const short = n => n.replace(/^Claude /, '').replace(' (Claude Code)', ' (CC)');
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+let D, T0, S = {method: 'combined', level: null, sel: null, pr: null, pa: '', pb: ''};
+
+const pt = t => new Date(T0 + t * 1000);
+const fmtT = t => pt(t).toLocaleString('en-US', {timeZone: 'America/Los_Angeles', weekday: 'short', hour: 'numeric', minute: '2-digit'});
+const fmtDay = t => pt(t).toLocaleDateString('en-US', {timeZone: 'America/Los_Angeles', weekday: 'short', month: 'short', day: 'numeric'});
+const agentName = a => a == null ? '—' : a < D.agents.length ? short(D.agents[a].name) : 'outside contributor';
+const agentColor = a => a == null || a >= D.agents.length ? css('--f-ext') : css('--f-' + fam(D.agents[a].name));
+
+function touchers(p) {   // everyone who left a mark on a PR, with role
+  const m = new Map(); const add = (a, r) => { if (a == null) return; if (!m.has(a)) m.set(a, new Set()); m.get(a).add(r); };
+  add(p.author, 'author'); p.commits.forEach(c => add(c[1], 'commit')); p.reviews.forEach(r => add(r[1], 'review')); add(p.merger, 'merge');
+  return m;
+}
+
+async function load() {
+  try { D = await (await fetch('out/rpg/subtasks.json')).json(); }
+  catch (e) { $('#detail').innerHTML = '<h2>No data</h2><p class="empty">Could not load out/rpg/subtasks.json. Run build_subtasks.py, then serve the collab folder over http (python3 -m http.server) and reload.</p>'; return; }
+  T0 = Date.parse(D.meta.start.replace(' ', 'T') + 'Z');
+  D.levelKeys = Object.keys(D.methods.combined.levels).sort((a, b) => a - b);
+  S.level = D.levelKeys.find(k => +k === D.meta.default_resolution) || D.levelKeys[0];
+  $('#eyebrow').textContent = `AI Village · ${D.meta.repo} · subtask inference`;
+  D.prs.forEach(p => p.touch = touchers(p));
+  D.edgeBy = new Map(); D.edges.forEach(e => { for (const k of [e[0], e[1]]) { if (!D.edgeBy.has(k)) D.edgeBy.set(k, []); D.edgeBy.get(k).push(e); } });
+  buildControls(); render();
+  window.addEventListener('resize', () => drawTracks());
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => drawTracks());
+}
+
+function buildControls() {
+  const mg = $('#methods');
+  ORDER.forEach(m => { const b = document.createElement('button'); b.textContent = m; b.dataset.m = m; b.onclick = () => { S.method = m; S.sel = null; S.pr = null; render(); }; mg.appendChild(b); });
+  const lg = $('#levels'); const names = ['coarse', 'medium', 'fine'];
+  D.levelKeys.forEach((r, i) => { const b = document.createElement('button'); b.textContent = names[i] || r; b.dataset.l = r; b.title = `Louvain resolution ${r}`; b.onclick = () => { S.level = r; S.sel = null; S.pr = null; render(); }; lg.appendChild(b); });
+  for (const id of ['#pa', '#pb']) {
+    const s = $(id); D.agents.forEach((a, i) => { const o = document.createElement('option'); o.value = i; o.textContent = short(a.name); s.appendChild(o); });
+    s.onchange = () => { S[id.slice(1)] = s.value; render(); };
+  }
+  const k = $('#key');
+  k.innerHTML = ['claude', 'gpt', 'gemini', 'other'].map(f => `<span><i class="dot" style="background:var(--f-${f})"></i>${f === 'other' ? 'DeepSeek' : f[0].toUpperCase() + f.slice(1)}</span>`).join('') +
+    `<span><i class="dot" style="border:1.5px solid var(--fg-2)"></i>never merged</span>` +
+    Object.values(EDGE).map(e => `<span><svg width="26" height="8"><line x1="1" y1="4" x2="25" y2="4" stroke="var(--fg-2)" stroke-width="1.5" stroke-dasharray="${e.dash}"/></svg>${e.label}</span>`).join('') +
+    `<span class="k">handoff lines show for the selected row</span>`;
+}
+
+function clusters() {
+  const L = D.methods[S.method].levels[S.level];
+  return L.clusters.map((c, i) => ({id: i, prs: c, name: L.names[i]}));
+}
+
+function render() {
+  document.querySelectorAll('#methods button').forEach(b => b.setAttribute('aria-pressed', b.dataset.m === S.method));
+  document.querySelectorAll('#levels button').forEach(b => b.setAttribute('aria-pressed', b.dataset.l === S.level));
+  $('#mdesc').textContent = METHOD_DESC[S.method];
+  drawTracks(); drawDetail(); drawWhy(); drawPair(); drawAgree();
+}
+
+// ---------------- time axis compressed to working segments
+function timeScale(x0, x1) {
+  const seg = D.segments, GAP = 14, tot = seg.reduce((s, [a, b]) => s + b - a, 0);
+  const k = (x1 - x0 - GAP * (seg.length - 1)) / tot;
+  return t => {
+    let x = x0;
+    for (let i = 0; i < seg.length; i++) {
+      const [a, b] = seg[i];
+      if (t < a) return x - (i ? GAP / 2 : 0);
+      if (t <= b) return x + (t - a) * k;
+      x += (b - a) * k + GAP;
+    }
+    return x1;
+  };
+}
+
+function rowsToShow() {
+  let cl = clusters().filter(c => c.prs.length > 1);
+  const pa = S.pa === '' ? null : +S.pa, pb = S.pb === '' ? null : +S.pb;
+  if (pa != null || pb != null) cl = cl.filter(c => [pa, pb].every(a => a == null || c.prs.some(i => D.prs[i].touch.has(a))));
+  cl.forEach(c => c.start = Math.min(...c.prs.map(i => D.prs[i].start)));
+  cl.sort((a, b) => a.start - b.start);
+  const single = clusters().filter(c => c.prs.length === 1).length;
+  return {cl, single};
+}
+
+function drawTracks() {
+  const svg = $('#sv'), W = svg.clientWidth || 1200, LW = Math.min(300, W * .32), RH = 22, TOP = 26;
+  const {cl, single} = rowsToShow();
+  const sel = S.sel;
+  const H = TOP + cl.length * RH + (sel != null ? 60 : 0) + 24;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('height', H);
+  const X = timeScale(LW + 10, W - 12);
+  const pa = S.pa === '' ? null : +S.pa, pb = S.pb === '' ? null : +S.pb, lens = pa != null || pb != null;
+  let h = '<g class="axis">';
+  D.segments.forEach(([a, b]) => {
+    const xa = X(a), xb = X(b);
+    h += `<rect x="${xa}" y="${TOP - 4}" width="${Math.max(0, xb - xa)}" height="${H - TOP - 20}" fill="var(--alt)" opacity=".5"/>`;
+    h += `<text x="${xa + 2}" y="14">${fmtDay(a)}</text>`;
+  });
+  h += '</g>';
+  let y = TOP;
+  cl.forEach(c => {
+    const isSel = sel === c.id, rh = isSel ? RH + 60 : RH, cy = y + (isSel ? RH + 44 : RH / 2);
+    const ags = new Map(); c.prs.forEach(i => { const a = D.prs[i].author; ags.set(a, (ags.get(a) || 0) + 1); });
+    const top = [...ags].sort((a, b) => b[1] - a[1]);
+    h += `<g class="${isSel ? 'row-sel' : ''}" data-c="${c.id}"><rect class="row-bg" x="0" y="${y}" width="${W}" height="${rh}"/>`;
+    const nm = c.name.length > 38 ? c.name.slice(0, 37) + '…' : c.name;
+    h += `<text class="rname" x="10" y="${y + 15}">${esc(nm)}</text>`;
+    h += `<text class="rmeta" x="${LW - 4}" y="${y + 15}" text-anchor="end">${c.prs.length} · ${ags.size}a</text>`;
+    // span line
+    const ts = c.prs.map(i => D.prs[i].start);
+    h += `<line x1="${X(Math.min(...ts))}" x2="${X(Math.max(...c.prs.map(i => D.prs[i].end ?? D.prs[i].start)))}" y1="${cy}" y2="${cy}" stroke="var(--axis)" stroke-width="1"/>`;
+    if (isSel) {   // handoff arcs inside this subtask
+      const inC = new Set(c.prs);
+      D.edges.filter(e => inC.has(e[0]) && inC.has(e[1])).forEach(e => {
+        const x1 = X(D.prs[e[0]].start), x2 = X(D.prs[e[1]].start), hh = Math.min(40, 8 + Math.abs(x2 - x1) * .25);
+        const hl = pairEdge(e, pa, pb);
+        h += `<path d="M${x1},${cy} C${x1},${cy - hh} ${x2},${cy - hh} ${x2},${cy}" fill="none" stroke="${hl ? 'var(--sel)' : 'var(--fg-2)'}" stroke-width="${hl ? 2 : 1.25}" stroke-dasharray="${EDGE[e[2]].dash}" opacity=".85"/>`;
+      });
+    }
+    c.prs.forEach(i => {
+      const p = D.prs[i], col = agentColor(p.author), merged = p.state === 'merged' || p.state === 'landed';
+      const dim = lens && ![pa, pb].some(a => a != null && p.touch.has(a));
+      h += `<circle class="bead" data-p="${i}" cx="${X(p.start)}" cy="${cy}" r="${S.pr === i ? 6 : 4.5}" fill="${merged ? col : 'var(--surface)'}" stroke="${merged ? 'var(--surface)' : col}" stroke-width="${merged ? 1.5 : 1.75}" opacity="${dim ? .18 : 1}"/>`;
+    });
+    h += '</g>'; y += rh;
+  });
+  h += `<text class="rmeta" x="10" y="${y + 16}">${cl.length} subtasks with 2+ PRs${lens ? ' matching the pair lens' : ''} · ${single} PRs left on their own</text>`;
+  svg.innerHTML = h;
+  svg.querySelectorAll('g[data-c]').forEach(g => g.onclick = ev => {
+    const pi = ev.target.dataset.p; S.sel = +g.dataset.c; S.pr = pi != null ? +pi : null; render();
+    $('#detail').scrollIntoView({block: 'nearest', behavior: 'smooth'});
+  });
+  svg.querySelectorAll('.bead').forEach(b => {
+    b.onmousemove = ev => { const p = D.prs[+b.dataset.p]; tip(ev, `<div class="k">#${p.n} · ${fmtT(p.start)} · ${p.state}</div><b>${esc(p.title)}</b><div class="k">by ${esc(agentName(p.author))}${p.merger != null ? ' · merged by ' + esc(agentName(p.merger)) : ''}</div>`); };
+    b.onmouseleave = () => $('#tip').hidden = true;
+  });
+}
+function pairEdge(e, pa, pb) { return pa != null && pb != null && pa !== pb && e[2] !== 'duplicate' && ((e[4] === pa && e[5] === pb) || (e[4] === pb && e[5] === pa)); }
+function tip(ev, html) { const t = $('#tip'); t.innerHTML = html; t.hidden = false; const r = t.getBoundingClientRect(); t.style.left = Math.min(ev.clientX + 14, innerWidth - r.width - 8) + 'px'; t.style.top = Math.min(ev.clientY + 14, innerHeight - r.height - 8) + 'px'; }
+
+// ---------------- detail
+function contribTable(prIdx) {
+  const st = new Map(); const g = a => { if (!st.has(a)) st.set(a, {author: 0, commitOthers: 0, review: 0, merge: 0, gave: 0, got: 0}); return st.get(a); };
+  prIdx.forEach(i => { const p = D.prs[i]; if (p.author != null) g(p.author).author++;
+    new Set(p.commits.map(c => c[1]).filter(a => a !== p.author)).forEach(a => g(a).commitOthers++);
+    new Set(p.reviews.map(r => r[1]).filter(a => a !== p.author)).forEach(a => g(a).review++);
+    if (p.merger != null && p.merger !== p.author) g(p.merger).merge++; });
+  const inC = new Set(prIdx);
+  D.edges.filter(e => inC.has(e[0]) && inC.has(e[1]) && e[2] !== 'duplicate').forEach(e => { g(e[4]).gave++; g(e[5]).got++; });
+  const rows = [...st].filter(([a]) => a != null).sort((a, b) => (b[1].author - a[1].author) || (b[1].review - a[1].review));
+  return `<div class="tablewrap"><table><thead><tr><th>Agent</th><th>PRs authored</th><th>commits on others'</th><th>reviews</th><th>merged others'</th><th title="their work was picked up by another agent">built upon</th><th title="they picked up another agent's work">built on others'</th></tr></thead><tbody>` +
+    rows.map(([a, s]) => `<tr><td><i class="dot" style="background:${agentColor(a)}"></i> ${esc(agentName(a))}</td><td>${s.author}</td><td>${s.commitOthers}</td><td>${s.review}</td><td>${s.merge}</td><td>${s.gave}</td><td>${s.got}</td></tr>`).join('') + '</tbody></table></div>';
+}
+function edgeLine(e) {
+  const A = D.prs[e[0]], B = D.prs[e[1]];
+  const ev = e[2] === 'duplicate' ? e[3][0] : e[3].map(f => f.split('/').pop()).join(', ');
+  const verb = {integrates: 'imported', builds_on: 'edited', tests: 'tested', fixes: 'fixed', resubmits: 're-submitted', duplicate: 'duplicated'}[e[2]];
+  return `<div><span class="ty">${fmtT(B.start)}</span><span><b>${esc(agentName(e[5]))}</b> ${verb} ${esc(agentName(e[4]))}'s ${e[2] === 'duplicate' ? 'PR' : '<code>' + esc(ev) + '</code>'} <span class="k">#${A.n} → #${B.n} · ${EDGE[e[2]].label}${e[2] === 'duplicate' ? ' · ' + esc(ev) : ''}</span></span></div>`;
+}
+function drawDetail() {
+  const el = $('#detail');
+  const c = clusters().find(c => c.id === S.sel);
+  if (!c) { el.innerHTML = '<h2>Subtask</h2><p class="empty">Click a row above.</p>'; return; }
+  const P = c.prs.map(i => D.prs[i]).sort((a, b) => a.start - b.start);
+  const inC = new Set(c.prs);
+  const internal = D.edges.filter(e => inC.has(e[0]) && inC.has(e[1])).sort((a, b) => D.prs[a[1]].start - D.prs[b[1]].start);
+  const inbound = D.edges.filter(e => !inC.has(e[0]) && inC.has(e[1]) && e[2] !== 'duplicate').length;
+  const outbound = D.edges.filter(e => inC.has(e[0]) && !inC.has(e[1]) && e[2] !== 'duplicate').length;
+  const states = {}; P.forEach(p => states[p.state] = (states[p.state] || 0) + 1);
+  // how other methods carve this subtask up
+  const frag = ORDER.filter(m => m !== S.method).map(m => {
+    const L = D.methods[m].levels[S.level]; const lab = new Map(); L.clusters.forEach((cc, ci) => cc.forEach(i => lab.set(i, ci)));
+    const cnt = new Map(); c.prs.forEach(i => cnt.set(lab.get(i), (cnt.get(lab.get(i)) || 0) + 1));
+    const parts = [...cnt].sort((a, b) => b[1] - a[1]);
+    const big = parts[0];
+    return `<div class="frag"><span class="k">${m}</span><div><div class="bar" title="${parts.map(p => p[1]).join(' + ')}">${parts.map(p => `<i style="flex:${p[1]}"></i>`).join('')}</div><div class="k ell">${parts.length === 1 ? 'kept whole' : 'split ' + parts.length + ' ways'} · largest piece: ${esc(L.names[big[0]])} (${big[1]}/${c.prs.length})</div></div></div>`;
+  }).join('');
+  el.innerHTML = `<h2>Subtask</h2>
+    <p class="title">${esc(c.name)}</p>
+    <div class="meta"><span><b>${c.prs.length}</b> PRs</span><span>${fmtT(P[0].start)} → ${fmtT(Math.max(...P.map(p => p.end ?? p.start)))}</span><span>${Object.entries(states).map(([k, v]) => v + ' ' + k).join(', ')}</span><span><b>${inbound}</b> handoffs in from other subtasks, <b>${outbound}</b> out</span></div>
+    <h3>Who did what</h3>${contribTable(c.prs)}
+    <h3>Handoffs between agents (${internal.length})</h3>
+    <div class="ho">${internal.length ? internal.map(edgeLine).join('') : '<p class="empty">No cross-agent handoffs detected inside this subtask.</p>'}</div>
+    <h3>How the other methods group these PRs</h3><div style="display:grid;gap:6px">${frag}</div>
+    <h3>PRs</h3>
+    <div class="list">${P.map(p => { const i = D.prs.indexOf(p); return `<div class="it${S.pr === i ? ' on' : ''}" data-p="${i}"><span class="k">#${p.n} ${p.state === 'merged' || p.state === 'landed' ? '' : '○'}</span><span class="ell"><i class="dot" style="background:${agentColor(p.author)}"></i> ${esc(p.title)}</span></div>`; }).join('')}</div>`;
+  el.querySelectorAll('.it').forEach(d => d.onclick = () => { S.pr = +d.dataset.p; drawWhy(); drawTracks(); el.querySelectorAll('.it').forEach(x => x.classList.toggle('on', x === d)); });
+}
+
+function drawWhy() {
+  const el = $('#why');
+  if (S.pr == null) { el.innerHTML = '<h2>Why is this PR here?</h2><p class="empty">Click a dot in the selected row, or a PR in its list.</p>'; return; }
+  const p = D.prs[S.pr];
+  const L = D.methods[S.method].levels[S.level]; const lab = new Map(); L.clusters.forEach((cc, ci) => cc.forEach(i => lab.set(i, ci)));
+  const nb = D.neighbors[S.pr];
+  const eds = (D.edgeBy.get(S.pr) || []);
+  el.innerHTML = `<h2>Why is this PR here?</h2>
+    <p class="title">#${p.n} ${esc(p.title)}</p>
+    <div class="meta"><span>by <b>${esc(agentName(p.author))}</b></span><span>${fmtT(p.start)}</span><span>${p.state}</span><span>${p.chat} chat mentions</span></div>
+    <div><span class="k">files&nbsp;</span>${p.files.map(f => `<span class="pill">${esc(f[0].split('/').pop())}</span>`).join('') || '<span class="k">none</span>'}</div>
+    ${p.rewrites.length ? `<div><span class="k">rewrote&nbsp;</span>${p.rewrites.map(f => `<span class="pill" title="large removal or import swap: probably pasted an older copy">${esc(f.split('/').pop())}</span>`).join('')}</div>` : ''}
+    <div><span class="k">code terms&nbsp;</span>${p.terms.map(t => `<span class="pill">${esc(t)}</span>`).join('')}</div>
+    <h3>Most similar PRs (combined signal)</h3>
+    <div class="why">${nb.map(([j, s, w]) => `<div class="nb"><div><b>#${D.prs[j].n}</b> ${esc(D.prs[j].title)} <span class="k">${s.toFixed(2)} · ${lab.get(j) === lab.get(S.pr) ? 'same subtask' : 'other subtask'}</span></div>` +
+      Object.entries(w).map(([k, [v, terms]]) => `<div class="sig">${k} ${v.toFixed(2)}: ${terms.map(esc).join(', ')}</div>`).join('') + '</div>').join('') || '<p class="empty">No similar PRs.</p>'}</div>
+    <h3>Handoffs touching this PR</h3><div class="ho">${eds.length ? eds.map(edgeLine).join('') : '<p class="empty">None.</p>'}</div>`;
+}
+
+function drawPair() {
+  const el = $('#pair'); const pa = S.pa === '' ? null : +S.pa, pb = S.pb === '' ? null : +S.pb;
+  if (pa == null || pb == null || pa === pb) { el.innerHTML = '<h2>Pair lens</h2><p class="empty">Pick two different agents above to list what they worked on together.</p>'; return; }
+  const cl = clusters().filter(c => c.prs.length > 1);
+  const rows = cl.map(c => {
+    const role = a => { const r = new Set(); c.prs.forEach(i => (D.prs[i].touch.get(a) || []).forEach(x => r.add(x))); return r; };
+    const ra = role(pa), rb = role(pb); if (!ra.size || !rb.size) return null;
+    const inC = new Set(c.prs);
+    const ho = D.edges.filter(e => inC.has(e[0]) && inC.has(e[1]) && pairEdge(e, pa, pb));
+    const rev = c.prs.filter(i => { const p = D.prs[i]; return (p.author === pa && p.reviews.some(r => r[1] === pb)) || (p.author === pb && p.reviews.some(r => r[1] === pa)); }).length;
+    return {c, ra, rb, ho, rev, score: ho.length * 3 + rev + (ra.has('author') && rb.has('author') ? 1 : 0)};
+  }).filter(Boolean).sort((a, b) => b.score - a.score);
+  const direct = D.edges.filter(e => pairEdge(e, pa, pb));
+  el.innerHTML = `<h2>Pair lens: ${esc(agentName(pa))} & ${esc(agentName(pb))}</h2>
+    <p class="sub">${rows.length} shared subtasks · ${direct.length} direct handoffs anywhere in the week. Strongest evidence first: handoffs, then reviews of each other's PRs, then both authoring.</p>
+    <div class="tablewrap"><table><thead><tr><th>Subtask</th><th>${esc(agentName(pa))}</th><th>${esc(agentName(pb))}</th><th>handoffs</th><th>cross-reviews</th></tr></thead><tbody>` +
+    rows.map(r => `<tr data-c="${r.c.id}" style="cursor:pointer"><td class="ell" style="max-width:220px">${esc(r.c.name)}</td><td class="k">${[...r.ra].join(', ')}</td><td class="k">${[...r.rb].join(', ')}</td><td>${r.ho.length}</td><td>${r.rev}</td></tr>`).join('') + '</tbody></table></div>' +
+    (direct.length ? `<h3>Direct handoffs</h3><div class="ho">${direct.sort((a, b) => D.prs[a[1]].start - D.prs[b[1]].start).map(edgeLine).join('')}</div>` : '');
+  el.querySelectorAll('tr[data-c]').forEach(tr => tr.onclick = () => { S.sel = +tr.dataset.c; S.pr = null; render(); });
+}
+
+function drawAgree() {
+  const A = D.agreement, lo = css('--seq-0'), hi = css('--seq-1');
+  const mix = v => { const a = parseInt(lo.slice(1), 16), b = parseInt(hi.slice(1), 16); const c = [16, 8, 0].map(s => Math.round(((a >> s) & 255) * (1 - v) + ((b >> s) & 255) * v)); return `rgb(${c})`; };
+  $('#agree').innerHTML = `<table><thead><tr><th></th>${ORDER.map(m => `<th>${m}</th>`).join('')}</tr></thead><tbody>` +
+    ORDER.map(a => `<tr><td class="k">${a}</td>${ORDER.map(b => { const v = A[a][b]; return `<td style="background:${mix(Math.max(0, v))};color:${v > .55 ? 'var(--bg)' : 'var(--fg)'}">${a === b ? '' : v.toFixed(2)}</td>`; }).join('')}</tr>`).join('') + '</tbody></table>';
+}
+load();
+</script>
+</body></html>
