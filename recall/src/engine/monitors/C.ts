@@ -15,8 +15,11 @@ function run(ws: WorldState): Finding[] {
     const who = ws.agentName(c.agentId);
     // Owner ruling: when the announcing session also ran no checks, C carries that as an attribute (AM stays disjoint).
     const sessionRanNoChecks = !!c.taskId && !ws.visible.some((e) => isVerification(e) && e.taskId === c.taskId && e.sequence < c.sequence);
+    // Owner ruling (K folded into C): a build passed in the claim's session, yet nothing verified the subject.
+    const buildPassed = !after && !!c.taskId && ws.visible.some((e) => e.type === 'tool_result' && e.payload.category === 'build' && e.payload.outcome === 'pass' && e.taskId === c.taskId && e.sequence < c.sequence);
+    const attributes = [...(sessionRanNoChecks ? ['session ran no checks'] : []), ...(buildPassed ? ['a build passed in this session; nothing verified the subject'] : [])];
     out.push(finding({
-      attributes: sessionRanNoChecks ? ['session ran no checks'] : undefined,
+      attributes: attributes.length ? attributes : undefined,
       id: `C:${c.id}`, monitor: 'C', claimId: c.payload.claimId, taskId: c.taskId ?? '', agentId: c.agentId,
       title: `Claim never checked: ${subjectLabel(key)}`,
       summary: gone.length
@@ -42,6 +45,6 @@ export const C: MonitorDef = {
   rule: 'Active when: Claim asserts live/pass/done on subject S and no verification of S exists at the cursor, before or after\n' +
     'Resolves when: A verification of S appears (then A or G take over if it failed)\n' +
     'Insufficient when: Claim cites withheld/missing records',
-  ruling: 'When the announcing session also ran no checks before the claim, C carries the attribute "session ran no checks" (AM does not fire for the same claim).',
+  ruling: 'When the announcing session also ran no checks before the claim, C carries the attribute "session ran no checks" (AM does not fire for the same claim). K (build passed as verification) is folded into C: when a build passed in the claim\'s session and nothing verified the subject, C carries "a build passed in this session; nothing verified the subject".',
   run,
 };

@@ -25,7 +25,7 @@ import { PassThrough, Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { createGunzip } from 'node:zlib';
 import {
-  adaptAiVillageWindow, classifyTurn, hfTime, urlsIn, CLAIM_RE, rawCommand, INTERESTING_CMD,
+  adaptAiVillageWindow, classifyTurn, writesOf, destructiveOf, navigationOf, hfTime, urlsIn, CLAIM_RE, rawCommand, INTERESTING_CMD,
   type HfAgent, type HfChat, type HfEvent, type HfSession, type HfTurn, type HfTurnLite, refsIn,
 } from '../src/adapters/aiVillageHf';
 import { reconstruct } from '../src/engine/reconstruct';
@@ -195,14 +195,15 @@ const trim = (s: unknown, n: number) => (typeof s === 'string' ? (s.length > n ?
  * Built with one resumable pass over the 2.5 GB table; later runs are offline.
  */
 async function verdictIndex(): Promise<HfTurn[]> {
-  if (!existsSync(VERDICTS) || has('refresh')) {
+  if (!existsSync(VERDICTS) || has('refresh') || has('refresh-verdicts')) {
+    const t0 = Date.now();
     log('→ building verdict index from computer_use_turns (~2.5 GB, one pass)…');
     // Resume an interrupted index: gzip can't be entered mid-stream, so we re-read from the start but
     // skip (without parsing) until the last row already written to the .part file.
     const part = `${VERDICTS}.part`;
     let resumeAfter: string | null = null;
     let kept = 0;
-    if (existsSync(part) && !has('refresh')) {
+    if (existsSync(part) && !has('refresh') && !has('refresh-verdicts')) {
       const text = readFileSync(part, 'utf8');
       const complete = text.slice(0, text.lastIndexOf('\n') + 1);
       writeFileSync(part, complete);
@@ -235,7 +236,7 @@ async function verdictIndex(): Promise<HfTurn[]> {
     }
     await new Promise<void>((res) => out.end(res));
     await import('node:fs/promises').then((fs) => fs.rename(part, VERDICTS));
-    log(`\r  scanned ${n.toLocaleString()} turns; indexed ${kept.toLocaleString()} verdict-bearing turns → .hf/verdicts.jsonl${malformed ? ` (${malformed} malformed lines skipped)` : ''}`);
+    log(`\r  scanned ${n.toLocaleString()} turns; indexed ${kept.toLocaleString()} verdict-bearing turns → .hf/verdicts.jsonl${malformed ? ` (${malformed} malformed lines skipped)` : ''} in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
   }
   const rows: HfTurn[] = [];
   for await (const l of lines(VERDICTS)) rows.push(JSON.parse(l));
@@ -246,6 +247,8 @@ async function verdictIndex(): Promise<HfTurn[]> {
 async function findCandidates(verdicts: HfTurn[]): Promise<Candidate[]> {
   const checks = new Map<string, { ts: string; pass: boolean }[]>();
   for (const t of verdicts) {
+    // Window selection stays on the curl-era rule so pinned windows do not move when http-status is widened.
+    if (!/\bcurl\b/.test(String(t.agent_action?.command ?? ''))) continue;
     const v = classifyTurn(t);
     if (v?.rule !== 'http-status' || !v.subject) continue;
     const list = checks.get(v.subject.artifact) ?? [];
@@ -321,6 +324,9 @@ async function sessionTurnIndex(key: string, sessionIds: Set<string>, inRange: (
       outputHash: createHash('sha1').update(`${r.output ?? ''}\u0000${r.error ?? ''}`).digest('hex').slice(0, 12),
       ...(() => { const refs = refsIn(`${cmd ?? ''}\n${r.output ?? ''}`); return refs.length ? { refs } : {}; })(),
       emptyOutput: !(r.output ?? '').trim() && !(r.error ?? '').trim(),
+      ...(() => { const w = cmd ? writesOf(cmd) : []; return w.length ? { writes: w } : {}; })(),
+      ...(() => { const d = cmd ? destructiveOf(cmd) : undefined; return d ? { destructive: d } : {}; })(),
+      ...(() => { const u = navigationOf(a); return u ? { navigates: u } : {}; })(),
     });
   }
   writeFileSync(SESSION_TURNS, [JSON.stringify({ key }), ...out.map((x) => JSON.stringify(x))].join('\n'));
@@ -419,7 +425,7 @@ async function main() {
   const wanted = new Set(sessions.map((s) => s.id));
   const turns = verdicts.filter((t) => wanted.has(t.session_id));
   log(`→ ${turns.length} verdict-bearing turns in selected sessions (from local index)`);
-  const planKey = createHash('sha1').update(JSON.stringify(['v5-lookback24', ...plans.map((p) => [p.id, p.from, p.to])])).digest('hex').slice(0, 12);
+  const planKey = createHash('sha1').update(JSON.stringify(['v6-m3-actions', ...plans.map((p) => [p.id, p.from, p.to])])).digest('hex').slice(0, 12);
   const sessionTurns = await sessionTurnIndex(planKey, wanted, (raw) => inAny(raw, true)); // lookback turns feed reference_seen only
 
   // ---- build each window, split into parts of <= EVENT_CAP events, validate and index every part

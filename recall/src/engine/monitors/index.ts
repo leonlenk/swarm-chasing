@@ -9,11 +9,35 @@ import { assertFinding } from './assert';
 import type { Finding, MonitorDef, MonitorNeed } from './types';
 import { A } from './A';
 import { B } from './B';
+import { BL, timelineGaps, type TimelineGap } from './BL';
 import { C } from './C';
 import { G } from './G';
 import { J } from './J';
 import { X } from './X';
 import { Z } from './Z';
+import { D } from './D';
+import { E } from './E';
+import { F } from './F';
+import { H } from './H';
+import { O } from './O';
+import { W } from './W';
+import { Y } from './Y';
+import { AC } from './AC';
+import { AD } from './AD';
+import { AG } from './AG';
+import { AI } from './AI';
+import { AP } from './AP';
+import { AQ } from './AQ';
+import { AR } from './AR';
+import { AU } from './AU';
+import { BJ } from './BJ';
+import { BK } from './BK';
+import { BR } from './BR';
+import { AX } from './AX';
+import { BN } from './BN';
+import { AT } from './AT';
+import { BI } from './BI';
+import { BM } from './BM';
 import { AE } from './AE';
 import { AF } from './AF';
 import { AH } from './AH';
@@ -46,7 +70,7 @@ export function register(defs: MonitorDef[], fixtures: Record<string, { fixture?
   return Object.freeze([...defs]);
 }
 
-export const registry: readonly MonitorDef[] = register([A, B, C, G, J, AM, AO, AS, AE, AF, BP, AW, X, Z, U, V, BC, BD, AH]);
+export const registry: readonly MonitorDef[] = register([A, B, C, G, J, AM, AO, AS, D, F, H, AP, AQ, AR, AU, AT, BJ, BK, BM, E, O, AX, AW, AE, AF, BP, AC, AD, AG, BN, X, Z, Y, BI, BL, U, V, BC, BD, W, AH, AI, BR]);
 
 export const monitorById = (id: string) => registry.find((m) => m.id === id);
 export const MONITOR_LABEL: Record<string, string> = Object.fromEntries(registry.map((m) => [m.id, m.title]));
@@ -79,6 +103,15 @@ export function runMonitors(ws: WorldState, only?: readonly string[]): Finding[]
  * evidence span, RECALL cannot rule that out: the finding becomes insufficient and names the record.
  * Uses positions only (WorldState.withheldSeqs), never content.
  */
+/** BL post-pass: a finding in a session with a timeline gap is insufficient, naming the gap. */
+export function blPostPass(f: Finding, gaps: Map<string, TimelineGap> | null): Finding {
+  const g = gaps && f.monitor !== 'BL' ? gaps.get(f.taskId) : undefined;
+  if (!g) return f;
+  return { ...f, state: 'insufficient', resolution: undefined,
+    evidence: [...f.evidence, { eventId: g.before.id, role: 'Last record before a timeline gap' }, { eventId: g.after.id, role: 'First record after the gap' }],
+    missing: [...f.missing, `continuous record — session ${g.taskId} ${g.kind === 'backwards' ? 'goes back in time' : 'jumps more than 2 h'} between ${g.before.id} and ${g.after.id}.`] };
+}
+
 export function degradeForWithheldInSpan(f: Finding, ws: WorldState, def?: MonitorDef): Finding {
   if (!ws.withheldSeqs.size) return f;
   const reads = def ? readTypes(def) : null;
@@ -113,10 +146,13 @@ function readTypes(def: MonitorDef): Set<string> {
 /** Runs the given monitor definitions (the registry, or candidates under review) with the shared post-passes. */
 export function runDefs(defs: readonly MonitorDef[], ws: WorldState, only?: readonly string[]): Finding[] {
   const ranked: { f: Finding; order: number }[] = [];
+  // BL post-pass (brief): once BL is among the definitions, every finding in a session whose record has a
+  // timeline gap becomes insufficient with missing "continuous record".
+  const gaps = defs.some((d) => d.id === 'BL') ? new Map(timelineGaps(ws).map((g) => [g.taskId, g])) : null;
   defs.forEach((def, order) => {
     if (only && !only.includes(def.id)) return;
     // assertFinding throws in strict mode; in production it converts, so nothing is dropped.
-    for (const f of def.run(ws)) ranked.push({ f: assertFinding(degradeForWithheldInSpan(f, ws, def), ws, def), order });
+    for (const f of def.run(ws)) ranked.push({ f: assertFinding(blPostPass(degradeForWithheldInSpan(f, ws, def), gaps), ws, def), order });
   });
   return ranked.sort((a, b) => b.f.detectedAt - a.f.detectedAt || a.order - b.order).map((r) => r.f);
 }

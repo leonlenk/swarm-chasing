@@ -90,8 +90,8 @@ src/model/types.ts          typed event format: id, timestamp, sequence, agentId
                             evidenceRefs, provenance (observed | declared | inferred), statusAfter, mentions
 src/adapters/               synthetic validator · AI Village window adapter · generic file import
 src/engine/reconstruct.ts   pure: state from events with sequence ≤ cursor; reported vs evidence status
-src/engine/monitors/        one file per monitor (19 registered) + registry, invariants, shared accessors
-src/engine/meta.ts          meta counts shown in the Monitors view: BT, BU, BG goal churn, BC without a claim
+src/engine/monitors/        one file per monitor (43 registered) + registry, invariants, shared accessors
+src/engine/meta.ts          meta counts shown in the Monitors view: BT, BU, BG goal churn, BC without a claim, BE long session
 src/engine/lineage.ts       a claim's life: introduced → repeated/used/checked → correction → after
 src/engine/flow.ts          agent ↔ evidence transmission from explicit references only
 src/engine/difference.ts    conflict / insufficient / agree
@@ -106,7 +106,18 @@ scripts/                    data:download · data:build (fetch-ai-village.ts) ·
   - Swarm and propagation: **AE** adopted without own check · **AF** checking concentration (≥ 3 checks of others' claims, all by one agent, ≥ 2 claimants) · **BP** consensus without any check · **AW** correction delay strip.
   - Process and session: **X** step repetition (hash of the full command plus output hash) · **Z** phantom reference (never active: always `insufficient` with the reference in `missing`; references seen earlier in the window or the 24 h lookback are carried as `referencesSeen`) · **U** repeated goal, repeated failure · **V** concurrent duplicate goal · **BC** verify-goal, no verification (tightened lexicon; an incident only when the session claimed something) · **BD** ended on failure (end = STOP, CONSOLIDATE or the agent's next START, recorded as an attribute).
   - Human: **AH** human question unanswered.
-  - Meta counts, not incidents: **BG** goal churn (≥ 5 pairwise-distinct goals by token Jaccard < 0.3, zero verdicts, zero claims), BC sessions without a claim, **BT** unverifiable by construction.
+- **Milestone 3 monitors** (24 registered, each with a fixture; 43 in all):
+  - Claim–evidence: **D** posted failure, then claim · **F** repeat without recheck · **H** hedge never closed · **AP** redirect-masked check · **AQ** localhost as live · **AR** partial test run as full pass · **AU** number in claim differs from record · **AT** verified before the edit · **BJ** error-suppressed check, **BK** empty-output evidence and **BM** screenshot-only claim (these three are always `insufficient`, with exact `missing` strings). **K** is folded into C as the attribute "a build passed in this session; nothing verified the subject".
+  - Propagation: **E** correction not propagated (attribute `source: human|agent`) · **O** retracted then re-asserted · **AX** human-prompted correction.
+  - Swarm: **AC** directive without observed uptake (never active: "not observed", never "ignored") · **AD** convention adoption · **AG** opposite assertions, no check · **BN** agent mention without reply.
+  - Process and session: **Y** own error, external blame · **BI** destructive retry · **BL** timeline gap (> 2 h), which also marks every finding in that session `insufficient` with missing "continuous record" · **W** clean summary after failure.
+  - Human: **AI** repeated human correction · **BR** human correction unanswered.
+- **Milestone 3 rules:** verdict rules `pages-build`, `pr-state`, `file-exists`, `proc-running`, `build-result` (never verification), and widened `http-status` (wget, httpie, python requests) and `test-summary` (cargo, mocha, playwright, go test). All are line-based. Claim rules: `tests-pass`, `fixed`, `deployed-no-url`, `exists`, `hedged`, `repeat` and `claim-number`. New event types: `quote` (`correction-other`, `human-negative`) and `directive`.
+  - Claim attribution: link targets ("points to | links to | redirects to", or an arrow right after a URL) are mentions. A plural phrase or a claim phrase followed by a colon list claims every URL in its sentence; otherwise each phrase claims its nearest URL.
+  - Push subjects are keyed per push (the sha range of the session's latest `git push`, else `unverified:<claimId>`), so separate pushes never look like adoption.
+  - Directive: an @mention plus "can you | could you | would you | please" or a sentence-start imperative. More than 2 @mentions is a broadcast. BN needs the "?" in the mention's sentence.
+  - Window parts also carry write and destructive actions.
+- Meta counts, not incidents: **BE** long session with no verdict (≥ 100 turns, zero verdicts, zero claims, counted at session end) · **BG** goal churn (≥ 5 pairwise-distinct goals by token Jaccard < 0.3, zero verdicts, zero claims), BC sessions without a claim, **BT** unverifiable by construction.
 - **Claim rules:** `claim-sentence` (the URL's own sentence has a completion phrase) and `claim-bare-url` (announcement shape: a URL-less headline claim, a body, and the message's only URL in its last, bare sentence). The rule is recorded on `payload.rule`. `src/data/claim-rules.json` pins both, plus a negative case where a second URL anywhere blocks the claim.
 - **Withheld records:** a withheld record inside a finding's evidence span turns that finding `insufficient` only if its event type is one the monitor reads. Unrelated withheld chat does not blanket every finding.
 - **Window parts:** a 4-hour window over the 1,200-record cap is split into parts. Each part holds 1,200 in-range records plus every claim, check, correction, acknowledgement, quote and session boundary from **earlier** in the window, marked *carried*. Carried records keep their original sequence numbers and pass through the same `sequence ≤ cursor` filter, so a part never sees a later record. The context header reads "1,200 in-range · N carried".
@@ -127,8 +138,9 @@ npm run check -- --trace [--withhold]  # also print the synthetic state + findin
 2. **Fixtures:** each fixture's `expect` block asserts that the monitor **fires** (exact state, count and evidence ids at a cursor), that the monitors in `quiet` stay **quiet** at every cursor, and that **withholding** a decisive record degrades the finding to `insufficient` and names it in `missing[]`.
    Fixtures name the neighbours that must stay quiet. Where a neighbour fires by design (G and AW share a correction, BP implies C and AE), the fixture's `note` explains it. A BG meta test checks goal churn fires and its three quiet cases.
 3. **Integration:** `synthetic-release.json` is checked against its own `expect` block.
+   Extra fixtures for a registered monitor (e.g. `C-build.json`) run too. Meta tests cover BG and BE. A push-keying test runs the adapter on three pushes and checks that AE and F stay quiet.
    **Claim rules:** `src/data/claim-rules.json` runs chat text through the adapter and checks which URLs become claims and under which rule.
-4. **Regression:** validated real findings pinned in `src/data/regression.json` (ch4817 active, ch4770 resolved, and the 27 Apr signal-cartographer non-finding). The 27 Apr case is stated per monitor (`{ A: none, AM: allowed }`, with the reason); unlisted monitors must also stay silent on that subject. A window split into parts takes its verdict from the last part containing the finding. These are skipped, not failed, when `public/data` hasn't been built.
+4. **Regression:** validated real findings pinned in `src/data/regression.json` (ch4817 active, ch4770 resolved, and the 27 Apr signal-cartographer non-finding). The 27 Apr case is stated per monitor (`{ A: none, AM: allowed, F: allowed, BM: allowed }`, each with its reason); unlisted monitors must also stay silent on that subject. A window split into parts takes its verdict from the last part containing the finding. These are skipped, not failed, when `public/data` hasn't been built.
 
 **Adding a monitor:** create `src/engine/monitors/<ID>.ts` exporting a `MonitorDef`, write `src/data/fixtures/<ID>.json` with an `expect` block, register both (`monitors/index.ts`, `fixtures/index.ts`), and run `npm run check`. The Monitors and Incidents views pick it up from the registry.
 

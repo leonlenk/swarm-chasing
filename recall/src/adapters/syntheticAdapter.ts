@@ -3,7 +3,7 @@ import raw from '../data/synthetic-release.json';
 
 const TYPES = new Set([
   'task_created', 'task_assigned', 'dependency_created', 'status_updated', 'message',
-  'claim', 'tool_result', 'correction', 'acknowledgement', 'action',
+  'claim', 'tool_result', 'correction', 'acknowledgement', 'action', 'quote', 'directive',
 ]);
 
 /** Validates a RECALL-native JSON document and returns events sorted by sequence. */
@@ -18,6 +18,10 @@ export function parseRecallDocument(doc: unknown): DataSource {
       throw new Error(`Malformed event: ${JSON.stringify(e).slice(0, 120)}`);
     }
     if (seen.has(e.id)) throw new Error(`Duplicate event id ${e.id}`);
+    // Auditability invariants (brief): every claim names the rule that produced it, and every inferred record does too.
+    const rule = (e.payload as { rule?: unknown }).rule;
+    if (e.type === 'claim' && !rule) throw new Error(`Claim ${e.id} has no payload.rule`);
+    if (e.provenance === 'inferred' && !rule) throw new Error(`Inferred record ${e.id} (${e.type}) has no payload.rule`);
     seen.add(e.id);
   }
   const events = [...(d.events as RecallEvent[])].sort((a, b) => a.sequence - b.sequence);

@@ -12,7 +12,7 @@ import type { Finding, MonitorDef } from './monitors/types';
 /** Subject "type": the version slot for rule-defined subjects (live, working-tree, …), else 'artifact-version'. */
 const subjectType = (s?: { artifact: string; version: string }) => {
   if (!s) return 'none';
-  if (s.version === 'live' || s.version === 'working-tree' || s.version === 'push') return s.version;
+  if (['live', 'working-tree', 'pushed', 'built', 'merged', 'exists', 'running'].includes(s.version)) return `${s.artifact.split(':')[0].startsWith('http') ? 'url' : s.artifact.split(':')[0]}:${s.version}`;
   return 'artifact-version';
 };
 
@@ -103,6 +103,28 @@ export function verifyGoalNoClaim(ws: WorldState): { taskId: string; createdId: 
       if (!ended) continue;
       if (ws.visible.some((x) => x.taskId === t.taskId && ((x.type === 'tool_result' && x.payload.category === 'verification' && x.payload.outcome !== 'inconclusive') || x.type === 'claim'))) continue;
       out.push({ taskId: t.taskId, createdId: e.id });
+    }
+  }
+  return out;
+}
+
+export const BE_MIN_TURNS = 100;
+
+/**
+ * BE · Long session, no verdict (owner ruling 2026-10-04: a coverage count, not an incident). Ended sessions with
+ * >= 100 turns, zero verdicts of any kind and zero claims: nothing checkable happened, or no rule covers what it did.
+ */
+export function longSessionNoVerdict(ws: WorldState, minTurns = BE_MIN_TURNS): { taskId: string; agentId: string; turns: number; createdId: string }[] {
+  const out: { taskId: string; agentId: string; turns: number; createdId: string }[] = [];
+  for (const e of ws.visible) {
+    if (e.type !== 'task_created') continue;
+    for (const t of e.payload.tasks) {
+      const rec = ws.visible.filter((x) => x.taskId === t.taskId);
+      if (!rec.some((x) => x.type === 'status_updated' && x.payload.status === 'ended')) continue;
+      const turns = rec.filter((x) => x.type === 'action' && !!x.payload.turnId).length;
+      if (turns < minTurns) continue;
+      if (rec.some((x) => x.type === 'claim' || (x.type === 'tool_result' && x.payload.outcome !== 'inconclusive'))) continue;
+      out.push({ taskId: t.taskId, agentId: t.owner, turns, createdId: e.id });
     }
   }
   return out;

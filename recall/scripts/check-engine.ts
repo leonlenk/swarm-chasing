@@ -12,7 +12,7 @@ import { parseRecallDocument } from '../src/adapters/syntheticAdapter';
 import { reconstruct } from '../src/engine/reconstruct';
 import { assertFinding, findingProblems, register, registry, runMonitors, type Finding, type MonitorDef } from '../src/engine/monitors';
 import type { FixtureBlock, FixtureExpect } from '../src/data/fixtures';
-import { goalChurn } from '../src/engine/meta';
+import { goalChurn, longSessionNoVerdict } from '../src/engine/meta';
 import { adaptAiVillageWindow } from '../src/adapters/aiVillageHf';
 import type { DataSource } from '../src/model/types';
 
@@ -88,7 +88,9 @@ for (const m of registry) {
   const ok = existsSync(join(ROOT, m.fixture));
   record('registry', `${m.id} · ${m.title} → ${m.fixture}`, ok, ok ? undefined : 'fixture file missing on disk');
 }
-for (const id of onDisk) if (!registry.some((m) => m.id === id)) record('registry', `fixture ${id}.json has a registered monitor`, false, 'orphan fixture');
+// Extra fixtures (e.g. C-build.json) are allowed: a file is an orphan only if the monitor it targets is not registered.
+const targetOf = (id: string) => (load(`src/data/fixtures/${id}.json`).fixture?.monitor ?? id);
+for (const id of onDisk) if (!registry.some((m) => m.id === targetOf(id))) record('registry', `fixture ${id}.json targets a registered monitor`, false, `orphan fixture (targets ${targetOf(id)})`);
 
 // Negative tests: the guarantees must actually refuse bad input.
 const fake = (id: string, fixture = `src/data/fixtures/${id}.json`): MonitorDef =>
@@ -127,6 +129,7 @@ refuses('a fixture without an expect block', () => register([fake('A')], { A: { 
 
 // ---------------------------------------------------------------- 2. fixtures
 for (const m of registry) if (existsSync(join(ROOT, m.fixture))) runFixture(`fixture ${m.id}`, m.fixture, load(m.fixture));
+for (const id of [...onDisk].sort()) if (!registry.some((m) => m.id === id) && registry.some((m) => m.id === targetOf(id))) runFixture(`fixture ${id} (extra, ${targetOf(id)})`, `src/data/fixtures/${id}.json`, load(`src/data/fixtures/${id}.json`));
 
 // ---------------------------------------------------------------- 2b. meta (BG goal churn)
 {
@@ -135,7 +138,7 @@ for (const m of registry) if (existsSync(join(ROOT, m.fixture))) runFixture(`fix
     events: [
       ...goals.map((g, n) => ({ id: `s${n + 1}`, sequence: n + 1, timestamp: '2026-01-02T09:00:00Z', agentId: 'p', taskId: null, type: 'task_created', provenance: 'declared', text: '',
         payload: { tasks: [{ taskId: `T${n + 1}`, title: g, owner: 'p', goalKey: g }] }, evidenceRefs: [] })),
-      ...(claim ? [{ id: 'c1', sequence: 99, timestamp: '2026-01-02T10:00:00Z', agentId: 'p', taskId: 'T1', type: 'claim', provenance: 'declared', text: '', payload: { claimId: 'C1', asserts: 'complete' }, evidenceRefs: [] }] : []),
+      ...(claim ? [{ id: 'c1', sequence: 99, timestamp: '2026-01-02T10:00:00Z', agentId: 'p', taskId: 'T1', type: 'claim', provenance: 'declared', text: '', payload: { claimId: 'C1', asserts: 'complete', rule: 'declared' }, evidenceRefs: [] }] : []),
     ],
   }) as unknown as DataSource;
   const distinct = ['deploy the site', 'write release notes', 'fix login bug', 'tidy the wiki', 'email the donors'];
@@ -144,6 +147,27 @@ for (const m of registry) if (existsSync(join(ROOT, m.fixture))) runFixture(`fix
   record('meta BG', 'quiet: 4 distinct goals (below 5)', at(mk(distinct.slice(0, 4))) === 0);
   record('meta BG', 'quiet: overlapping goals (Jaccard >= 0.3) are not churn', at(mk(['deploy the site', 'deploy the site again', 'deploy site now', 'tidy the wiki', 'email the donors'])) === 0);
   record('meta BG', 'quiet: the agent made a claim in the window', at(mk(distinct, true)) === 0);
+}
+
+// ---------------------------------------------------------------- 2b'. meta (BE long session, no verdict)
+{
+  const mk = (turns: number, opts: { claim?: boolean; verdict?: boolean; ended?: boolean } = {}): DataSource => {
+    const ev: unknown[] = [{ id: 's', sequence: 1, timestamp: '2026-01-02T09:00:00Z', agentId: 'p', taskId: null, type: 'task_created', provenance: 'observed', text: '',
+      payload: { tasks: [{ taskId: 'T1', title: 'x', owner: 'p' }] }, evidenceRefs: [] }];
+    for (let n = 0; n < turns; n++) ev.push({ id: `a${n}`, sequence: n + 2, timestamp: '2026-01-02T09:00:00Z', agentId: 'p', taskId: 'T1', type: 'action', provenance: 'observed', text: '',
+      payload: { action: 'turn', referencesClaims: [], turnId: `t${n}`, kind: 'command' }, evidenceRefs: [] });
+    let q = turns + 2;
+    if (opts.claim) ev.push({ id: 'c', sequence: q++, timestamp: '2026-01-02T09:00:00Z', agentId: 'p', taskId: 'T1', type: 'claim', provenance: 'declared', text: '', payload: { claimId: 'C1', asserts: 'complete', rule: 'declared' }, evidenceRefs: [] });
+    if (opts.verdict) ev.push({ id: 'v', sequence: q++, timestamp: '2026-01-02T09:00:00Z', agentId: 'p', taskId: 'T1', type: 'tool_result', provenance: 'observed', text: '', payload: { tool: 'x', runId: 'r', category: 'execution', outcome: 'fail', output: '' }, evidenceRefs: [] });
+    if (opts.ended !== false) ev.push({ id: 'e', sequence: q++, timestamp: '2026-01-02T09:00:00Z', agentId: 'p', taskId: 'T1', type: 'status_updated', provenance: 'observed', text: '', payload: { status: 'ended', endReason: 'stop' }, evidenceRefs: [] });
+    return { id: 'meta-be', label: 'meta BE', kind: 'synthetic', description: 'synthetic', agents: [{ id: 'p', name: 'Pia', role: 'x', color: '#000' }], events: ev } as unknown as DataSource;
+  };
+  const at = (d: DataSource) => longSessionNoVerdict(world(parseRecallDocument(d), 9999)).length;
+  record('meta BE', 'counts: ended session, 100 turns, zero verdicts, zero claims → 1', at(mk(100)) === 1);
+  record('meta BE', 'quiet: 99 turns (below N = 100)', at(mk(99)) === 0);
+  record('meta BE', 'quiet: the session made a claim', at(mk(100, { claim: true })) === 0);
+  record('meta BE', 'quiet: the session has a verdict', at(mk(100, { verdict: true })) === 0);
+  record('meta BE', 'quiet: the session has not ended', at(mk(100, { ended: false })) === 0);
 }
 
 // ---------------------------------------------------------------- 2c. adapter claim rules
@@ -159,6 +183,28 @@ for (const m of registry) if (existsSync(join(ROOT, m.fixture))) runFixture(`fix
     const ok = got.length === c.claims.length && c.claims.every((x) => got.some((g) => g.url === x.url && g.rule === x.rule));
     record('claim rules', c.name, ok, ok ? undefined : `got ${JSON.stringify(got)}`);
   }
+}
+
+// ---------------------------------------------------------------- 2d. push keying (owner ruling)
+{
+  const push = (id: string, sid: string, at: string, range: string) => ({ id, session_id: sid, created_at: at,
+    agent_action: { command: 'cd /work/r && git push origin main' }, output: `To https://github.com/o/r.git\n   ${range}  main -> main`, error: '' });
+  const chat = (id: string, who: string, at: string, content: string) => ({ id, speaker_type: 'agent', agent_speaker_id: who, content, created_at: at, room_id: 'room' });
+  const doc = adaptAiVillageWindow({
+    id: 'push-keying', label: 'push keying', window: { from: '2026-01-02T09:00:00Z', to: '2026-01-02T13:00:00Z' }, generatedAt: '2026-01-02T00:00:00Z',
+    agents: [{ id: 'a1', name: 'Agent One' }, { id: 'a2', name: 'Agent Two' }], boundaries: [],
+    sessions: [{ id: 's1-000000', agent_id: 'a1', created_at: '2026-01-02 09:00:00', short_displayed_session_goal: 'Write chapter' }, { id: 's2-000000', agent_id: 'a2', created_at: '2026-01-02 09:00:30', short_displayed_session_goal: 'Write appendix' }],
+    turns: [push('t1', 's1-000000', '2026-01-02 09:01:00', 'aaaaaaa..bbbbbbb'), push('t2', 's2-000000', '2026-01-02 09:03:00', 'bbbbbbb..ccccccc'), push('t3', 's1-000000', '2026-01-02 09:05:00', 'ccccccc..ddddddd')],
+    chats: [chat('c1-0000', 'a1', '2026-01-02 09:02:00', 'Pushed chapter one to the repo.'), chat('c2-0000', 'a2', '2026-01-02 09:04:00', 'Pushed the appendix to the repo.'),
+      chat('c3-0000', 'a1', '2026-01-02 09:06:00', 'Pushed chapter two to the repo.'), chat('c4-0000', 'a1', '2026-01-02 09:07:00', 'Deployed the fix.')],
+  });
+  const claims = doc.events.filter((e) => e.type === 'claim');
+  const versions = claims.map((c) => (c.type === 'claim' ? c.payload.subject?.version : ''));
+  record('push keying', 'deployed-no-url claims are keyed per push (sha range from the session\'s latest git push)',
+    versions.join(',') === 'aaaaaaa..bbbbbbb,bbbbbbb..ccccccc,ccccccc..ddddddd,ccccccc..ddddddd', versions.join(','));
+  const last = doc.events[doc.events.length - 1].sequence;
+  const hits = runMonitors(reconstruct({ events: doc.events, withheld: new Set(), agents: doc.agents }, last), ['AE', 'F']).filter((f) => f.monitor === 'AE' || f.id.includes('aaaaaaa'));
+  record('push keying', 'AE and F do not fire across different pushes of one repo', hits.length === 0, hits.map((f) => f.id).join(', '));
 }
 
 // ---------------------------------------------------------------- 3. integration

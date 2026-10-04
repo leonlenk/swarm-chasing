@@ -120,7 +120,8 @@
     "subject": {
      "artifact": "https://app.example.test",
      "version": "live"
-    }
+    },
+    "rule": "declared"
    },
    "evidenceRefs": [
     "ev-02"

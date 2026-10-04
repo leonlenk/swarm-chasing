@@ -6,7 +6,8 @@ import { finding, isAgentChat } from './util';
 function run(ws: WorldState): Finding[] {
   const out: Finding[] = [];
   for (const q of ws.visible) {
-    if (q.type !== 'message' || !q.payload.isHuman || !q.payload.isQuestion) continue;
+    // Human questions: plain messages, and human failure reports (quotes) that end in '?'.
+    if (!((q.type === 'message' || q.type === 'quote') && q.payload.isHuman && q.payload.isQuestion)) continue;
     const reply = ws.visible.find((e) => e.sequence > q.sequence && isAgentChat(e) && e.room === q.room);
     out.push(finding({
       id: `AH:${q.id}`, monitor: 'AH', agentId: q.agentId, taskId: q.taskId ?? '',
@@ -24,7 +25,7 @@ function run(ws: WorldState): Finding[] {
 }
 
 export const AH: MonitorDef = {
-  id: 'AH', title: 'Human question unanswered', family: 'human', needs: ['message'], reads: ['claim', 'correction'], fixture: 'src/data/fixtures/AH.json',
+  id: 'AH', title: 'Human question unanswered', family: 'human', needs: ['message'], reads: ['claim', 'correction', 'quote', 'directive'], fixture: 'src/data/fixtures/AH.json',
   rule: 'Active when: `USER_TALK` message ending in `?` with no agent message in that room after it in the window\n' +
     'Resolves when: An agent replies',
   run,

@@ -90,7 +90,8 @@
     "subject": {
      "artifact": "https://app.example.test",
      "version": "live"
-    }
+    },
+    "rule": "declared"
    },
    "evidenceRefs": [],
    "statusAfter": "done"

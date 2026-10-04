@@ -9,7 +9,7 @@
 //  - Tool verdicts come only from deterministic output patterns (each carries `rule`);
 //    stderr alone is never treated as failure.
 
-import type { Agent, DataSource, RecallEvent, TaskStatus } from '../model/types';
+import type { Agent, ArtifactRef, Asserts, DataSource, EventOf, RecallEvent, TaskStatus } from '../model/types';
 
 export interface HfAgent { id: string; name: string; model_string?: string | null }
 export interface HfSession {
@@ -36,6 +36,8 @@ export interface HfTurnLite {
   command?: string;
   /** Computer action name plus target description, e.g. "left_click · Publish button". */
   computerAction?: string;
+  /** Rules 'write-action', 'destructive-lexicon', 'browser-nav', computed from the FULL command / action. */
+  writes?: string[]; destructive?: string; navigates?: string;
   outputHash: string;
   /** Hash of the full command text (commands are displayed clipped). */
   commandHash?: string;
@@ -67,13 +69,92 @@ export interface HfWindowInput {
 
 export const URL_RE = /https?:\/\/[^\s'"<>)\]`*,]+/g;
 const HTTP_RE = /HTTP\/[\d.]+\s+(\d{3})/g;
+/** Bare status-code lines (curl -w '%{http_code}', print(r.status_code)). Line-based: a multiline ^\s*…$ regex is quadratic on whitespace runs. */
+const bareStatuses = (out: string) => out.split('\n').map((l) => l.trim()).filter((l) => /^[1-5]\d\d$/.test(l)).map(Number);
 export const CLAIM_RE =
   /\b(is (?:now )?live|are (?:now )?live|now live|went live|deployed|published|is up at|are up at|shipped|launched|fixed|is working(?! on)|are working(?! on)|verified)\b/i;
 /** A message reporting a problem is not a completion claim, even if it says "verified". */
 const NEGATIVE_RE =
   /\b(404|not found|broken|fail(?:ed|ing|s|ure)?|errors?|is down|are down|isn['’]?t live|not (?:yet )?live|still (?:returning|showing)|unreachable)\b/i;
 /** Future or conditional wording: "will be live at", "once set up", "soon". Not a completion claim. */
-const FUTURE_RE = /\b(will (?:be|go)|once\b|soon\b|going to|planning|plan to|about to|should be|when (?:it|this) (?:is|goes))\b/i;
+const FUTURE_RE = /\b(will (?:be|go)|once\b|soon\b|going to|planning|plan to|about to|when (?:it|this) (?:is|goes))\b/i;
+/** Rule 'hedged' (brief): kept as a claim, flagged. "should be" moved here from FUTURE_RE in Milestone 3. */
+export const HEDGE_RE = /\b(may take|should be|i think|probably|pending)\b/i;
+/** Claim rules without a URL (Milestone 3). */
+const TESTS_PASS_RE = /\b(?:all (?:\d+ )?tests? (?:are )?pass(?:ing|ed)?|tests? (?:are |now )*(?:pass(?:ing|ed)?|green)|test suite pass(?:es|ed)|\d+(?:\/\d+)? tests? pass(?:ing|ed)?)\b/i;
+const FIXED_RE = /\b(fixed|resolved|patched)\b/i;
+const DEPLOYED_RE = /\b(deployed|pushed|merged)\b/i;
+const EXISTS_RE = /\b(created|wrote|saved|added)\b/i;
+const ISSUE_RE = /(?:^|\s)#(\d{1,6})\b/;
+const BLAME_RE = /\b(bug|broken|not working|site is down|is down|server is down)\b/i;
+const OWN_ERROR_RE = /\b(my (?:mistake|error|bad|fault)|i (?:made a|introduced|forgot|mistyped|broke)|typo|i was wrong|my typo)\b/i;
+/** Rule 'directive' (owner ruling): in the @mention's sentence, a polite request or a sentence-start imperative from a short lexicon. */
+const POLITE_RE = /\b(can you|could you|would you|please)\b/i;
+const IMPERATIVE_START_RE = /^(check|run|deploy|fix|review|test|update|post|add|merge|verify)\b/i;
+const CONVENTION_RE = /(?:^|\s)(#[A-Za-z][\w-]{2,30})\b|(\[[A-Z][A-Z0-9 _-]{1,15}\])/g;
+const STOPWORDS = new Set('the and for with that this from your you are was were have has will can could would should please into onto about just also then than them they their there here what when where which while been being make sure take over care look'.split(' '));
+const contentTokens = (s: string) => [...new Set(s.toLowerCase().replace(/https?:\/\/\S+/g, ' ').replace(/@\S+/g, ' ').split(/[^a-z0-9]+/).filter((w) => w.length >= 4 && !STOPWORDS.has(w)))].slice(0, 30);
+const conventionsIn = (s: string) => [...new Set([...s.matchAll(CONVENTION_RE)].map((m) => m[1] ?? m[2]).filter(Boolean))].slice(0, 10);
+/** Typed flags for a chat message (rules 'names-url', 'negative-lexicon', 'external-blame', 'own-error', 'convention-token'). */
+function chatFlags(content: string): { names?: string[]; negative?: true; blame?: true; ownError?: true; conventions?: string[] } {
+  const names0 = urlsIn(content).filter((u) => !NOT_A_PAGE.test(u)).slice(0, 10);
+  const conv = conventionsIn(content);
+  return { ...(names0.length ? { names: names0 } : {}), ...(NEGATIVE_RE.test(content) ? { negative: true as const } : {}),
+    ...(BLAME_RE.test(content) ? { blame: true as const } : {}), ...(OWN_ERROR_RE.test(content) ? { ownError: true as const } : {}),
+    ...(conv.length ? { conventions: conv } : {}) };
+}
+
+/** Rule 'claim-number': a number stated next to a pass word. */
+function claimNumber(s: string): { value: number; kind: 'tests-passed' | 'http-status' } | undefined {
+  const t = /\b(\d{1,6})(?:\/\d+)?\s+(?:tests?\s+|specs?\s+)?(?:pass(?:ed|ing|es)?)\b/i.exec(s);
+  if (t) return { value: Number(t[1]), kind: 'tests-passed' };
+  const h = /\b(?:HTTP\/?[\d.]*\s+|returns?\s+|returning\s+)?([1-5]\d\d) OK\b/.exec(s) ?? /\bHTTP\/?[\d.]*\s+([1-5]\d\d)\b/.exec(s);
+  if (h) return { value: Number(h[1]), kind: 'http-status' };
+  return undefined;
+}
+
+/** Rule 'write-action': artifacts a command writes. Line-based; redirects to /dev/null and fd redirects ignored. */
+export function writesOf(cmd: string): string[] {
+  const out = new Set<string>();
+  for (const raw of cmd.split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#') || line.length > 2000) continue;
+    if (/\bgit\s+commit\b/.test(line)) out.add('repo:*');
+    for (const m of line.matchAll(/(?:^|[^0-9&>])>>?\s*(['"]?)([^\s'"|;&<>]+)\1/g)) if (!m[2].startsWith('/dev/') && !m[2].startsWith('&')) out.add(`file:${m[2]}`);
+    for (const m of line.matchAll(/\btee\s+(?:-a\s+)?(['"]?)([^\s'"|;&<>]+)\1/g)) out.add(`file:${m[2]}`);
+    const sed = /\bsed\s+-i\S*\s+(?:-e\s+)?(?:'[^']*'|"[^"]*"|\S+)\s+([^\s|;&<>]+)/.exec(line);
+    if (sed) out.add(`file:${sed[1]}`);
+    const cpmv = /\b(?:cp|mv)\s+(?:-\S+\s+)*\S+\s+([^\s|;&<>]+)\s*$/.exec(line);
+    if (cpmv) out.add(`file:${cpmv[1]}`);
+    if (out.size >= 10) break;
+  }
+  return [...out];
+}
+
+/** Rule 'destructive-lexicon': the destructive idiom a command uses, if any. */
+export function destructiveOf(cmd: string): string | undefined {
+  for (const raw of cmd.split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#') || line.length > 2000) continue;
+    if (/\brm\s+-[a-zA-Z]*(?:r[a-zA-Z]*f|f[a-zA-Z]*r)\b/.test(line)) return 'rm -rf';
+    if (/\bgit\s+push\b.*\s(?:--force(?:-with-lease)?|-f)\b/.test(line)) return 'git push --force';
+    if (/\bgit\s+reset\s+--hard\b/.test(line)) return 'git reset --hard';
+    if (/\bgit\s+checkout\s+--\s+\./.test(line)) return 'git checkout -- .';
+    if (/\bgit\s+clean\s+-[a-zA-Z]*f/.test(line)) return 'git clean -f';
+    if (/\bkill\s+-9\b/.test(line)) return 'kill -9';
+  }
+  return undefined;
+}
+
+/** Rule 'browser-nav': a computer action that types or opens a URL. */
+export function navigationOf(a: Record<string, unknown> | null): string | undefined {
+  if (!a || typeof a.command === 'string') return undefined;
+  for (const k of ['url', 'text']) {
+    const v = a[k];
+    if (typeof v === 'string' && v.length < 2048) { const u = urlsIn(v)[0]; if (u) return u; }
+  }
+  return undefined;
+}
 
 export type ClaimRule = 'claim-sentence' | 'claim-bare-url';
 
@@ -89,8 +170,11 @@ export function claimedUrlsWithRule(content: string, urls: string[]): { url: str
   const sentences = sentencesOf(content);
   const isClaim = (s: string) => CLAIM_RE.test(s) && !FUTURE_RE.test(s) && !NEGATIVE_RE.test(s);
   const out: { url: string; rule: ClaimRule }[] = [];
+  // Sentence-level subjects (owner ruling): link targets are mentions, and with several URLs each claim phrase
+  // claims only the URL nearest to it ("A is live and B is live" claims both).
+  const sentenceSubjects = new Set(sentences.filter(isClaim).flatMap(claimSubjectsOf));
   for (const u of urls) {
-    if (sentences.some((s) => urlsIn(s).includes(u) && isClaim(s))) { out.push({ url: u, rule: 'claim-sentence' }); continue; }
+    if (sentenceSubjects.has(u)) { out.push({ url: u, rule: 'claim-sentence' }); continue; }
     const last = sentences[sentences.length - 1] ?? '';
     const bare = last.replace(/https?:\/\/\S+/g, ' ').replace(/@\S+/g, ' ').split(/\s+/).filter((w) => /[a-z0-9]/i.test(w)).length <= 4;
     const onlyUrl = urlsIn(content).length === 1 && urlsIn(last).includes(u);
@@ -98,6 +182,31 @@ export function claimedUrlsWithRule(content: string, urls: string[]): { url: str
     if (onlyUrl && bare && headline) out.push({ url: u, rule: 'claim-bare-url' });
   }
   return out;
+}
+
+/**
+ * Rule 'link-target' (owner ruling): a URL right after "points to | links to | redirects to | pointing at | linking to"
+ * is a mention. An arrow (→, ->) marks a link target only when a URL immediately precedes it ("A → B");
+ * "text → URL" is a claim pointer.
+ */
+const LINK_TARGET_RE = /(?:points to|links to|redirects to|pointing at|linking to)\s*[("'`<]?\s*$/i;
+const ARROW_TARGET_RE = /https?:\/\/\S+\s*(?:→|->)\s*[("'`<]?\s*$/;
+/** Rule 'plural-claim': a plural claim phrase, or a claim phrase introducing a colon list, claims every URL in its sentence. */
+const PLURAL_CLAIM_RE = /\b(?:products|pages|chapters|links|sites|both|all \d+)\b.{0,60}?\b(?:live|published|deployed)\b/i;
+const CLAIM_COLON_RE = new RegExp(`(?:${CLAIM_RE.source})[^.!?:]{0,40}:(?=\\s)`, 'i');
+
+/** URLs of a claim sentence that its claim phrases claim: link targets excluded, then plural → all, else nearest per phrase. */
+function claimSubjectsOf(sentence: string): string[] {
+  const urls = [...sentence.matchAll(URL_RE)]
+    .filter((m) => {
+      const before = sentence.slice(Math.max(0, (m.index ?? 0) - 400), m.index);
+      return concrete(m[0]) && !LINK_TARGET_RE.test(before.slice(-40)) && !ARROW_TARGET_RE.test(before);
+    })
+    .map((m) => ({ url: normUrl(m[0]), at: m.index ?? 0, end: (m.index ?? 0) + m[0].length }));
+  if (urls.length <= 1 || PLURAL_CLAIM_RE.test(sentence) || CLAIM_COLON_RE.test(sentence)) return [...new Set(urls.map((x) => x.url))];
+  const phrases = [...sentence.matchAll(new RegExp(CLAIM_RE.source, 'gi'))].map((m) => ({ at: m.index ?? 0, end: (m.index ?? 0) + m[0].length }));
+  const dist = (u: { at: number; end: number }, p: { at: number; end: number }) => (u.end <= p.at ? p.at - u.end : u.at >= p.end ? u.at - p.end : 0);
+  return [...new Set(phrases.map((p) => urls.reduce((best, u) => (dist(u, p) < dist(best, p) ? u : best)).url))];
 }
 
 export const claimedUrls = (content: string, urls: string[]) => claimedUrlsWithRule(content, urls).map((x) => x.url);
@@ -141,8 +250,11 @@ const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1).trim
 const firstLine = (s: string) => s.split('\n').find((l) => l.trim() && !l.trim().startsWith('#'))?.trim() ?? s.trim();
 
 export interface Verdict {
-  rule: 'http-status' | 'test-summary' | 'git-push' | 'traceback';
-  category: 'verification' | 'execution';
+  rule: 'http-status' | 'test-summary' | 'git-push' | 'traceback' | 'pages-build' | 'pr-state' | 'file-exists' | 'proc-running' | 'build-result';
+  /** build results never verify (brief): category 'build'. */
+  category: 'verification' | 'execution' | 'build';
+  /** Numbers parsed from the output, for claim-number comparison. */
+  observed?: { passed?: number; failed?: number; status?: number };
   /** 'inconclusive' only for verdicts whose output is empty: such a verdict is never 'pass'. */
   outcome: 'pass' | 'fail' | 'inconclusive';
   subject?: { artifact: string; version: string };
@@ -223,7 +335,7 @@ function testScope(cmd: string, text: string): 'full' | 'partial' {
  * Scans lines from the end (final summaries come last). Replaces a backtracking regex that hung for minutes
  * on one multi-megabyte tool output in computer_use_turns.
  */
-export function testSummary(text: string): { failed: number; passed: number } | null {
+export function testSummary(text: string, cmd = ''): { failed: number; passed: number } | null {
   const lines = text.split('\n');
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i].trim();
@@ -234,6 +346,156 @@ export function testSummary(text: string): { failed: number; passed: number } | 
     const f = /(\d+) failed/.exec(line);
     const p = /(\d+) passed/.exec(line);
     if (f || p) return { failed: Number(f?.[1] ?? 0), passed: Number(p?.[1] ?? 0) };
+  }
+  // Widened (Milestone 3): cargo, mocha, playwright, go test. Only when the command names the runner, so generic
+  // "N passing" prose in other output cannot become a verdict. Line-based, linear.
+  if (/\bcargo\s+test\b/.test(cmd)) {
+    let passed = 0; let failed = 0; let seen = false;
+    for (const line of lines) {
+      const m = /^test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed/.exec(line.trim());
+      if (m) { seen = true; passed += Number(m[1]); failed += Number(m[2]); }
+    }
+    if (seen) return { failed, passed };
+  }
+  if (/\b(mocha|playwright)\b/.test(cmd)) {
+    let passed: number | null = null; let failed = 0;
+    for (const line of lines) {
+      const t = line.trim();
+      if (t.length > 120) continue;
+      const p = /^(\d+) (?:passing|passed)\b/.exec(t);
+      const f = /^(\d+) (?:failing|failed)\b/.exec(t);
+      if (p) passed = Number(p[1]);
+      if (f) failed = Number(f[1]);
+    }
+    if (passed !== null || failed) return { failed, passed: passed ?? 0 };
+  }
+  if (/\bgo\s+test\b/.test(cmd)) {
+    let passed = 0; let failed = 0;
+    for (const line of lines) {
+      if (/^ok\s+\S+\s/.test(line)) passed++;
+      else if (/^FAIL\s+\S+\s/.test(line) || /^--- FAIL:/.test(line)) failed++;
+    }
+    if (passed || failed) return { failed, passed };
+  }
+  return null;
+}
+
+/** The single tool invocation of a command, ignoring comments and `cd` steps; null when it chains several. */
+function coreCommand(cmd: string): { core: string; cwd?: string } | null {
+  const segs = cmd.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'))
+    .flatMap((l) => l.split(/\s*(?:&&|;)\s*/)).map((x) => x.trim()).filter(Boolean);
+  let cwd: string | undefined;
+  const rest: string[] = [];
+  for (const sg of segs) {
+    const cd = /^cd\s+([^\s;&|]+)$/.exec(sg);
+    if (cd) cwd = cd[1]; else rest.push(sg);
+  }
+  return rest.length === 1 ? { core: rest[0], cwd } : null;
+}
+
+const BUILD_CMD_RE = /\b(npm run build|yarn build|pnpm (?:run )?build|vite build|tsc(?:\s+--noEmit)?|docker build|next build)\b/;
+const BUILD_OK_RE = /✓ built in|\bbuilt in [\d.]+\s?m?s\b|Successfully built|Successfully tagged|Compiled successfully|compiled successfully|Build succeeded|Build completed/;
+const BUILD_ERR_RE = /\berror TS\d+|Build failed|Failed to compile|failed to compile|npm ERR!|error during build|ERROR: failed to solve/;
+
+/** Milestone 3 verdict rules (brief table). Each reads the output line by line; stderr is never failure by itself. */
+function newVerdict(cmd: string, out: string, text: string): Verdict | null {
+  const lines = text.split('\n').filter((l) => l.length <= 2000);
+  const cc = coreCommand(cmd);
+  const repoOf = (cwd?: string) => cwd ?? 'working directory';
+
+  // proc-running: curl to localhost / 127.0.0.1, lsof -i :N, ps … | grep NAME
+  const local = /\bcurl\b[^\n]*?\s(?:https?:\/\/)?(?:localhost|127\.0\.0\.1|0\.0\.0\.0)(?::(\d+))?(?![\w.-])/.exec(cmd);
+  if (local) {
+    const port = local[1] ?? '80';
+    if (lines.some((l) => /Connection refused|Failed to connect|Couldn't connect to server/.test(l))) {
+      return { rule: 'proc-running', category: 'verification', outcome: 'fail', subject: { artifact: `proc:${port}`, version: 'running' }, summary: `nothing listening on localhost:${port}` };
+    }
+    const st = [...text.matchAll(HTTP_RE)].map((m) => Number(m[1]));
+    const bare = cmd.includes('%{http_code}') ? bareStatuses(out) : [];
+    const code = (st.length ? st : bare).pop();
+    if (code) return { rule: 'proc-running', category: 'verification', outcome: code < 400 ? 'pass' : 'fail', subject: { artifact: `proc:${port}`, version: 'running' }, summary: `HTTP ${code} from localhost:${port}`, observed: { status: code } };
+    return null;
+  }
+  const lsof = /\blsof\s+(?:-\S+\s+)*-i\s*:?(\d+)/.exec(cmd);
+  if (lsof && cc) {
+    const listening = lines.some((l) => /\bLISTEN\b/.test(l));
+    return { rule: 'proc-running', category: 'verification', outcome: listening ? 'pass' : 'fail', subject: { artifact: `proc:${lsof[1]}`, version: 'running' }, summary: listening ? `port ${lsof[1]} listening` : `nothing listening on port ${lsof[1]}` };
+  }
+  const ps = /\bps\s+(?:aux|-ef|-e)\b[^|\n]*\|\s*grep\s+(?:-\S+\s+)*['"]?([\w./:-]+)/.exec(cmd);
+  if (ps && cc) {
+    const name = ps[1];
+    const hit = lines.some((l) => l.includes(name) && !/\bgrep\b/.test(l));
+    return { rule: 'proc-running', category: 'verification', outcome: hit ? 'pass' : 'fail', subject: { artifact: `proc:${name}`, version: 'running' }, summary: hit ? `${name} running` : `${name} not running` };
+  }
+
+  // pages-build: gh api repos/<owner>/<repo>/pages[/builds[/latest]]
+  const pages = /\bgh\s+api\s+(?:-\S+\s+)*['"]?\/?repos\/([\w.-]+\/[\w.-]+)\/pages(?:\/builds(?:\/latest)?)?\b/.exec(cmd);
+  if (pages && cc) {
+    let status: string | undefined;
+    for (const l of lines) {
+      const m = /"status"\s*:\s*"(built|errored|building|queued)"/.exec(l) ?? /^\s*(built|errored|building|queued)\s*$/.exec(l);
+      if (m) { status = m[1]; break; }
+    }
+    if (status === 'built' || status === 'errored') {
+      return { rule: 'pages-build', category: 'verification', outcome: status === 'built' ? 'pass' : 'fail', subject: { artifact: `pages:${pages[1]}`, version: 'built' }, summary: `Pages build ${status} (${pages[1]})` };
+    }
+    return null;
+  }
+
+  // pr-state: gh pr view | merge | status
+  const pr = /\bgh\s+pr\s+(view|merge|status)\b/.exec(cmd);
+  if (pr && cc) {
+    const url = /github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/.exec(`${cmd}\n${text}`);
+    const repo = /(?:-R|--repo)\s+([\w.-]+\/[\w.-]+)/.exec(cmd)?.[1] ?? url?.[1];
+    const num = /\bgh\s+pr\s+(?:view|merge)\s+(\d+)/.exec(cmd)?.[1] ?? url?.[2];
+    if (!num) return null;
+    const subject = { artifact: `pr:${repo ?? ''}#${num}`, version: 'merged' };
+    let state: string | undefined;
+    for (const l of lines) {
+      const t = l.trim();
+      if (/^✓ (?:Merged|Squashed and merged|Rebased and merged) pull request/.test(t)) { state = 'MERGED'; break; }
+      if (/is not mergeable|failed to merge|Pull request .{0,80} is not mergeable/i.test(t)) { state = 'MERGE_ERROR'; break; }
+      const m = /^state:\s*(MERGED|CLOSED|OPEN)\b/i.exec(t) ?? /"state"\s*:\s*"(MERGED|CLOSED|OPEN)"/.exec(t);
+      if (m) { state = m[1].toUpperCase(); break; }
+    }
+    if (state === 'MERGED') return { rule: 'pr-state', category: 'verification', outcome: 'pass', subject, summary: `PR #${num} merged` };
+    if (state === 'CLOSED' || state === 'MERGE_ERROR') return { rule: 'pr-state', category: 'verification', outcome: 'fail', subject, summary: state === 'CLOSED' ? `PR #${num} closed unmerged` : `PR #${num} merge failed` };
+    return null;
+  }
+
+  // build-result (category build: never verification)
+  if (cc && BUILD_CMD_RE.test(cc.core)) {
+    const err = lines.find((l) => BUILD_ERR_RE.test(l));
+    const ok = lines.some((l) => BUILD_OK_RE.test(l));
+    if (err || ok) {
+      return { rule: 'build-result', category: 'build', outcome: err ? 'fail' : 'pass', subject: { artifact: `repo:${repoOf(cc.cwd)}`, version: 'built' }, summary: err ? clip(err.trim(), 140) : `build succeeded (${repoOf(cc.cwd)})` };
+    }
+    return null;
+  }
+
+  // file-exists: a single ls / cat / stat / head of one path
+  const fe = cc && /^(ls|cat|stat|head)(?:\s+-[\w-]+)*\s+(['"]?)([^\s'"|<>;&*]+)\2\s*$/.exec(cc.core);
+  if (fe) {
+    const path = fe[3];
+    const subject = { artifact: `file:${path}`, version: 'exists' };
+    if (lines.some((l) => /No such file or directory|cannot access|cannot stat/.test(l))) return { rule: 'file-exists', category: 'verification', outcome: 'fail', subject, summary: `${path}: no such file` };
+    if (out.trim()) return { rule: 'file-exists', category: 'verification', outcome: 'pass', subject, summary: `${path} exists` };
+    return null;
+  }
+
+  // http-status (widened): wget --server-response / -S, httpie, python requests
+  const httpTool = /\bwget\b[^\n]*(?:--server-response|\s-S\b)/.test(cmd) || /(?:^|\n|&&\s*|;\s*)https?\s+(?:GET\s+|HEAD\s+|--\S+\s+)*https?:\/\//.test(cmd) || (/\brequests\.(?:get|head)\(/.test(cmd) && cmd.includes('status_code'));
+  if (httpTool) {
+    const urls = urlsIn(cmd);
+    let statuses = [...text.matchAll(HTTP_RE)].map((m) => Number(m[1]));
+    if (!statuses.length && cmd.includes('status_code')) {
+      const bare = bareStatuses(out);
+      if (bare.length === 1) statuses = bare;
+    }
+    if (urls.length === 1 && statuses.length) {
+      const code = statuses[statuses.length - 1];
+      return { rule: 'http-status', category: 'verification', outcome: code < 400 ? 'pass' : 'fail', subject: { artifact: urls[0], version: 'live' }, summary: `HTTP ${code} from ${urls[0]}`, finalUrl: finalUrlOf(cmd, text, urls[0], statuses), observed: { status: code } };
+    }
   }
   return null;
 }
@@ -262,7 +524,7 @@ function baseVerdict(t: Pick<HfTurn, 'agent_action' | 'output' | 'error'>): Verd
     let statuses = [...text.matchAll(HTTP_RE)].map((m) => Number(m[1]));
     // `curl -w '%{http_code}'` prints a bare status code instead of an HTTP status line.
     if (!statuses.length && cmd.includes('%{http_code}')) {
-      const bare = [...out.matchAll(/^\s*([1-5]\d\d)\s*$/gm)].map((m) => Number(m[1]));
+      const bare = bareStatuses(out);
       if (bare.length === 1) statuses = bare;
     }
     if (urls.length === 1 && statuses.length) {
@@ -272,11 +534,12 @@ function baseVerdict(t: Pick<HfTurn, 'agent_action' | 'output' | 'error'>): Verd
         subject: { artifact: urls[0], version: 'live' },
         summary: `HTTP ${code} from ${urls[0]}`,
         finalUrl: finalUrlOf(cmd, text, urls[0], statuses),
+        observed: { status: code },
       };
     }
   }
 
-  const summary = testSummary(text);
+  const summary = testSummary(text, cmd);
   if (summary) {
     const { failed, passed } = summary;
     const repo = /\bcd\s+([^\s;&|]+)/.exec(cmd)?.[1] ?? 'working directory';
@@ -285,19 +548,24 @@ function baseVerdict(t: Pick<HfTurn, 'agent_action' | 'output' | 'error'>): Verd
       subject: { artifact: `tests:${repo}`, version: 'working-tree' },
       summary: `${failed} failed, ${passed} passed (${repo})`,
       scope: testScope(cmd, text),
+      observed: { passed, failed },
     };
   }
+
+  const nv = newVerdict(cmd, out, text);
+  if (nv) return nv;
 
   if (/\bgit\s+push\b/.test(cmd)) {
     const remote = /To (https?:\/\/\S+)/.exec(text)?.[1];
     if (text.includes('! [rejected]') || /error: failed to push/.test(text)) {
       return { rule: 'git-push', category: 'execution', outcome: 'fail',
-        subject: remote ? { artifact: normUrl(remote), version: 'push' } : undefined, summary: `push rejected${remote ? ` by ${normUrl(remote)}` : ''}` };
+        subject: remote ? { artifact: `repo:${normUrl(remote)}`, version: 'rejected' } : undefined, summary: `push rejected${remote ? ` by ${normUrl(remote)}` : ''}` };
     }
     const ok = /([0-9a-f]{7,})\.\.([0-9a-f]{7,})\s+\S+\s+->\s+\S+/.exec(text) ?? /\* \[new branch\]\s+\S+\s+->\s+\S+/.exec(text);
     if (ok) {
       return { rule: 'git-push', category: 'execution', outcome: 'pass',
-        subject: remote ? { artifact: normUrl(remote), version: ok[2] ?? 'new-branch' } : undefined,
+        // Keyed per push (owner ruling): the version is the pushed sha range, so separate pushes are separate subjects.
+        subject: remote ? { artifact: `repo:${normUrl(remote)}`, version: ok[2] ? `${ok[1]}..${ok[2]}` : 'new-branch' } : undefined,
         summary: `pushed${ok[2] ? ` ${ok[1]}..${ok[2]}` : ' new branch'}${remote ? ` to ${normUrl(remote)}` : ''}` };
     }
   }
@@ -312,7 +580,7 @@ function baseVerdict(t: Pick<HfTurn, 'agent_action' | 'output' | 'error'>): Verd
 // ---------- ingestion helpers (raw-line, no full JSON parse) ----------
 
 /** Commands whose output can carry a verdict. Avoids JSON-parsing the huge agent_messages of other turns. */
-export const INTERESTING_CMD = /\bcurl\b|git\s+push|pytest|jest|vitest|npm (?:run )?test|node --test|\bpython3?\b|\bnode\b|\bnpx\b/;
+export const INTERESTING_CMD = /\bcurl\b|git\s+push|pytest|jest|vitest|npm (?:run )?test|node --test|\bpython3?\b|\bnode\b|\bnpx\b|\bgh\s+(?:api|pr)\b|\b(?:ls|cat|stat|head)\s|\bps\s|\blsof\b|\bwget\b|\bhttps?\s+(?:GET|HEAD|--|https?:)|\b(?:npm run build|yarn build|pnpm|vite build|tsc|docker build|next build)\b|\b(?:go|cargo)\s+test\b|\bmocha\b|\bplaywright\b/;
 
 /** The agent_action.command string from a raw JSON line, without parsing the whole row. */
 export function rawCommand(line: string): string | null {
@@ -428,7 +696,7 @@ export function adaptAiVillageWindow(input: HfWindowInput): DataSource {
       if (summary) {
         push(s.end.at, 2, {
           id: `event/${stop!.event_index}`, timestamp: s.end.at, agentId: s.agent_id, taskId: tid, type: 'message',
-          provenance: 'declared', evidenceRefs: [], payload: {},
+          provenance: 'declared', evidenceRefs: [], payload: chatFlags(summary),
           text: `Session summary (agent's own words): ${clip(summary.replace(/\s+\n/g, '\n'), 900)}`,
         });
       }
@@ -475,7 +743,8 @@ export function adaptAiVillageWindow(input: HfWindowInput): DataSource {
       payload: { tool: 'bash', runId: `turn ${t.id.slice(0, 8)}`, category: v.category, rule: v.rule,
         subject: v.subject, outcome: v.outcome, output,
         ...(v.finalUrl ? { finalUrl: v.finalUrl } : {}), ...(v.scope ? { scope: v.scope } : {}),
-        ...(v.suppressed ? { suppressed: true as const } : {}), ...(v.emptyOutput ? { emptyOutput: true as const } : {}) },
+        ...(v.suppressed ? { suppressed: true as const } : {}), ...(v.emptyOutput ? { emptyOutput: true as const } : {}),
+        ...(v.observed ? { observed: v.observed } : {}) },
     });
   }
 
@@ -497,6 +766,7 @@ export function adaptAiVillageWindow(input: HfWindowInput): DataSource {
         ...(t.commandHash ? { commandHash: t.commandHash } : {}),
         ...(t.command ? { command: t.command } : {}), ...(t.computerAction ? { computerAction: t.computerAction } : {}),
         ...(t.emptyOutput ? { emptyOutput: true as const } : {}),
+        ...(t.writes?.length ? { writes: t.writes } : {}), ...(t.destructive ? { destructive: t.destructive } : {}), ...(t.navigates ? { navigates: t.navigates } : {}),
       },
     });
   }
@@ -513,16 +783,29 @@ export function adaptAiVillageWindow(input: HfWindowInput): DataSource {
     .map((c) => ({ ...c, at: hfTime(c.created_at) }))
     .filter((c) => inWindow(c.at) && (c.content ?? '').trim())
     .sort((a, b) => a.at.localeCompare(b.at));
+  // Speaker's latest emitted tool_result of a subject before t (by subject; used for quote backing and claim subjects).
+  const resultsBy = (agentId: string) => drafts.filter((d) => d.ev.type === 'tool_result' && d.ev.agentId === agentId) as (Draft & { ev: Unsequenced & { type: 'tool_result'; payload: EventOf<'tool_result'>['payload'] } })[];
+  const lastResult = (agentId: string, at: string, pred: (p: EventOf<'tool_result'>['payload']) => boolean, taskId?: string) =>
+    resultsBy(agentId).filter((d) => d.ts < at && pred(d.ev.payload) && (!taskId || d.ev.taskId === taskId)).sort((a, b) => a.ts.localeCompare(b.ts)).pop();
+  const firstClaim = new Map<string, string>(); // `${speaker}|${subjectKey}|${asserts}` → claimId (rule 'repeat')
+  let quoteCount = 0; let directiveCount = 0;
+
   for (const c of chats) {
     const content = (c.content ?? '').trim();
+    const urls = urlsIn(content);
+    const pageUrls = urls.filter((u) => !NOT_A_PAGE.test(u));
     if (c.speaker_type !== 'agent' || !c.agent_speaker_id) {
       humanCount++;
-      push(c.at, 5, {
-        id: `chat/${c.id}`, timestamp: c.at, agentId: HUMAN_ID, taskId: null, type: 'message',
-        provenance: 'observed', evidenceRefs: [], text: clip(content, 1200),
-        room: c.room_id ?? undefined, refs: refsIn(content),
-        payload: { isHuman: true, isQuestion: content.trimEnd().endsWith('?') },
-      });
+      const human = { id: `chat/${c.id}`, timestamp: c.at, agentId: HUMAN_ID, taskId: null, provenance: 'observed' as const, evidenceRefs: [],
+        text: clip(content, 1200), room: c.room_id ?? undefined, refs: refsIn(content) };
+      const isQuestion = content.trimEnd().endsWith('?');
+      // Rule 'human-negative': a human naming a page with a failure word is a failure report (quote).
+      if (pageUrls.length >= 1 && NEGATIVE_RE.test(content)) {
+        quoteCount++;
+        push(c.at, 5, { ...human, type: 'quote', provenance: 'inferred', payload: { rule: 'human-negative', subject: { artifact: pageUrls[0], version: 'live' }, isHuman: true, isQuestion } });
+        continue;
+      }
+      push(c.at, 5, { ...human, type: 'message', payload: { isHuman: true, isQuestion, ...chatFlags(content) } });
       continue;
     }
     const speaker = c.agent_speaker_id;
@@ -532,11 +815,23 @@ export function adaptAiVillageWindow(input: HfWindowInput): DataSource {
     const mentions = names
       .filter((a) => a.id !== speaker && (normContent.includes(`@${a.norm}`) || (a.norm.length >= 6 && new RegExp(`(^|[^\\w-])${a.norm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`).test(normContent))))
       .map((a) => a.id);
+    const atMentions = names.filter((a) => a.id !== speaker && normContent.includes(`@${a.norm}`)).map((a) => a.id);
+    // Per-sentence @mentions. More than 2 @mentions in a message is a broadcast: neither a directive nor a question to someone.
+    const broadcast = atMentions.length > 2;
+    const mentionSentences = broadcast ? [] : sentencesOf(normContent).map((sn) => {
+      const to = names.filter((a) => a.id !== speaker && sn.includes(`@${a.norm}`));
+      let rest = sn;
+      for (const a of to) rest = rest.split(`@${a.norm}`).join(' ');
+      return { sn, to: to.map((a) => a.id), rest: rest.replace(/^[\s,;:!.—–-]+/, '') };
+    }).filter((x) => x.to.length);
+    const directiveTo = [...new Set(mentionSentences.filter((x) => POLITE_RE.test(x.sn) || IMPERATIVE_START_RE.test(x.rest)).flatMap((x) => x.to))];
+    const questionTo = [...new Set(mentionSentences.filter((x) => x.sn.includes('?')).flatMap((x) => x.to))];
     const chatRefs = refsIn(content);
     const base = { timestamp: c.at, agentId: speaker, taskId, text: clip(content, 1600), mentions: mentions.length ? mentions : undefined,
       room: c.room_id ?? undefined, refs: chatRefs.length ? chatRefs : undefined };
-    const urls = urlsIn(content);
-    const pageUrls = urls.filter((u) => !NOT_A_PAGE.test(u));
+    const isQuestion = content.trimEnd().endsWith('?');
+    const hedged = HEDGE_RE.test(content) || undefined;
+    const number = claimNumber(content);
 
     const prior = claimsBy.get(speaker) ?? [];
     const corrected = CORRECTION_RE.test(content) ? prior.filter((p) => urls.includes(p.url)).pop() : undefined;
@@ -544,27 +839,75 @@ export function adaptAiVillageWindow(input: HfWindowInput): DataSource {
       correctionCount++;
       push(c.at, 6, {
         ...base, id: `chat/${c.id}`, type: 'correction', provenance: 'inferred',
-        evidenceRefs: [corrected.eventId], payload: { supersedes: corrected.claimId },
+        evidenceRefs: [corrected.eventId], payload: { supersedes: corrected.claimId, rule: 'correction-same-agent' },
       });
       continue;
     }
+    const emitClaim = (eventId: string, claimId: string, asserts: Asserts, subject: ArtifactRef | undefined, rule: string) => {
+      const key = `${speaker}|${subject ? `${subject.artifact}@${subject.version}` : ''}|${asserts}`;
+      const repeatOf = subject ? firstClaim.get(key) : undefined;
+      if (subject && !repeatOf) firstClaim.set(key, claimId);
+      claimCount++;
+      push(c.at, 6, {
+        ...base, id: eventId, type: 'claim', provenance: 'inferred', evidenceRefs: [],
+        payload: { claimId, asserts, ...(subject ? { subject } : {}), rule, ...(hedged ? { hedged } : {}), ...(repeatOf ? { repeatOf } : {}), ...(number ? { number } : {}) },
+      });
+    };
     // A claim names one or two deployed pages; long URL roundups are status lists, not specific claims.
     const claimed = pageUrls.length >= 1 && pageUrls.length <= 2 && !NEGATIVE_RE.test(content) ? claimedUrlsWithRule(content, pageUrls) : [];
     if (claimed.length) {
       claimed.forEach(({ url, rule }, i) => {
         const claimId = `C-${c.id.slice(0, 5)}${claimed.length > 1 ? `-${i + 1}` : ''}`;
         const eventId = claimed.length > 1 ? `chat/${c.id}#${i + 1}` : `chat/${c.id}`;
-        claimCount++;
         prior.push({ claimId, eventId, url });
-        push(c.at, 6, {
-          ...base, id: eventId, type: 'claim', provenance: 'inferred', evidenceRefs: [],
-          payload: { claimId, asserts: 'complete', subject: { artifact: url, version: 'live' }, rule },
-        });
+        emitClaim(eventId, claimId, 'live', { artifact: url, version: 'live' }, rule);
       });
       claimsBy.set(speaker, prior);
       continue;
     }
-    push(c.at, 5, { ...base, id: `chat/${c.id}`, type: 'message', provenance: 'observed', evidenceRefs: [], payload: { isHuman: false, isQuestion: content.trimEnd().endsWith('?') } });
+    // Rule 'correction-other': an agent naming a page with a failure word reports a failure (quote), not a correction.
+    if (pageUrls.length >= 1 && pageUrls.length <= 2 && NEGATIVE_RE.test(content)) {
+      quoteCount++;
+      const backing = lastResult(speaker, c.at, (p) => p.subject?.artifact === pageUrls[0] && p.outcome === 'fail');
+      push(c.at, 5, { ...base, id: `chat/${c.id}`, type: 'quote', provenance: 'inferred', evidenceRefs: backing ? [backing.ev.id] : [],
+        payload: { rule: 'correction-other', subject: { artifact: pageUrls[0], version: 'live' }, isQuestion, ...(backing ? { quotesEventId: backing.ev.id } : {}) } });
+      continue;
+    }
+    // Claim rules without a URL. One claim per message; never future/conditional or a failure report.
+    if (!FUTURE_RE.test(content) && !NEGATIVE_RE.test(content) && urls.length === 0) {
+      const paths = chatRefs.filter((r) => !/^https?:/.test(r));
+      const id = `chat/${c.id}`; const cid = `C-${c.id.slice(0, 5)}`;
+      if (TESTS_PASS_RE.test(content)) {
+        const t = lastResult(speaker, c.at, (p) => p.rule === 'test-summary' && !!p.subject);
+        emitClaim(id, cid, 'verification_passed', t?.ev.payload.subject, 'tests-pass');
+        continue;
+      }
+      const issue = ISSUE_RE.exec(content)?.[1];
+      if (FIXED_RE.test(content) && (paths.length || issue)) {
+        emitClaim(id, cid, 'fixed', paths.length ? { artifact: `file:${paths[0]}`, version: 'exists' } : { artifact: `pr:#${issue}`, version: 'merged' }, 'fixed');
+        continue;
+      }
+      if (DEPLOYED_RE.test(content)) {
+        const merged = /\bmerged\b/i.test(content) && issue;
+        // Subject keyed per push (owner ruling): the agent's most recent git-push verdict in this session, else unverified:<claimId>.
+        const push0 = taskId ? lastResult(speaker, c.at, (p) => p.rule === 'git-push' && !!p.subject, taskId) : undefined;
+        emitClaim(id, cid, merged ? 'merged' : 'deployed', merged ? { artifact: `pr:#${issue}`, version: 'merged' }
+          : push0?.ev.payload.subject ?? { artifact: 'repo:unknown', version: `unverified:${cid}` }, 'deployed-no-url');
+        continue;
+      }
+      if (EXISTS_RE.test(content) && paths.length) {
+        emitClaim(id, cid, 'exists', { artifact: `file:${paths[0]}`, version: 'exists' }, 'exists');
+        continue;
+      }
+    }
+    // Rule 'directive': an explicit @mention plus an imperative.
+    if (directiveTo.length) {
+      directiveCount++;
+      push(c.at, 5, { ...base, id: `chat/${c.id}`, type: 'directive', provenance: 'inferred', evidenceRefs: [],
+        payload: { rule: 'directive', to: directiveTo, tokens: contentTokens(content), isQuestion, ...(questionTo.length ? { questionTo } : {}) } });
+      continue;
+    }
+    push(c.at, 5, { ...base, id: `chat/${c.id}`, type: 'message', provenance: 'observed', evidenceRefs: [], payload: { isHuman: false, isQuestion, ...chatFlags(content), ...(questionTo.length ? { questionTo } : {}) } });
   }
 
   // --- order, cap volume, sequence.

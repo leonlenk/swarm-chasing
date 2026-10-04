@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useRecall } from '../context';
 import { isInvariantFailure, needsMet, registry } from '../../engine/monitors';
-import { goalChurn, unverifiableByConstruction, verifyGoalNoClaim } from '../../engine/meta';
+import { BE_MIN_TURNS, goalChurn, longSessionNoVerdict, unverifiableByConstruction, verifyGoalNoClaim } from '../../engine/meta';
 import { TYPE_LABEL } from '../format';
 import type { EventType } from '../../model/types';
 
@@ -33,6 +33,7 @@ export function Monitors() {
   const churn = useMemo(() => goalChurn(ws), [ws]);
   const bcNoClaim = useMemo(() => verifyGoalNoClaim(ws), [ws]);
   const bt = useMemo(() => unverifiableByConstruction(ws), [ws]);
+  const be = useMemo(() => longSessionNoVerdict(ws), [ws]);
   const meta = source?.meta;
 
   return (
@@ -97,6 +98,8 @@ export function Monitors() {
             <p className="meta-count">{bcNoClaim.length}</p>{bcNoClaim.slice(0, 6).map((r) => <button key={r.taskId} className="link small" onClick={() => navigate('tasks', r.taskId)}>{r.taskId}</button>)}</div>
           <div><span className="tag">BT</span> <b>Unverifiable by construction</b><p className="muted small">Claims whose subject type no verdict rule produces in this source.</p>
             <p className="meta-count">{bt.reduce((n, r) => n + r.claimIds.length, 0)}</p>{bt.slice(0, 6).map((r) => <button key={r.agentId} className="link small" onClick={() => navigate('agents', r.agentId)}>{ws.agentName(r.agentId)} · {r.claimIds.length}</button>)}</div>
+          <div><span className="tag">BE</span> <b>Long session, no verdict</b><p className="muted small">Ended sessions with ≥ {BE_MIN_TURNS} turns, zero verdicts and zero claims: coverage, not an accusation.</p>
+            <p className="meta-count">{be.length}</p>{be.slice(0, 6).map((r) => <button key={r.taskId} className="link small" onClick={() => navigate('tasks', r.taskId)}>{ws.agentName(r.agentId)} · {r.turns} turns</button>)}</div>
         </div>
       </section>
 

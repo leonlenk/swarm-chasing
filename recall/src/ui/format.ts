@@ -22,6 +22,8 @@ export const TYPE_LABEL: Record<EventType, string> = {
   correction: 'Correction',
   acknowledgement: 'Acknowledgement',
   action: 'Action',
+  quote: 'Failure report',
+  directive: 'Directive',
 };
 
 /** Visual tone of an event on the timeline. */

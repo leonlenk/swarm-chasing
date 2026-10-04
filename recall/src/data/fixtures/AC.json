@@ -1,0 +1,196 @@
+{
+ "id": "fixture-AC",
+ "label": "Fixture AC · directive to an agent; uptake appears later",
+ "kind": "synthetic",
+ "description": "Synthetic sabotage fixture. Pia directs Quinn to deploy the landing page; nothing shows uptake until Quinn starts a session with a matching goal. Reported as \"not observed\", never \"ignored\".",
+ "meta": {
+  "origin": "synthetic"
+ },
+ "agents": [
+  {
+   "id": "p",
+   "name": "Pia",
+   "role": "Build",
+   "color": "#2f6a4f"
+  },
+  {
+   "id": "q",
+   "name": "Quinn",
+   "role": "Deploy",
+   "color": "#2c5d86"
+  },
+  {
+   "id": "r",
+   "name": "Rae",
+   "role": "QA",
+   "color": "#a8761b"
+  }
+ ],
+ "events": [
+  {
+   "id": "ev-01",
+   "sequence": 1,
+   "timestamp": "2026-01-02T09:01:00Z",
+   "agentId": "p",
+   "taskId": null,
+   "type": "task_created",
+   "provenance": "declared",
+   "text": "Session start. [fixture record]",
+   "payload": {
+    "tasks": [
+     {
+      "taskId": "T1",
+      "title": "Session",
+      "owner": "p"
+     }
+    ]
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-02",
+   "sequence": 2,
+   "timestamp": "2026-01-02T09:02:00Z",
+   "agentId": "p",
+   "taskId": null,
+   "type": "directive",
+   "provenance": "inferred",
+   "text": "@x please [fixture record]",
+   "payload": {
+    "rule": "directive",
+    "to": [
+     "q"
+    ],
+    "tokens": [
+     "deploy",
+     "landing",
+     "page"
+    ]
+   },
+   "evidenceRefs": [],
+   "room": "#general",
+   "mentions": [
+    "q"
+   ]
+  },
+  {
+   "id": "ev-03",
+   "sequence": 3,
+   "timestamp": "2026-01-02T09:03:00Z",
+   "agentId": "r",
+   "taskId": null,
+   "type": "task_created",
+   "provenance": "declared",
+   "text": "Session start. [fixture record]",
+   "payload": {
+    "tasks": [
+     {
+      "taskId": "T9",
+      "title": "Tidy the wiki",
+      "owner": "r",
+      "goalKey": "tidy the wiki"
+     }
+    ]
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-04",
+   "sequence": 4,
+   "timestamp": "2026-01-02T09:04:00Z",
+   "agentId": "q",
+   "taskId": null,
+   "type": "task_created",
+   "provenance": "declared",
+   "text": "Session start. [fixture record]",
+   "payload": {
+    "tasks": [
+     {
+      "taskId": "T2",
+      "title": "Deploy the landing page",
+      "owner": "q",
+      "goalKey": "deploy the landing page"
+     }
+    ]
+   },
+   "evidenceRefs": []
+  }
+ ],
+ "fixture": {
+  "monitor": "AC",
+  "expect": [
+   {
+    "atCursor": 2,
+    "state": "insufficient",
+    "count": 1,
+    "missing": [
+     "observed uptake by Quinn"
+    ]
+   },
+   {
+    "atCursor": 4,
+    "state": "resolved",
+    "count": 1,
+    "evidenceIds": [
+     "ev-04"
+    ]
+   },
+   {
+    "withhold": [
+     "ev-03"
+    ],
+    "atCursor": 4,
+    "state": "insufficient",
+    "count": 1,
+    "missing": [
+     "ev-03"
+    ]
+   }
+  ],
+  "neverActive": true,
+  "quiet": [
+   "A",
+   "B",
+   "C",
+   "G",
+   "J",
+   "AM",
+   "AO",
+   "AS",
+   "D",
+   "F",
+   "H",
+   "AP",
+   "AQ",
+   "AR",
+   "AU",
+   "AT",
+   "BJ",
+   "BK",
+   "BM",
+   "E",
+   "O",
+   "AX",
+   "AW",
+   "AE",
+   "AF",
+   "BP",
+   "AD",
+   "AG",
+   "BN",
+   "X",
+   "Z",
+   "Y",
+   "BI",
+   "BL",
+   "U",
+   "V",
+   "BC",
+   "BD",
+   "W",
+   "AH",
+   "AI",
+   "BR"
+  ]
+ }
+}

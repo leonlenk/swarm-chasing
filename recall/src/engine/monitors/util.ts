@@ -43,7 +43,8 @@ export const turnsIn = (ws: WorldState, taskId: string) =>
 
 /** Chat-derived records written by agents (messages, claims, corrections from chat). */
 export const isAgentChat = (e: RecallEvent) =>
-  (e.type === 'message' && !e.payload.isHuman) || ((e.type === 'claim' || e.type === 'correction') && e.room !== undefined);
+  (e.type === 'message' && !e.payload.isHuman) || (e.type === 'quote' && !e.payload.isHuman) || e.type === 'directive' ||
+  ((e.type === 'claim' || e.type === 'correction') && e.room !== undefined);
 
 export const reachOf = (ws: WorldState, taskId: string | null) => (taskId ? dependencyReach(ws, taskId) : []);
 
@@ -57,3 +58,33 @@ export const claimsOn = (ws: WorldState, key: string) => subjectClaims(ws).filte
 
 /** Display label for a subject key (URL or artifact@version). */
 export const subjectLabel = (key: string) => key.replace(/@live$/, '');
+
+// ---- Milestone 3 accessors (typed adapter fields only) ----
+
+/** Failure reports (quotes) about a subject key, in order. */
+export const quotesOf = (ws: WorldState, key: string) =>
+  ws.visible.filter((e): e is EventOf<'quote'> => e.type === 'quote' && subjectKey(e.payload.subject) === key);
+
+/** Does an agent chat record name the subject (claim/quote subject, correction of a claim on it, or message.names)? */
+export function namesSubject(ws: WorldState, e: RecallEvent, key: string): boolean {
+  if (e.type === 'claim' || e.type === 'quote') return subjectKey(e.payload.subject) === key;
+  if (e.type === 'correction') return subjectKey(ws.claims.get(e.payload.supersedes)?.subject) === key;
+  if (e.type === 'message') return !!e.payload.names?.some((n) => `${n}@live` === key);
+  return false;
+}
+
+/** Agent chat that reports a failure: a quote, a correction, or a message flagged negative. */
+export const isNegativeChat = (e: RecallEvent) =>
+  e.type === 'quote' || e.type === 'correction' || (e.type === 'message' && !!e.payload.negative);
+
+/** First agent chat by an agent after a sequence number (messages, summaries, claims, quotes, directives, corrections). */
+export const nextChatBy = (ws: WorldState, agentId: string, after: number) =>
+  ws.visible.find((e) => e.agentId === agentId && e.sequence > after && (isAgentChat(e) || (e.type === 'message' && !e.payload.isHuman) || e.type === 'claim' || e.type === 'correction'));
+
+/** Passing / failing tool results (any category) of a subject key. */
+export const resultsOf = (ws: WorldState, key: string) =>
+  ws.visible.filter((e): e is EventOf<'tool_result'> => e.type === 'tool_result' && keyOf(e) === key);
+
+/** Session ids (taskIds) that have task_created records, with their owner. */
+export const sessionsOf = (ws: WorldState) =>
+  ws.visible.flatMap((e) => (e.type === 'task_created' ? e.payload.tasks.map((t) => ({ spec: t, created: e })) : []));

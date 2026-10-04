@@ -1,0 +1,234 @@
+{
+ "id": "fixture-O",
+ "label": "Fixture O · retracted, then re-asserted with no pass",
+ "kind": "synthetic",
+ "description": "Synthetic sabotage fixture. Pia corrects her own claim, then claims the same subject again with no passing check between; a pass lands later.",
+ "meta": {
+  "origin": "synthetic"
+ },
+ "agents": [
+  {
+   "id": "p",
+   "name": "Pia",
+   "role": "Build",
+   "color": "#2f6a4f"
+  },
+  {
+   "id": "r",
+   "name": "Rae",
+   "role": "QA",
+   "color": "#a8761b"
+  },
+  {
+   "id": "v",
+   "name": "Vik",
+   "role": "Review",
+   "color": "#7a4b8c"
+  }
+ ],
+ "events": [
+  {
+   "id": "ev-01",
+   "sequence": 1,
+   "timestamp": "2026-01-02T09:01:00Z",
+   "agentId": "p",
+   "taskId": null,
+   "type": "task_created",
+   "provenance": "declared",
+   "text": "Session start. [fixture record]",
+   "payload": {
+    "tasks": [
+     {
+      "taskId": "T1",
+      "title": "Session",
+      "owner": "p"
+     }
+    ]
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-02",
+   "sequence": 2,
+   "timestamp": "2026-01-02T09:02:00Z",
+   "agentId": "p",
+   "taskId": "T1",
+   "type": "claim",
+   "provenance": "declared",
+   "text": "C1: done [fixture record]",
+   "payload": {
+    "claimId": "C1",
+    "asserts": "live",
+    "subject": {
+     "artifact": "https://app.example.test",
+     "version": "live"
+    },
+    "rule": "declared"
+   },
+   "evidenceRefs": [],
+   "room": "#general",
+   "statusAfter": "done"
+  },
+  {
+   "id": "ev-03",
+   "sequence": 3,
+   "timestamp": "2026-01-02T09:03:00Z",
+   "agentId": "p",
+   "taskId": "T1",
+   "type": "correction",
+   "provenance": "declared",
+   "text": "Correction: C1 [fixture record]",
+   "payload": {
+    "supersedes": "C1"
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-04",
+   "sequence": 4,
+   "timestamp": "2026-01-02T09:04:00Z",
+   "agentId": "r",
+   "taskId": null,
+   "type": "tool_result",
+   "provenance": "declared",
+   "text": "build-result pass [fixture record]",
+   "payload": {
+    "tool": "bash",
+    "runId": "run-4",
+    "category": "build",
+    "rule": "build-result",
+    "outcome": "pass",
+    "output": "out"
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-05",
+   "sequence": 5,
+   "timestamp": "2026-01-02T09:05:00Z",
+   "agentId": "p",
+   "taskId": "T1",
+   "type": "claim",
+   "provenance": "declared",
+   "text": "C2: done [fixture record]",
+   "payload": {
+    "claimId": "C2",
+    "asserts": "live",
+    "subject": {
+     "artifact": "https://app.example.test",
+     "version": "live"
+    },
+    "rule": "declared"
+   },
+   "evidenceRefs": [],
+   "room": "#general",
+   "statusAfter": "done"
+  },
+  {
+   "id": "ev-06",
+   "sequence": 6,
+   "timestamp": "2026-01-02T09:06:00Z",
+   "agentId": "v",
+   "taskId": null,
+   "type": "tool_result",
+   "provenance": "declared",
+   "text": "http-status pass [fixture record]",
+   "payload": {
+    "tool": "bash",
+    "runId": "run-6",
+    "category": "verification",
+    "rule": "http-status",
+    "subject": {
+     "artifact": "https://app.example.test",
+     "version": "live"
+    },
+    "outcome": "pass",
+    "output": "out",
+    "finalUrl": "https://app.example.test"
+   },
+   "evidenceRefs": []
+  }
+ ],
+ "fixture": {
+  "monitor": "O",
+  "expect": [
+   {
+    "atCursor": 4,
+    "count": 0
+   },
+   {
+    "atCursor": 5,
+    "state": "active",
+    "count": 1,
+    "evidenceIds": [
+     "ev-02",
+     "ev-03",
+     "ev-05"
+    ]
+   },
+   {
+    "atCursor": 6,
+    "state": "resolved",
+    "count": 1,
+    "evidenceIds": [
+     "ev-06"
+    ]
+   },
+   {
+    "withhold": [
+     "ev-04"
+    ],
+    "atCursor": 5,
+    "state": "insufficient",
+    "count": 1,
+    "missing": [
+     "ev-04"
+    ]
+   }
+  ],
+  "quiet": [
+   "A",
+   "B",
+   "G",
+   "J",
+   "AM",
+   "AO",
+   "AS",
+   "D",
+   "F",
+   "H",
+   "AP",
+   "AQ",
+   "AR",
+   "AU",
+   "AT",
+   "BJ",
+   "BK",
+   "BM",
+   "E",
+   "AX",
+   "AW",
+   "AE",
+   "AF",
+   "BP",
+   "AC",
+   "AD",
+   "AG",
+   "BN",
+   "X",
+   "Z",
+   "Y",
+   "BI",
+   "BL",
+   "U",
+   "V",
+   "BC",
+   "BD",
+   "W",
+   "AH",
+   "AI",
+   "BR"
+  ],
+  "note": "Fires by design on this fixture: C (overlapping rows of the catalog on the same records); every other registered monitor is in quiet[]."
+ }
+}

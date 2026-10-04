@@ -65,7 +65,8 @@
    "text": "C1: it is done [fixture record]",
    "payload": {
     "claimId": "C1",
-    "asserts": "complete"
+    "asserts": "complete",
+    "rule": "declared"
    },
    "evidenceRefs": [],
    "statusAfter": "done"

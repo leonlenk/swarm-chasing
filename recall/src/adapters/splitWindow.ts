@@ -9,11 +9,14 @@
 //     part never sees a record from later in the window.
 //   - Every part carries lightweight reference_seen records: each URL/path named in a message or output
 //     earlier in the whole window (records not carried as facts) or in the 24 h lookback (sequence 0).
+//   - Milestone 3: session actions that write (writes[]) or destroy (destructive) are carried as facts too.
 
 import type { DataSource, RecallEvent, ReferenceSeen } from '../model/types';
 
 const FACT_TYPES = new Set(['claim', 'tool_result', 'correction', 'acknowledgement', 'quote', 'task_created', 'status_updated']);
-export const isWindowFact = (e: RecallEvent) => FACT_TYPES.has(e.type);
+/** Write actions (owner ruling, Milestone 3): session actions flagged writes/destructive are carried too, so AT sees earlier writes. */
+const isWriteAction = (e: RecallEvent) => e.type === 'action' && (!!e.payload.writes?.length || !!e.payload.destructive);
+export const isWindowFact = (e: RecallEvent) => FACT_TYPES.has(e.type) || isWriteAction(e);
 
 export interface LookbackRef { ref: string; sourceEventId: string }
 
@@ -39,6 +42,7 @@ function buildPart(doc: DataSource, events: RecallEvent[], i: number, j: number,
   const agentIds = new Set(out.map((e) => e.agentId));
   const first = events[i]; const last = events[j - 1];
   const carried = out.filter((e) => e.carried).length;
+  const carriedActions = out.filter((e) => e.carried && e.type === 'action').length;
   return {
     ...doc,
     id: count > 1 ? `${doc.id}-p${index}` : doc.id,
@@ -51,9 +55,9 @@ function buildPart(doc: DataSource, events: RecallEvent[], i: number, j: number,
       window: { from: first.timestamp, to: last.timestamp },
       notes: [
         ...(doc.meta?.notes ?? []),
-        ...(count > 1 ? [`Part ${index} of ${count} (${first.timestamp.slice(11, 16)}–${last.timestamp.slice(11, 16)} UTC): ${j - i} records in range plus ${carried} window facts carried from earlier in the window (claims, tool results, corrections, acknowledgements, session boundaries), marked "carried" and keeping their original sequence numbers. ${seen.length} earlier references are carried as reference_seen records.`] : []),
+        ...(count > 1 ? [`Part ${index} of ${count} (${first.timestamp.slice(11, 16)}–${last.timestamp.slice(11, 16)} UTC): ${j - i} records in range plus ${carried} window facts carried from earlier in the window (claims, tool results, corrections, acknowledgements, session boundaries, and ${carriedActions} write actions), marked "carried" and keeping their original sequence numbers. ${seen.length} earlier references are carried as reference_seen records.`] : []),
       ],
-      part: { parent: doc.id, parentLabel: doc.label, index, count, carried, inRange: j - i },
+      part: { parent: doc.id, parentLabel: doc.label, index, count, carried, carriedActions, inRange: j - i },
     },
   };
 }
