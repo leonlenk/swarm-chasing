@@ -59,7 +59,7 @@ it when you open the repo; enable it and restart it (`/mcp`) after an `add`. Too
 appear as `mcp__swarm__<tool>`. To register it by hand, from the repo root:
 
 ```bash
-claude mcp add swarm -e SWARM_DATA_DIR=data -- uv run --directory swarm_mcp swarm-mcp
+claude mcp add swarm -- uv run --directory swarm_mcp swarm-mcp
 ```
 
 Start a session with `core_info`, or with the `investigate` prompt.

@@ -118,3 +118,23 @@ def test_relative_data_dir_resolves_against_project_root(tmp_path: Path):
     # like `uv run --directory swarm_mcp`: cwd is the subdir, data/ lives at the root
     assert resolve_data_dir("data", cwd=sub) == (tmp_path / "data").resolve()
     assert resolve_data_dir(str(tmp_path / "abs"), cwd=sub) == tmp_path / "abs"
+
+
+def test_server_and_cli_resolve_the_same_store(tmp_path: Path):
+    """Regression: .mcp.json always set SWARM_DATA_DIR=data for the MCP server, which overrides swarm.toml's
+    [data] dir, so the server and the CLI used different stores."""
+    import os
+
+    repo = Path(__file__).resolve().parents[2]
+    server = json.loads((repo / ".mcp.json").read_text())["mcpServers"]["swarm"]
+    assert not any(k.startswith("SWARM") for k in server.get("env") or {})
+    workdir = server["args"][server["args"].index("--directory") + 1]  # the server runs from swarm_mcp/
+
+    project = tmp_path / "proj"
+    (project / workdir).mkdir(parents=True)
+    (project / "swarm.toml").write_text('[data]\ndir = "stores/main"\n')
+    env = {k: v for k, v in os.environ.items() if k != "SWARM_DATA_DIR"}
+    want = (project / "stores" / "main" / "swarmscope.duckdb").resolve()
+    assert Config.load(env=env, cwd=project / workdir).store_path == want  # the MCP server
+    assert Config.load(env=env, cwd=project).store_path == want  # the CLI from the repo root
+    assert Config.load(env={**env, "SWARM_DATA_DIR": ""}, cwd=project / workdir).store_path == want  # empty: toml
