@@ -66,6 +66,10 @@ def _meta(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _like_escape(s: str) -> str:
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def check_filters(filters: Mapping[str, Any] | None) -> dict[str, Any]:
     """The non-empty filters, or ``ToolInputError`` for unknown keys."""
     f = {k: v for k, v in dict(filters or {}).items() if v not in (None, "", [])}
@@ -90,7 +94,9 @@ def store_records(
     The read-only connection stays open while the generator is consumed."""
     f = check_filters(filters)
     sources = _as_list(f.get("source"), "source")
-    kinds = [k.split(":", 1)[1] if ":" in k else k for k in _as_list(f.get("kind"), "kind")]
+    kinds = _as_list(f.get("kind"), "kind")
+    bare = [k for k in kinds if ":" not in k]
+    qualified = [k for k in kinds if ":" in k]  # "source:kind" keeps its source
     query = _one(f.get("query"), "query")
     lo = parse_time(_one(f.get("since"), "since"), field="since")
     hi = parse_time(_one(f.get("until"), "until"), end=True, field="until")
@@ -114,8 +120,14 @@ def store_records(
                 where.append(f"source IN ({', '.join('?' * len(sources))})")
                 p += sources
             if kinds:
-                where.append(f"split_part(evidence_id, ':', 2) IN ({', '.join('?' * len(kinds))})")
-                p += kinds
+                any_kind = []
+                if bare:
+                    any_kind.append(f"split_part(evidence_id, ':', 2) IN ({', '.join('?' * len(bare))})")
+                    p += bare
+                for k in qualified:
+                    any_kind.append("evidence_id LIKE ? ESCAPE '\\'")
+                    p.append(_like_escape(k) + ":%")
+                where.append("(" + " OR ".join(any_kind) + ")")
             if author is not None:
                 sql, ap, _ = author
                 where.append(sql.replace("author_id", "agent_id") if table == "actions" else sql)

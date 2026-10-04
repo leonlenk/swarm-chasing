@@ -168,6 +168,21 @@ def test_store_records_filters(store_path: Path):
     assert recs and all("bob.smith" not in r["text"] and "[email]" in r["text"] for r in recs)
 
 
+def test_qualified_kind_filter_keeps_its_source(mapped_store, tmp_path: Path):
+    """Regression: kind='forum:post' dropped the source and also returned board:post:* records."""
+    store = mapped_store["store"]
+    forum = tmp_path / "forum.json"
+    forum.write_text(json.dumps({**BOARD_SPEC, "source": "forum"}))
+    ingest_mapped(forum, mapped_store["root"], store)
+    fposts = list(store_records(store, {"kind": "forum:post"}))
+    assert fposts and all(r["event_id"].startswith("forum:post:") for r in fposts)
+    both = list(store_records(store, {"kind": "post"}))  # a bare kind matches every source
+    assert {r["event_id"].split(":", 1)[0] for r in both} == {"forum", "board"}
+    mixed = list(store_records(store, {"kind": ["board:open", "forum:post"]}))
+    assert {tuple(r["event_id"].split(":")[:2]) for r in mixed} == {("board", "open"), ("forum", "post")}
+    assert list(store_records(store, {"kind": "for_m:post"})) == []  # LIKE wildcards are escaped
+
+
 def test_sweep_filters_use_the_store_provider(data_dir: Path, tmp_path: Path, monkeypatch):
     app = build_server(config_for(data_dir, sweeps=tmp_path / "sweeps"))
     flt = {"source": "village", "channel": "general", "since": "2026-01-05", "until": "2026-01-07"}
