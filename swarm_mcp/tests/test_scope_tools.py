@@ -472,7 +472,7 @@ def test_agent_profile(app):
     named_by = {r["author_id"]: r["messages"] for r in out["named_by_most"]}
     assert named_by[GPT] == 2 and named_by[GEM] == 1
     assert out["actions_by_kind"] == {"session_goal": 1, "session_summary": 1}
-    assert out["busiest_day"] == {"day": "2026-01-05", "messages": 1}
+    assert out["busiest_day"] == {"day": "2026-01-05", "messages": 1, "village_day": 1, "tz": "America/Los_Angeles"}
     samples = out["samples"]
     assert samples["first"]["evidence_id"] == "village:msg:m0002"
     assert samples["last"]["evidence_id"] == "village:msg:m0008"
@@ -493,7 +493,8 @@ def test_agent_profile_window_and_errors(app):
     assert out["samples"]["first"]["evidence_id"] == "village:msg:m0007"
     assert out["filters"]["since"] == "2026-01-10T00:00:00Z"
     gpt = call(app, "scope_agents", name="gpt-5.2")
-    assert gpt["busiest_day"] == {"day": "2026-01-21", "messages": 250}
+    # the 250 fillers (2026-01-21 00:00-04:09 UTC) fall on the Pacific evening of 2026-01-20: Village day 16
+    assert gpt["busiest_day"] == {"day": "2026-01-20", "messages": 250, "village_day": 16, "tz": "America/Los_Angeles"}
     assert "Unknown agent" in call_error(app, "scope_agents", name="Nobody")
 
 
@@ -527,18 +528,60 @@ def test_ambiguous_agent_lists_source_and_id(data_dir: Path):
 
 
 def test_timeline_series(app):
-    out = call(app, "scope_timeline")
-    assert out["total"] == 260 and out["bins_returned"] == 9
-    assert out["peak"] == {"bucket": "2026-01-21T00:00:00Z", "count": 250}
-    assert out["series"][0] == {"bucket": "2026-01-05T00:00:00Z", "count": 3}
+    out = call(app, "scope_timeline")  # one AI Village source: buckets are Village days (Pacific)
+    assert out["total"] == 260 and out["bins_returned"] == 8
+    assert out["peak"] == {"bucket": "2026-01-20T08:00:00Z", "count": 251, "village_day": 16}
+    assert out["series"][0] == {"bucket": "2026-01-05T08:00:00Z", "count": 3, "village_day": 1}
+    assert out["village_days"] == {"tz": "America/Los_Angeles", "day_one": "2026-01-05"}
     assert sum(b["count"] for b in out["series"]) == 260
     assert any("omitted" in n for n in out["notes"])
 
     week = call(app, "scope_timeline", bin="week", author="Opus 4.5")
     assert week["total"] == 4 and week["filters"]["author"] == "Claude Opus 4.5"
-    assert week["series"][0]["bucket"] == "2026-01-05T00:00:00Z"  # a Monday
+    assert week["series"][0] == {"bucket": "2026-01-05T08:00:00Z", "count": 2}  # Monday, Pacific midnight
     hour = call(app, "scope_timeline", bin="hour", since="2026-01-21", channel="general")
     assert hour["total"] == 250 and hour["bins_returned"] == 5
+    assert hour["series"][0] == {"bucket": "2026-01-21T00:00:00Z", "count": 60, "village_day": 16}
+
+
+def test_village_days_only_for_one_village_source(data_dir: Path):
+    """busiest_day and timeline buckets use Village days for village data only; other sources stay UTC."""
+    con = duckdb.connect(str(data_dir / "swarmscope.duckdb"))
+    try:  # a non-village source with one agent posting late on 2026-01-05 UTC (= 2026-01-05 PST)
+        con.execute("INSERT INTO sources (source) VALUES ('aaa')")
+        con.execute(
+            "INSERT INTO agents (agent_id, source, display_name, aliases) VALUES ('aaa:agent:x', 'aaa', 'X', [])"
+        )
+        con.execute(
+            "INSERT INTO periods VALUES ('aaa:period:p1', 'aaa', 'pull_request', 'PR', TIMESTAMP '2026-01-05', "
+            "TIMESTAMP '2026-01-07', '{}')"
+        )
+        for i, ts in enumerate(["2026-01-05 23:00:00", "2026-01-06 01:00:00", "2026-01-06 02:00:00"]):
+            con.execute(
+                "INSERT INTO messages (evidence_id, source, channel, author_id, recipient_ids, ts, content) "
+                "VALUES (?, 'aaa', 'c', 'aaa:agent:x', [], CAST(? AS TIMESTAMP), 'synthetic')",
+                [f"aaa:msg:{i}", ts],
+            )
+    finally:
+        con.close()
+    app = build_server(config_for(data_dir))
+    assert call(app, "scope_agents", name="X")["busiest_day"] == {"day": "2026-01-06", "messages": 2}
+    pr = call(app, "scope_periods", name="aaa:period:p1")
+    assert pr["busiest_day"] == {"day": "2026-01-06", "messages": 2} and "UTC date" in pr["notes"][-1]
+    goal = call(app, "scope_periods", name="charity")
+    assert goal["busiest_day"]["village_day"] == 1 and "Village day" in goal["notes"][-1]
+
+    aaa = call(app, "scope_timeline", source="aaa")
+    assert aaa["series"] == [
+        {"bucket": "2026-01-05T00:00:00Z", "count": 1},
+        {"bucket": "2026-01-06T00:00:00Z", "count": 2},
+    ]
+    mixed = call(app, "scope_timeline")
+    assert "village_days" not in mixed and all("village_day" not in b for b in mixed["series"])
+    assert any("pass source=" in n for n in mixed["notes"])
+    village = call(app, "scope_timeline", source="village")
+    assert village["series"][0] == {"bucket": "2026-01-05T08:00:00Z", "count": 3, "village_day": 1}
+    assert call(app, "scope_timeline", author="Opus 4.5")["series"][0]["village_day"] == 1  # one source by author
 
 
 def test_timeline_grouping(app):

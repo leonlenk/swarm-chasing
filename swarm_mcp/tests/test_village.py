@@ -59,7 +59,7 @@ def test_period_detail(app):
     assert g["index"] == 1 and g["human_messages"] == 1
     speakers = {s["author"]: s["messages"] for s in g["top_speakers"]}
     assert speakers["Claude Opus 4.5"] == 2 and speakers["GPT-5.2"] == 2 and speakers["Gemini 2.5 Pro"] == 1
-    assert g["busiest_day"] == {"day": "2026-01-05", "messages": 3}
+    assert g["busiest_day"] == {"day": "2026-01-05", "messages": 3, "village_day": 1, "tz": "America/Los_Angeles"}
     assert {c["channel"]: c["messages"] for c in g["channels"]} == {"general": 5, "rest": 1}
     assert g["actions"] == {"session_goal": 2, "session_summary": 1}
     assert "scope_graph" in g["notes"][0]

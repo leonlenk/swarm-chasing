@@ -34,6 +34,7 @@ from swarm_mcp.scope.analysis import timeline as timeline_analysis
 from swarm_mcp.scope.analysis.timeline import record_filters, ts_iso
 from swarm_mcp.scope.db import HUMAN, Store, label_for
 from swarm_mcp.scope.records import StoreRecordProvider
+from swarm_mcp.scope.viz.pagekit import day_number, village_days
 from swarm_mcp.toolkit import HARD_MAX_CHARS, MIN_MAX_CHARS, ResponseBudget, ToolInputError, parse_time
 
 NAME = "scope"
@@ -146,6 +147,25 @@ def _matcher(query: str, match: str) -> tuple[str, list[Any], re.Pattern[str] | 
             focus = None  # RE2 syntax that Python can't compile: snippets fall back to the start
         return "regexp_matches(content, ?, 'i')", [query], focus
     raise ToolInputError(f"match must be one of phrase, all_terms, regex, not {match!r}")
+
+
+def _busiest_sql(spec: dict[str, str] | None, where: str) -> str:
+    """The busiest day of the messages matching ``where``: the Village day (local date) when
+    ``spec`` is a Village day spec, else the UTC date. Columns: day, n, t0 (its first message)."""
+    day = recap_analysis._local_date_sql("ts", spec)
+    return (
+        f"SELECT {day} AS day, count(*) AS n, min(ts) AS t0 FROM messages WHERE {where} AND ts IS NOT NULL "
+        "GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 1"
+    )
+
+
+def _busiest(row: dict[str, Any] | None, spec: dict[str, str] | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    out = {"day": ts_iso(row["day"]), "messages": row["n"]}
+    if spec:  # day is then the Village-local date, numbered as in scope_recap / scope_moments
+        out.update(village_day=day_number(row["t0"], spec), tz=spec["tz"])
+    return out
 
 
 def _filters(**kw: Any) -> dict[str, Any]:
@@ -616,11 +636,8 @@ def register(mcp, ctx) -> None:
             actions = s.all(
                 f"SELECT kind, count(*) AS n FROM actions WHERE {_w(act_w)} GROUP BY 1 ORDER BY 2 DESC, 1", act_p
             )
-            busiest = s.one(
-                f"SELECT CAST(ts AS DATE) AS day, count(*) AS n FROM messages WHERE {mw} AND ts IS NOT NULL "
-                "GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 1",
-                mp,
-            )
+            spec = village_days(s, source=a["source"])
+            busiest = s.one(_busiest_sql(spec, mw), mp)
             cols = "evidence_id, ts, channel, content"
             first = s.one(f"SELECT {cols} FROM messages WHERE {mw} ORDER BY ts NULLS LAST, evidence_id LIMIT 1", mp)
             last = s.one(
@@ -677,7 +694,7 @@ def register(mcp, ctx) -> None:
             ],
             "named_by_total_messages": named_total,
             "actions_by_kind": {r["kind"]: r["n"] for r in actions},
-            "busiest_day": {"day": ts_iso(busiest["day"]), "messages": busiest["n"]} if busiest else None,
+            "busiest_day": _busiest(busiest, spec),
             "samples": {"first": sample(first), "last": sample(last), "spread": [sample(r) for r in spread]},
             "notes": [
                 "first_seen/last_seen cover the whole store; every count and sample respects since/until.",
@@ -685,7 +702,14 @@ def register(mcp, ctx) -> None:
                 "both posted at least once; active_channel_days is this agent's own bucket count.",
                 "names_most / named_by_most count messages whose text names the agent (recipient_ids).",
                 "spread samples are deterministic (ordered by hash(evidence_id)), shown in time order.",
-            ],
+            ]
+            + (
+                [
+                    "busiest_day is a Village day: day is its local date in tz and village_day its number (as in scope_recap)"
+                ]
+                if spec
+                else ["busiest_day is a UTC date."]
+            ),
         }
 
     # ------------------------------------------------------------------ periods
@@ -818,11 +842,8 @@ def register(mcp, ctx) -> None:
                     f"SELECT channel, count(*) n FROM messages WHERE {window} GROUP BY 1 ORDER BY n DESC, 1 LIMIT ?",
                     [*params, top],
                 )
-                peak = s.one(
-                    f"SELECT CAST(date_trunc('day', ts) AS DATE) AS day, count(*) n FROM messages WHERE {window} "
-                    "GROUP BY 1 ORDER BY n DESC, 1 LIMIT 1",
-                    params,
-                )
+                spec = village_days(s, source=r["source"])
+                peak = s.one(_busiest_sql(spec, window), params)
                 actions = s.all(f"SELECT kind, count(*) n FROM actions WHERE {window} GROUP BY 1 ORDER BY 1", params)
                 humans = s.scalar(f"SELECT count(*) FROM messages WHERE {window} AND author_id LIKE 'human:%'", params)
                 d = _period_dict(r, i)
@@ -839,7 +860,7 @@ def register(mcp, ctx) -> None:
                             for x in speakers
                         ],
                         "channels": [{"channel": x["channel"], "messages": x["n"]} for x in channels],
-                        "busiest_day": {"day": ts_iso(peak["day"]), "messages": peak["n"]} if peak else None,
+                        "busiest_day": _busiest(peak, spec),
                         "actions": {x["kind"]: x["n"] for x in actions},
                         "notes": [
                             f"for centrality call scope_graph(since={d['start']!r}, until={d['end']!r}); "
@@ -849,6 +870,13 @@ def register(mcp, ctx) -> None:
                             ["'type' is a keyword heuristic from the goal text, not a dataset field"]
                             if "type" in d
                             else []
+                        )
+                        + (
+                            [
+                                "busiest_day is a Village day: day is its local date in tz and village_day its number (as in scope_recap)"
+                            ]
+                            if spec
+                            else ["busiest_day is a UTC date."]
                         ),
                     }
                 )
@@ -906,7 +934,10 @@ def register(mcp, ctx) -> None:
 
     @ctx.tool()
     def timeline(
-        bin: Annotated[Literal["hour", "day", "week", "month"], Field(description="Bucket size (UTC).")] = "day",
+        bin: Annotated[
+            Literal["hour", "day", "week", "month"],
+            Field(description="Bucket size (UTC; AI Village data: Village days, Pacific time)."),
+        ] = "day",
         group_by: Annotated[
             Literal["none", "channel", "author"],
             Field(description="Split counts by channel (messages only) or author/agent; 'none' = one series."),
@@ -925,7 +956,8 @@ def register(mcp, ctx) -> None:
     ) -> dict[str, Any]:
         """Activity over time: counts per hour/day/week/month bucket, optionally split by channel or author
         (top groups by total, the rest summed as 'other'). Returns the total, the peak bucket and the sparse
-        series (empty buckets omitted). Use it to find bursts, then read them with scope_search (no query)."""
+        series (empty buckets omitted). For one AI Village source, buckets are Village days (Pacific) and carry
+        village_day. Use it to find bursts, then read them with scope_search (no query)."""
         lo, hi = _window(since, until)
         with ctx.store() as s:
             _check_source(s, source)
