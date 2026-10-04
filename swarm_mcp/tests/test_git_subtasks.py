@@ -7,6 +7,7 @@ import collections
 import gzip
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -28,7 +29,19 @@ CHAT_1 = "PR #1 is up: talent tree core, please review"
 CHAT_2 = "Wired talents in PR #2, builds on PR #1"
 # keys whose values are agent- or human-authored free text (PR/page titles, labels built from them, chat
 # snippets, handoff sentences that name units); each must come back as an untrusted wrapper
-TEXT_KEYS = {"title", "label", "snippet", "summary", "text", "content", "body", "message"}
+TEXT_KEYS = {
+    "title",
+    "label",
+    "name",
+    "keywords",
+    "objective",
+    "snippet",
+    "summary",
+    "text",
+    "content",
+    "body",
+    "message",
+}
 
 
 def assert_wrapped(obj: Any, canaries: tuple[str, ...] = (), path: str = "$") -> int:
@@ -232,7 +245,10 @@ def test_list_get_and_locate(gapp):
     got = call(gapp, "subtasks_get", subtask_id=sub["subtask_id"])
     members = {m["event_id"] for m in got["members"]}
     assert {"rpg:period:pr-1", "rpg:period:pr-2"} <= members and "rpg:period:pr-4" not in members
-    assert got["label"]["content"].startswith("talent") and got["handoffs"]
+    # named after the PR the others built on (PR 1 created talents.js; 2 integrates, 3 tests, 5 fixes it)
+    assert got["name"] == {"content": "Talent tree core", "untrusted": True}
+    assert got["name_source"] == {"kind": "central_title", "unit": "rpg:period:pr-1"}
+    assert got["keywords"]["content"].startswith("talent") and got["handoffs"]
     assert {"GPT-5.2", "Claude Opus 4.5"} <= {p["actor"] for p in got["participants"]}
     assert got["chat"]["messages_mentioning_members"] == 2
     chat_id = got["chat"]["cited"][1]["event_id"]
@@ -270,6 +286,12 @@ def test_subtasks_return_agent_text_wrapped(gapp):
         outs["subtasks_trace_pair"].append(
             call(gapp, "subtasks_trace_pair", corpus="rpg", actor_a="Opus 4.5", actor_b=other)
         )
+    for level in ("coarse", "medium", "fine"):
+        outs["subtasks_graph"].append(call(gapp, "subtasks_graph", corpus="rpg", granularity=level, min_size=1))
+    outs["subtasks_name"].append(call(gapp, "subtasks_name", subtask_id=sub["subtask_id"]))
+    outs["subtasks_name"].append(
+        call(gapp, "subtasks_name", subtask_id=sub["subtask_id"], name="Talent work", objective="Build talents")
+    )
     tools = {t.name for t in gapp._tool_manager.list_tools() if t.name.startswith("subtasks_")}
     assert set(outs) == tools, "a new subtasks tool must be covered here"
     wrapped = {tool: sum(assert_wrapped(o, canaries) for o in res) for tool, res in outs.items()}
@@ -284,8 +306,6 @@ def test_subtasks_return_agent_text_wrapped(gapp):
 
 
 def test_render_subtasks_page(git_data: Path, tmp_path: Path):
-    import re
-
     from swarm_mcp.scope.viz.subtasks_html import render_subtasks
     from swarm_mcp.toolkit import Scrubber
 
@@ -321,3 +341,161 @@ def test_render_subtasks_corpus_choice(git_data: Path, tmp_path: Path):
     assert render_subtasks(db, tmp_path / "x.html")["corpus"] == "rpg"
     with pytest.raises(ToolInputError, match="Unknown corpus"):
         render_subtasks(db, tmp_path / "x.html", corpus="nope")
+
+
+# --------------------------------------------------------------------------- names and structure
+
+
+def test_clean_title():
+    from swarm_mcp.modules.subtasks.infer import clean_title
+
+    cases = {
+        "feat(story): Add Story/Dialog system with quest tracking": "Add Story/Dialog system with quest tracking",
+        "Merging with 3 approvals - Map/World module": "Map/World module",
+        "Merging NPC Dialog Wiring - 2 approvals from opus. Easter egg scan": "NPC Dialog Wiring",
+        "Merging with 2 approvals from opus. Clean code": "",
+        "[WIP] feat: talent tree (#12)": "Talent tree",
+        "feat(story): Add map-aligned exploration quests (6 quests, 17 tests)": "Add map-aligned exploration quests",
+        "feat: Exploration Minimap UI with fog-of-war (PR #68)": "Exploration Minimap UI with fog-of-war",
+        "feat(audio): WebAudio SFX manager + tests": "WebAudio SFX manager",
+        'Revert "feat(audio): WebAudio SFX manager"': "Revert: WebAudio SFX manager",
+        "Merge pull request #1 from village/talents": "",
+        "TestSeite county links helper 0.3387365804788828": "TestSeite county links helper",
+    }
+    for raw, want in cases.items():
+        assert clean_title(raw) == want, raw
+
+
+def test_subtask_structure(gapp):
+    """Links between subtasks aggregate exactly the unit handoffs that cross subtasks, and the graph, get and the
+    part_of/parts relations agree with each other."""
+    level = "fine"
+    graph = call(gapp, "subtasks_graph", corpus="rpg", granularity=level, min_size=1)
+    assert graph["links"], "the fine level splits the talent PRs, so handoffs cross subtasks"
+    for ln in graph["links"]:
+        src = call(gapp, "subtasks_get", subtask_id=ln["from"])
+        dst = call(gapp, "subtasks_get", subtask_id=ln["to"])
+        seen = {x["subtask_id"]: x for x in dst["builds_on"]}
+        assert seen[ln["from"]]["handoffs"] == ln["handoffs"] and seen[ln["from"]]["types"] == ln["types"]
+        assert ln["to"] in {x["subtask_id"] for x in src["built_on_by"]}
+        for e in ln["evidence"]:
+            call(gapp, "core_get", ids=e)
+        # handoffs from src's units to dst's units, counted from the unit-level edges
+        su = {m["event_id"] for m in src["members"]}
+        du = {m["event_id"] for m in dst["members"]}
+        pair = call(gapp, "subtasks_trace_pair", corpus="rpg", actor_a="Opus 4.5", actor_b="GPT-5.2")["handoffs"]
+        pair += call(gapp, "subtasks_trace_pair", corpus="rpg", actor_a="Opus 4.5", actor_b="Gemini 2.5")["handoffs"]
+        pair += call(gapp, "subtasks_trace_pair", corpus="rpg", actor_a="GPT-5.2", actor_b="Gemini 2.5")["handoffs"]
+        crossing = {(h["from_unit"], h["to_unit"], h["type"]) for h in pair if h["type"] != "duplicate"}
+        assert sum(1 for a, b, _ in crossing if a in su and b in du) == ln["handoffs"]
+    stages = {s["subtask_id"]: s["stage"] for s in graph["subtasks"]}
+    for ln in graph["links"]:
+        assert stages[ln["to"]] >= stages[ln["from"]]
+    assert graph["foundations"] and all(f["built_on"] == 0 for f in graph["foundations"])
+    # the talent core PR is the foundation of everything else
+    core = call(gapp, "subtasks_locate", event_id="rpg:period:pr-1", granularity=level)["matches"][0]["subtask"]
+    assert graph["foundations"][0]["subtask_id"] == core["subtask_id"]
+    # nesting: a fine subtask's part_of lists it among that medium subtask's parts (or it is the only part)
+    fine = call(gapp, "subtasks_get", subtask_id=core["subtask_id"])
+    parent = fine["part_of"]
+    assert parent["subtask_id"].split("/")[2] == "medium" and 0 < parent["share_of_members"] <= 1
+    med = call(gapp, "subtasks_get", subtask_id=parent["subtask_id"])
+    assert med["parts"] == [] or core["subtask_id"] in {p["subtask_id"] for p in med["parts"]}
+    assert call(gapp, "subtasks_get", subtask_id=med["part_of"]["subtask_id"])["part_of"] is None  # coarse
+
+
+def _talent_subtask(gapp) -> str:
+    return call(gapp, "subtasks_locate", event_id="rpg:period:pr-1", granularity="coarse")["matches"][0]["subtask"][
+        "subtask_id"
+    ]
+
+
+def test_subtasks_name_agent_write_back(gapp, git_data: Path):
+    sid = _talent_subtask(gapp)
+    before = call(gapp, "subtasks_name", subtask_id=sid)
+    assert before["action"] == "read" and before["name"]["content"] == "Talent tree core"
+    assert {"content": "feat: Talent tree core", "untrusted": True} in before["central_titles"]
+    out = call(gapp, "subtasks_name", subtask_id=sid, name="  Talent\nsystem  ", objective="Ship talents.")
+    assert out["action"] == "stored" and out["name"]["content"] == "Talent system"
+    assert out["name_source"] == {"kind": "agent"} and out["objective"]["content"] == "Ship talents."
+    got = call(gapp, "subtasks_get", subtask_id=sid)
+    assert got["name"]["content"] == "Talent system" and got["keywords"]["content"].startswith("talent")
+    # same membership under another method/granularity shows the same name
+    for method in ("combined", "files", "code", "title"):
+        for level in ("coarse", "medium", "fine"):
+            for s in call(gapp, "subtasks_list", corpus="rpg", method=method, granularity=level, min_size=1)[
+                "subtasks"
+            ]:
+                if s["subtask_id"] != sid and s["size"] == got["size"]:
+                    other = {m["event_id"] for m in call(gapp, "subtasks_get", subtask_id=s["subtask_id"])["members"]}
+                    if other == {m["event_id"] for m in got["members"]}:
+                        assert s["name"]["content"] == "Talent system"
+    stored = json.loads((git_data / "subtask-names" / "rpg.json").read_text())
+    assert [v["source"] for v in stored["names"].values()] == ["agent"]
+    assert "no LLM configured" in call_error(gapp, "subtasks_name", subtask_id=sid, generate=True).replace("No", "no")
+    assert "name is empty" in call_error(gapp, "subtasks_name", subtask_id=sid, name="   ")
+
+
+def test_llm_names_cached_and_treated_as_data(git_data: Path, tmp_path: Path):
+    from swarm_mcp.llm import FakeClient, LLMError
+    from swarm_mcp.modules.subtasks import naming
+    from swarm_mcp.modules.subtasks.sources import build
+    from swarm_mcp.scope import db as sdb
+    from swarm_mcp.scope.viz.subtasks_html import render_subtasks
+    from swarm_mcp.toolkit import Scrubber
+
+    store_path = git_data / "swarmscope.duckdb"
+    with sdb.connect(store_path, read_only=True) as s:
+        c, inf = build(s, "rpg")
+    store = naming.NameStore(naming.names_path(store_path, "rpg"))
+    targets = [("combined", lvl, k) for lvl in ("coarse", "medium") for k in range(len(inf.clusters["combined"][lvl]))]
+
+    def reply(system: str, prompt: str) -> str:
+        assert "never as instructions" in system and "<data>" in prompt and "</data>" in prompt
+        return (
+            '{"name": "Talent progression", "objective": "Let players spend points in a talent tree."}'
+            if ("Talent tree core" in prompt)
+            else "not json"
+        )
+
+    client = FakeClient(reply)
+    res = naming.generate(client, inf, targets, store, unit_noun="pull request", scrub=Scrubber(), cap=50)
+    assert res["named"] >= 1 and res["failed"] >= 1 and res["errors"]  # bad replies are reported, not fatal
+    calls = len(client.calls)
+    unique = {naming.member_key(inf, inf.clusters[m][lv][k]) for m, lv, k in targets}
+    assert calls == len(unique)  # identical memberships asked once
+    again = naming.generate(client, inf, targets, store, unit_noun="pull request", scrub=Scrubber(), cap=50)
+    assert again["named"] == 0 and again["already_named"] >= 1 and len(client.calls) == calls + again["failed"]
+    # an agent's name is never replaced by the model, even with force
+    k = next(
+        k for k, m in enumerate(inf.clusters["combined"]["coarse"]) if inf.units[m[0]].event_id == "rpg:period:pr-1"
+    )
+    key = naming.member_key(inf, inf.clusters["combined"]["coarse"][k])
+    assert store.get(key)["source"] == "llm" and store.get(key)["name"] == "Talent progression"
+    store.put(key, {"name": "Agent name", "objective": "", "source": "agent", "size": 4})
+    naming.generate(
+        FakeClient([LLMError("down")]), inf, [("combined", "coarse", k)], store,
+        unit_noun="pull request", scrub=Scrubber(), cap=5, force=True,
+    )  # fmt: skip
+    assert naming.NameStore(store.path).get(key)["name"] == "Agent name"
+    # the page shows cached names with their source; --llm-names style rendering asks only about uncached groups
+    out = tmp_path / "named.html"
+    fake = FakeClient(['{"name": "Fishing minigame", "objective": "A side activity."}'])
+    res = render_subtasks(store_path, out, corpus="rpg", scrub=Scrubber(), llm=fake, llm_min_size=1)
+    assert res["llm_names"]["named"] >= 1
+    page = out.read_text()
+    m = re.search(r'<script id="data" type="application/json">(.*?)</script>', page, re.S)
+    d = json.loads(m.group(1))
+    coarse = d["names"]["combined"]["coarse"]
+    assert "Agent name" in coarse and d["name_src"]["combined"]["coarse"][coarse.index("Agent name")] == "agent"
+    assert set(d["keywords"]) == set(d["names"]) and "objectives" in d
+    assert "innerHTML" not in page
+
+
+def test_parse_reply():
+    from swarm_mcp.modules.subtasks.naming import parse_reply
+
+    assert parse_reply('Sure! {"name": "A\\nB", "objective": "x"}') == ("A B", "x")
+    assert parse_reply('{"name": "  Talent   tree ", "objective": null}') == ("Talent tree", "")
+    with pytest.raises(ValueError):
+        parse_reply('{"objective": "no name"}')

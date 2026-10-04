@@ -320,7 +320,9 @@ def _add_mapped(args: argparse.Namespace, config: Config, path: Path, db: Path) 
         )
         return 1
     if args.dry_run:
-        print(f"\ndry run: the mapping passes; nothing ingested. Ingest with:\n  swarm-mcp add {path} --mapping {mapping_path}")
+        print(
+            f"\ndry run: the mapping passes; nothing ingested. Ingest with:\n  swarm-mcp add {path} --mapping {mapping_path}"
+        )
         return 0
     from swarm_mcp.scope.ingest import ingest_mapped
 
@@ -391,14 +393,29 @@ def _timeline_run(args: argparse.Namespace, config: Config) -> Any:
 
 
 def _subtasks_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--corpus", help="source to infer subtasks for (defaults to --source; required if the store has several)")
+    p.add_argument(
+        "--corpus", help="source to infer subtasks for (defaults to --source; required if the store has several)"
+    )
     p.add_argument("--title-chars", type=int, default=140, help="unit title length (masked)")
+    p.add_argument(
+        "--llm-names",
+        action="store_true",
+        help="name subtasks (and state their objective) with the configured model; needs ANTHROPIC_API_KEY. "
+        "Names are cached next to the store, so reruns only ask about subtasks that changed",
+    )
+    p.add_argument("--llm-cap", type=int, default=150, help="with --llm-names: max model calls (default 150)")
+    p.add_argument("--llm-min-size", type=int, default=3, help="with --llm-names: smallest subtask to name (units)")
 
 
 def _subtasks_run(args: argparse.Namespace, config: Config) -> Any:
+    from swarm_mcp import llm
     from swarm_mcp.scope.viz.subtasks_html import render_subtasks
     from swarm_mcp.toolkit import Scrubber
 
+    try:
+        client = llm.get_client(config) if args.llm_names else None  # no key: a clear error before any work
+    except llm.LLMUnavailable as e:
+        raise ValueError(str(e)) from None
     corpus = args.corpus or args.source
     name = f"swarmscope-subtasks-{corpus}.html" if corpus else "swarmscope-subtasks.html"
     out = resolve_output(args.out) if args.out else config.data_dir / name
@@ -408,6 +425,11 @@ def _subtasks_run(args: argparse.Namespace, config: Config) -> Any:
         corpus=corpus,
         scrub=Scrubber(config.scrub, config.email_allowlist),
         title_chars=args.title_chars,
+        llm=client,
+        llm_min_size=args.llm_min_size,
+        llm_cap=args.llm_cap,
+        llm_concurrency=config.llm_concurrency,
+        progress=lambda m: print(m, file=sys.stderr),
     )
 
 

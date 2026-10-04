@@ -13,6 +13,7 @@
   --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
   --s5: #e87ba4; --s6: #008300; --s7: #4a3aa7; --s8: #e34948; --other: #a9a8a2;
   --seq0: #cde2fb; --seq1: #104281; --tip-bg: #fcfcfb;
+  --rel-in: #e3eefc; --rel-out: #fdebe1;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -22,6 +23,7 @@
     --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
     --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767; --other: #5d5c58;
     --seq0: #1c2a3d; --seq1: #86b6ef; --tip-bg: #242423;
+    --rel-in: #1b2a3e; --rel-out: #3a2419;
   }
 }
 :root[data-theme="dark"] {
@@ -31,6 +33,7 @@
   --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
   --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767; --other: #5d5c58;
   --seq0: #1c2a3d; --seq1: #86b6ef; --tip-bg: #242423;
+  --rel-in: #1b2a3e; --rel-out: #3a2419;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; }
@@ -60,6 +63,11 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px s
 #tracks svg { display: block; width: 100%; }
 .rowbg { fill: transparent; cursor: pointer; }
 .rowbg:hover, .sel .rowbg { fill: var(--alt); }
+.rel-in .rowbg { fill: var(--rel-in); } .rel-out .rowbg { fill: var(--rel-out); }
+.rhdr { font: 600 10.5px system-ui, sans-serif; fill: var(--muted); letter-spacing: .05em; text-transform: uppercase; }
+.sub { color: var(--muted); font-size: 12.5px; margin: 0; overflow-wrap: anywhere; }
+.obj { color: var(--ink-2); font-size: 13px; margin: 0; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; border: 1px solid var(--border); vertical-align: -1px; }
 .rname { font: 500 12.5px system-ui, sans-serif; fill: var(--ink); }
 .rmeta, .axis text { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; fill: var(--muted); }
 .bead { cursor: pointer; }
@@ -99,6 +107,7 @@ footer { font-size: 12px; color: var(--muted); }
 <div class="controls">
   <div class="group" id="methods"><span class="lbl">Method</span></div>
   <div class="group" id="levels"><span class="lbl">Granularity</span></div>
+  <div class="group" id="orders"><span class="lbl">Order</span></div>
   <div class="group"><span class="lbl">Min size</span><input id="minsize" type="number" min="1" value="2" style="width:64px"></div>
   <div class="group"><span class="lbl">Pair lens</span><select id="pa" aria-label="First actor"></select><select id="pb" aria-label="Second actor"></select></div>
 </div>
@@ -125,7 +134,8 @@ footer { font-size: 12px; color: var(--muted); }
   'use strict';
   var D = JSON.parse(document.getElementById('data').textContent);
   var U = D.units, A = D.actors, NS = 'http://www.w3.org/2000/svg';
-  var S = { method: 'combined', level: 'medium', sel: null, unit: null, pa: -1, pb: -1, min: 2 };
+  var S = { method: 'combined', level: 'medium', sel: null, unit: null, pa: -1, pb: -1, min: 2, order: 'time' };
+  var LAB = {}, LINKS = {}, PAR = {};
   var VERB = { builds_on: 'changed ' + D.artifact + ' created in', integrates: 'imported a module created in',
     tests: 'added tests for a module created in', fixes: 'fixed ' + D.artifact + 's created in',
     resubmits: 're-created the ' + D.artifact + 's of', duplicate: 'duplicated' };
@@ -155,7 +165,43 @@ footer { font-size: 12px; color: var(--muted); }
   // ---- derived state -------------------------------------------------------------------------------
   function clusters() { return D.clusters[S.method][S.level]; }
   function names() { return D.names[S.method][S.level]; }
-  function labelOf(m, l) { var lab = new Int32Array(U.length); D.clusters[m][l].forEach(function (c, ci) { c.forEach(function (i) { lab[i] = ci; }); }); return lab; }
+  function kws() { return D.keywords[S.method][S.level]; }
+  function labelOf(m, l) {
+    var key = m + '/' + l; if (LAB[key]) return LAB[key];
+    var lab = new Int32Array(U.length); D.clusters[m][l].forEach(function (c, ci) { c.forEach(function (i) { lab[i] = ci; }); });
+    return (LAB[key] = lab);
+  }
+  // subtask -> subtask links: unit handoffs (not duplicates) whose ends fall in different subtasks
+  function links(m, l) {
+    var key = m + '/' + l; if (LINKS[key]) return LINKS[key];
+    var lab = labelOf(m, l), map = {};
+    D.edges.forEach(function (e, x) {
+      if (e[2] === 'duplicate') return;
+      var a = lab[e[0]], b = lab[e[1]]; if (a === b) return;
+      var k = a + '>' + b, ln = map[k] || (map[k] = { src: a, dst: b, n: 0, kinds: {}, edges: [] });
+      ln.n++; ln.kinds[e[2]] = (ln.kinds[e[2]] || 0) + 1; ln.edges.push(x);
+    });
+    return (LINKS[key] = Object.keys(map).map(function (k) { return map[k]; }).sort(function (a, b) { return b.n - a.n; }));
+  }
+  // for each subtask at level l: [subtask one level coarser holding most of its units, that share]; null at coarse
+  function parentsOf(m, l) {
+    var i = D.levels.indexOf(l); if (i <= 0) return null;
+    var key = m + '/' + l; if (PAR[key]) return PAR[key];
+    var up = labelOf(m, D.levels[i - 1]);
+    return (PAR[key] = D.clusters[m][l].map(function (c) {
+      var cnt = {}, best = -1, bn = 0;
+      c.forEach(function (u) { var p = up[u]; cnt[p] = (cnt[p] || 0) + 1; if (cnt[p] > bn) { bn = cnt[p]; best = p; } });
+      return [best, bn / c.length];
+    }));
+  }
+  function kindsText(k) { return Object.keys(k).sort(function (a, b) { return k[b] - k[a]; }).map(function (x) { return k[x] + ' ' + x.replace('_', ' '); }).join(', '); }
+  function nameSource(m, l, ci) {
+    var src = D.name_src[m][l][ci];
+    if (src === 'llm') return 'Named by a model from the titles of its most central ' + D.unit + 's.';
+    if (src === 'agent') return 'Named by an investigating agent.';
+    if (typeof src === 'number' && src >= 0) return 'Named after the title of ' + U[src][1] + ', picked from the ' + D.unit + 's the others built on most, then the most central ones (feature titles before test/docs ones).';
+    return 'Named by its keywords (no member title was usable).';
+  }
   function touches(i, a) { return U[i][8].indexOf(a) >= 0; }
 
   // ---- time axis compressed to active segments -------------------------------------------------------
@@ -179,6 +225,10 @@ footer { font-size: 12px; color: var(--muted); }
     D.methods.forEach(function (m) { mg.appendChild(el('button', { type: 'button', 'data-m': m, text: ML(m), onclick: function () { S.method = m; S.sel = null; S.unit = null; render(); } })); });
     var lg = document.getElementById('levels');
     D.levels.forEach(function (l) { lg.appendChild(el('button', { type: 'button', 'data-l': l, text: l, onclick: function () { S.level = l; S.sel = null; S.unit = null; render(); } })); });
+    var og = document.getElementById('orders');
+    [['time', 'by start'], ['theme', 'by coarse theme']].forEach(function (o) {
+      og.appendChild(el('button', { type: 'button', 'data-o': o[0], text: o[1], title: o[0] === 'theme' ? 'Group rows under the coarse subtask holding most of their ' + D.unit + 's' : 'Rows by first ' + D.unit, onclick: function () { S.order = o[0]; render(); } }));
+    });
     document.getElementById('minsize').addEventListener('change', function (e) { S.min = Math.max(1, +e.target.value || 1); drawTracks(); });
     ['pa', 'pb'].forEach(function (id) {
       var s = document.getElementById(id);
@@ -196,6 +246,10 @@ footer { font-size: 12px; color: var(--muted); }
       leg.appendChild(el('span', null, [s, k.replace('_', ' ')]));
     });
     leg.appendChild(el('span', { class: 'muted', text: '(handoff lines show for the selected row)' }));
+    var si = el('i', { class: 'sw' }); si.style.background = 'var(--rel-in)';
+    var so = el('i', { class: 'sw' }); so.style.background = 'var(--rel-out)';
+    leg.appendChild(el('span', null, [si, 'selected subtask built on it (↑)']));
+    leg.appendChild(el('span', null, [so, 'built on the selected subtask (↓)']));
     document.getElementById('lede').textContent = 'Each row is a subtask: a group of ' + D.unit + 's inferred from what they touched and said. ' +
       'One dot per ' + D.unit + ' at its start, coloured by its main actor. Click a row for who did what and the handoffs ' +
       'between actors; click a dot for why it was grouped there. ' + U.length + ' ' + D.unit + 's, ' + A.length + ' actors, ' + D.edges.length + ' handoffs.';
@@ -204,6 +258,7 @@ footer { font-size: 12px; color: var(--muted); }
   function render() {
     document.querySelectorAll('#methods button').forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-m') === S.method); });
     document.querySelectorAll('#levels button').forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-l') === S.level); });
+    document.querySelectorAll('#orders button').forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-o') === S.order); b.disabled = b.getAttribute('data-o') === 'theme' && S.level === D.levels[0]; });
     document.getElementById('mdesc').textContent = D.method_desc[S.method];
     drawTracks(); drawDetail(); drawWhy(); drawPair(); drawAgree(); drawNotes();
   }
@@ -218,11 +273,29 @@ footer { font-size: 12px; color: var(--muted); }
       var st = Math.min.apply(null, c.map(function (i) { return U[i][6] || Infinity; }));
       out.push({ ci: ci, m: c, st: st });
     });
-    return out.sort(function (a, b) { return a.st - b.st; });
+    out.sort(function (a, b) { return a.st - b.st; });
+    var par = S.order === 'theme' ? parentsOf(S.method, S.level) : null;
+    if (!par) return out;
+    var first = {};
+    out.forEach(function (r) { var p = par[r.ci][0]; if (!(p in first)) first[p] = r.st; });
+    out.sort(function (a, b) { var pa = par[a.ci][0], pb = par[b.ci][0]; return pa === pb ? a.st - b.st : first[pa] - first[pb]; });
+    var res = [], last = null;
+    out.forEach(function (r) { var p = par[r.ci][0]; if (p !== last) { res.push({ hdr: p }); last = p; } res.push(r); });
+    return res;
+  }
+  function related() {
+    var rel = {};
+    if (S.sel == null) return rel;
+    links(S.method, S.level).forEach(function (ln) {
+      if (ln.dst === S.sel) rel[ln.src] = { dir: 'in', n: ln.n };
+      else if (ln.src === S.sel) rel[ln.dst] = rel[ln.dst] ? { dir: 'in', n: rel[ln.dst].n + ln.n } : { dir: 'out', n: ln.n };
+    });
+    return rel;
   }
   function drawTracks() {
     var svg = document.getElementById('sv'), W = svg.clientWidth || 1200, LW = Math.min(300, W * 0.3), RH = 22, TOP = 24;
-    var R = rows(), selH = 60, H = TOP + R.length * RH + (R.some(function (r) { return r.ci === S.sel; }) ? selH : 0) + 22;
+    var R = rows(), selH = 60, HH = 18, nh = R.filter(function (r) { return r.hdr != null; }).length, rel = related();
+    var H = TOP + (R.length - nh) * RH + nh * HH + (R.some(function (r) { return r.ci === S.sel; }) ? selH : 0) + 22;
     svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H); svg.setAttribute('height', H); clear(svg);
     var X = scale(LW + 10, W - 12), lens = S.pa >= 0 || S.pb >= 0;
     var ax = sv('g', { class: 'axis' });
@@ -233,15 +306,26 @@ footer { font-size: 12px; color: var(--muted); }
     });
     svg.appendChild(ax);
     var y = TOP;
+    var shown = 0, coarseNames = D.levels.indexOf(S.level) > 0 ? D.names[S.method][D.levels[D.levels.indexOf(S.level) - 1]] : [];
     R.forEach(function (r) {
-      var isSel = r.ci === S.sel, rh = isSel ? RH + selH : RH, cy = y + (isSel ? RH + selH - 16 : RH / 2);
-      var g = sv('g', { class: isSel ? 'sel' : '' });
+      if (r.hdr != null) {
+        var ht = sv('text', { class: 'rhdr', x: 10, y: y + 13 });
+        ht.textContent = '▸ ' + (coarseNames[r.hdr] || '') + '  (coarse ' + (r.hdr + 1) + ')';
+        svg.appendChild(ht);
+        svg.appendChild(sv('line', { x1: 10, x2: W - 12, y1: y + 2, y2: y + 2, stroke: 'var(--grid)' }));
+        y += HH; return;
+      }
+      shown++;
+      var isSel = r.ci === S.sel, rh = isSel ? RH + selH : RH, cy = y + (isSel ? RH + selH - 16 : RH / 2), rl = rel[r.ci];
+      var g = sv('g', { class: isSel ? 'sel' : rl ? 'rel-' + rl.dir : '' });
+      svg.appendChild(g);  // in the DOM first, so text can be measured
       g.appendChild(sv('rect', { class: 'rowbg', x: 0, y: y, width: W, height: rh }));
-      var nm = names()[r.ci], t = sv('text', { class: 'rname', x: 10, y: y + 15 });
-      t.textContent = nm.length > 40 ? nm.slice(0, 39) + '…' : nm; g.appendChild(t);
+      var tt = sv('title'); tt.textContent = names()[r.ci] + '\n' + kws()[r.ci] + (D.objectives[S.method][S.level][r.ci] ? '\n' + D.objectives[S.method][S.level][r.ci] : ''); g.appendChild(tt);
       var actors = {}; r.m.forEach(function (i) { U[i][8].forEach(function (a) { actors[a] = 1; }); });
       var mt = sv('text', { class: 'rmeta', x: LW - 4, y: y + 15, 'text-anchor': 'end' });
-      mt.textContent = r.m.length + ' · ' + Object.keys(actors).length + 'a'; g.appendChild(mt);
+      mt.textContent = (rl ? (rl.dir === 'in' ? '↑' : '↓') + rl.n + '  ' : '') + r.m.length + ' · ' + Object.keys(actors).length + 'a'; g.appendChild(mt);
+      var t = sv('text', { class: 'rname', x: 10, y: y + 15 }); g.appendChild(t);
+      fitText(t, names()[r.ci], LW - 4 - 10 - 10 - (mt.getComputedTextLength ? mt.getComputedTextLength() : 60));
       var xs = r.m.map(function (i) { return X(U[i][6]); }), xe = r.m.map(function (i) { return X(U[i][7] || U[i][6]); });
       g.appendChild(sv('line', { x1: Math.min.apply(null, xs), x2: Math.max.apply(null, xe), y1: cy, y2: cy, stroke: 'var(--axis)' }));
       if (isSel) {
@@ -265,11 +349,18 @@ footer { font-size: 12px; color: var(--muted); }
         g.appendChild(b);
       });
       g.addEventListener('click', function () { S.sel = r.ci; S.unit = null; render(); document.getElementById('detail').scrollIntoView({ block: 'nearest', behavior: 'smooth' }); });
-      svg.appendChild(g); y += rh;
+      y += rh;
     });
     var ft = sv('text', { class: 'rmeta', x: 10, y: y + 15 });
-    ft.textContent = R.length + ' subtasks shown (size >= ' + S.min + (lens ? ', matching the pair lens' : '') + ') of ' + clusters().length + '; idle gaps over 6 h are compressed';
+    ft.textContent = shown + ' subtasks shown (size >= ' + S.min + (lens ? ', matching the pair lens' : '') + ') of ' + clusters().length + '; idle gaps over 6 h are compressed';
     svg.appendChild(ft);
+  }
+  function fitText(t, s, maxW) {  // longest prefix (+ ellipsis) that fits maxW px
+    t.textContent = s;
+    if (!t.getComputedTextLength || t.getComputedTextLength() <= maxW) return;
+    var lo = 0, hi = s.length;
+    while (lo < hi) { var mid = (lo + hi + 1) >> 1; t.textContent = s.slice(0, mid) + '…'; if (t.getComputedTextLength() <= maxW) lo = mid; else hi = mid - 1; }
+    t.textContent = s.slice(0, Math.max(1, lo)).replace(/\s+$/, '') + '…';
   }
   function tip(ev, i) {
     var t = document.getElementById('tip'), u = U[i]; clear(t);
@@ -298,6 +389,10 @@ footer { font-size: 12px; color: var(--muted); }
     var states = {}; m.forEach(function (i) { states[U[i][4]] = (states[U[i][4]] || 0) + 1; });
     box.appendChild(el('h2', { text: 'Subtask ' + D.corpus + '/' + S.method + '/' + S.level + '/' + (S.sel + 1) }));
     box.appendChild(el('p', { class: 'title', text: names()[S.sel] }));
+    box.appendChild(el('p', { class: 'sub', text: 'Keywords: ' + kws()[S.sel] }));
+    var obj = D.objectives[S.method][S.level][S.sel];
+    if (obj) box.appendChild(el('p', { class: 'obj', text: 'Objective: ' + obj }));
+    box.appendChild(el('p', { class: 'sub', text: nameSource(S.method, S.level, S.sel) }));
     var internal = D.edges.filter(function (e) { return inC[e[0]] && inC[e[1]]; });
     var inb = D.edges.filter(function (e) { return e[2] !== 'duplicate' && !inC[e[0]] && inC[e[1]]; }).length;
     var outb = D.edges.filter(function (e) { return e[2] !== 'duplicate' && inC[e[0]] && !inC[e[1]]; }).length;
@@ -320,6 +415,7 @@ footer { font-size: 12px; color: var(--muted); }
     if (!internal.length) ho.appendChild(el('p', { class: 'empty', text: 'No cross-actor handoffs inside this subtask.' }));
     internal.slice().sort(function (a, b) { return U[a[1]][6] - U[b[1]][6]; }).slice(0, 200).forEach(function (e) { ho.appendChild(edgeLine(e)); });
     box.appendChild(ho);
+    drawStructure(box);
     var tags = {}; m.forEach(function (i) { U[i][10].forEach(function (t) { tags[t] = (tags[t] || 0) + 1; }); });
     var tk = Object.keys(tags).sort(function (a, b) { return tags[b] - tags[a]; }).slice(0, 6);
     if (tk.length && D.tag) { box.appendChild(el('h3', { text: 'Dataset labels: ' + D.tag })); box.appendChild(el('div', null, tk.map(function (t) { return el('span', { class: 'pill', text: t + ' ' + tags[t] }); }))); }
@@ -338,6 +434,34 @@ footer { font-size: 12px; color: var(--muted); }
         [dotEl(U[i][3], U[i][5] === 0), el('span', { class: 't', text: U[i][1] + ' · ' + aname(U[i][3]) + ' · ' + U[i][2] })]));
     });
     box.appendChild(list);
+  }
+
+  function goto(level, ci) { S.level = level; S.sel = ci; S.unit = null; render(); }
+  function subItem(level, ci, extra, prefix) {
+    return el('div', { class: 'item', onclick: function () { goto(level, ci); } },
+      [el('span'), el('span', { class: 't', text: (prefix || '') + D.names[S.method][level][ci] + ' · ' + D.clusters[S.method][level][ci].length + ' ' + D.unit + 's' + (extra ? ' · ' + extra : '') })]);
+  }
+  function drawStructure(box) {
+    var L = links(S.method, S.level), on = L.filter(function (ln) { return ln.dst === S.sel; }), by = L.filter(function (ln) { return ln.src === S.sel; });
+    var li = D.levels.indexOf(S.level), par = parentsOf(S.method, S.level);
+    box.appendChild(el('h3', { text: 'Structure' }));
+    if (par) {
+      var p = par[S.sel];
+      box.appendChild(el('div', { class: 'list' }, [subItem(D.levels[li - 1], p[0], 'holds ' + Math.round(p[1] * 100) + '% of these ' + D.unit + 's', 'Part of ' + D.levels[li - 1] + ': ')]));
+    }
+    if (li < D.levels.length - 1) {
+      var fin = D.levels[li + 1], fp = parentsOf(S.method, fin), kids = [];
+      fp.forEach(function (x, ci) { if (x[0] === S.sel) kids.push(ci); });
+      kids.sort(function (a, b) { return D.clusters[S.method][fin][b].length - D.clusters[S.method][fin][a].length; });
+      if (kids.length > 1) {
+        box.appendChild(el('div', { class: 'muted', style: 'font-size:12px', text: kids.length + ' ' + fin + ' parts:' }));
+        box.appendChild(el('div', { class: 'list', style: 'max-height:140px' }, kids.slice(0, 30).map(function (ci) { return subItem(fin, ci, ''); })));
+      }
+    }
+    box.appendChild(el('div', { class: 'muted', style: 'font-size:12px', text: '↑ Built on ' + on.length + ' other subtask' + (on.length === 1 ? '' : 's') + ' (this one used their work):' }));
+    if (on.length) box.appendChild(el('div', { class: 'list', style: 'max-height:160px' }, on.slice(0, 30).map(function (ln) { return subItem(S.level, ln.src, ln.n + ' handoffs: ' + kindsText(ln.kinds)); })));
+    box.appendChild(el('div', { class: 'muted', style: 'font-size:12px', text: '↓ Built on by ' + by.length + ' other subtask' + (by.length === 1 ? '' : 's') + ' (they used this one\'s work):' }));
+    if (by.length) box.appendChild(el('div', { class: 'list', style: 'max-height:160px' }, by.slice(0, 30).map(function (ln) { return subItem(S.level, ln.dst, ln.n + ' handoffs: ' + kindsText(ln.kinds)); })));
   }
 
   // ---- why -----------------------------------------------------------------------------------------------------

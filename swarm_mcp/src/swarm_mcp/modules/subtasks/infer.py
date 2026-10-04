@@ -183,7 +183,10 @@ class Inference:
     vec: dict[str, tuple[sparse.csr_matrix, dict[int, str]]]  # L2-normalised TF-IDF rows per signal
     refs_raw: sparse.csr_matrix  # explicit link weights between units
     clusters: dict[str, dict[str, list[list[int]]]]  # method -> level -> clusters (sorted by start)
-    names: dict[str, dict[str, list[str]]]
+    names: dict[str, dict[str, list[str]]]  # the cleaned title of the cluster's most central unit
+    keywords: dict[str, dict[str, list[str]]]  # the cluster's most distinctive terms ("talent · tree · rank")
+    exemplars: dict[str, dict[str, list[list[int]]]]  # members, best founder first (up to EXEMPLARS)
+    name_unit: dict[str, dict[str, list[int | None]]]  # the unit whose title is the name (None: keywords)
     label_of: dict[str, dict[str, np.ndarray]]  # method -> level -> cluster index per unit
     agreement: dict[str, dict[str, float]]  # ARI between methods (medium level)
     edges: list[Edge]
@@ -273,6 +276,163 @@ def _ari(a: np.ndarray, b: np.ndarray) -> float:
     sb = sum(comb(v) for v in collections.Counter(b.tolist()).values())
     e = sa * sb / comb(len(a)) if len(a) > 1 else 0
     return 0.0 if (sa + sb) / 2 == e else (s - e) / ((sa + sb) / 2 - e)
+
+
+# --------------------------------------------------------------------------- names: most central member's title
+
+EXEMPLARS = 8  # most central members kept per cluster (names, LLM prompts)
+NAME_CHARS = 80
+TITLE_BOOST = 0.5  # extra weight of the title signal when picking the member whose title names the cluster
+_TAG = re.compile(r"^\s*(?:\[[^\]]{1,24}\]\s*|(?:wip|draft)\b\s*[:\-]?\s*|[a-z][\w-]{0,15}(?:\([^)]*\))?!?:\s+)+", re.I)
+_PRREF = re.compile(r"\s*(?:\((?:PR\s*|pull\s*)?#\d+\)|[-–—]\s*PR\s*#?\d+|\bPR\s*#\d+)", re.I)
+_TESTS = re.compile(
+    r"(?:,?\s*(?:and|with|\+|&|plus)\s+)?\(?\s*\d+\+?\s+(?:new\s+|unit\s+|passing\s+)?(?:tests?|assertions)\b\s*\)?",
+    re.I,
+)
+_WITH_TESTS = re.compile(r"\s*(?:\+|&|and|with|plus)\s+(?:unit\s+)?tests\b", re.I)
+_APPROVALS = re.compile(r"\b(?:approv\w*|lgtm|easter eggs?|verified|reviewed by)\b", re.I)
+
+
+def unit_title(u: Unit) -> str:
+    """The unit's own title; for a unit whose title is just its actions' texts joined (a session), the first one."""
+    t = u.title or ""
+    first = u.actions[0].text if u.actions else ""
+    if len(u.actions) > 1 and first and t.startswith(first):
+        return first
+    return t
+
+
+def clean_title(t: str) -> str:
+    """A unit title as a subtask name: no conventional-commit / [WIP] prefixes, PR numbers, test counts or merge
+    boilerplate ('Merging with 3 approvals - Map/World module' -> 'Map/World module'). '' if nothing is left."""
+    t = " ".join((t or "").split("\n", 1)[0].split())
+    if re.match(r"merg(?:e|ing)\b", t, re.I):
+        if re.match(r"merge pull request\b", t, re.I):
+            return ""
+        t = re.sub(r"^merg(?:e|ing)\s+", "", t, flags=re.I)
+        parts = [p for p in re.split(r"\s+[-–—]\s+", t) if p and not _APPROVALS.search(p)]
+        t = parts[0] if parts else ""
+    rv = re.match(r'revert\s+"(.+)"\s*$', t, re.I)
+    if rv:
+        return f"Revert: {clean_title(rv.group(1))}" if clean_title(rv.group(1)) else ""
+    t = _TAG.sub("", t)
+    t = _PRREF.sub("", t)
+    t = _WITH_TESTS.sub("", _TESTS.sub("", t))
+    if len(t) > 60 and ". " in t:
+        t = t.split(". ", 1)[0]
+    t = re.sub(r"\b\d{9,}(?:\.\d+)?\b|\b\d+\.\d{5,}\b", "", t)  # timestamps, random suffixes
+    t = re.sub(r"\s+", " ", t).strip(" \t,;:.-–—")
+    if t.startswith("(") and t.endswith(")") and "(" not in t[1:-1]:
+        t = t[1:-1].strip()
+    t = re.sub(r"\s*\([^()]{1,20}\)$", "", t)  # short trailing aside: "(clean)", "(v2)"
+    if t.count("(") > t.count(")"):  # a parenthetical emptied or cut short: drop it
+        t = t[: t.rfind("(")].strip(" \t,;:.-–—")
+    if len(t) > NAME_CHARS:
+        t = t[:NAME_CHARS].rsplit(" ", 1)[0].rstrip(" ,;:-") + "…"
+    return t[:1].upper() + t[1:]
+
+
+_AUX = re.compile(r"^\s*(?:\[[^\]]*\]\s*)?(?:tests?|docs?|chore|ci|style|build|revert)\b", re.I)
+_BOILER = {"merge", "merging", "approval", "approvals", "pull", "request", "update", "updates", "wip", "draft"}
+
+
+def central_name(units: list[Unit]) -> tuple[str, int | None]:
+    """The cleaned title of the first unit (best founder first) that names the work: at least two words, and not a
+    test/docs/chore/revert title while a feature title is available. Returns it and its position in ``units``
+    ('', None when no title survives cleaning)."""
+    titles = [(clean_title(unit_title(u)), unit_title(u)) for u in units]
+    ok = [len([w for w in words(t) if w not in _BOILER]) >= 2 for t, _ in titles]
+    for allow_aux in (False, True):
+        for x, (t, raw) in enumerate(titles):
+            if ok[x] and (allow_aux or not _AUX.match(raw)):
+                return t, x
+    return next(((t, x) for x, (t, _) in enumerate(titles) if t), ("", None))
+
+
+def centrality(
+    vec: dict[str, tuple[sparse.csr_matrix, dict[int, str]]], R: sparse.csr_matrix, lab: np.ndarray, cl: list[list[int]]
+) -> np.ndarray:
+    """Each unit's mean similarity to the other members of its cluster: the combined blend plus extra title weight
+    (so the chosen title reads like the group's own wording). Sparse: O(nnz), never unit x unit."""
+    N = len(lab)
+    sizes = np.array([len(c) for c in cl])[lab] if N else np.zeros(0, int)
+    cen = np.zeros(N)
+    if N == 0 or not (sizes > 1).any():
+        return cen
+    M = sparse.csr_matrix((np.ones(N), (np.arange(N), lab)), shape=(N, len(cl)))
+    weights = dict(BLEND)
+    weights["title"] += TITLE_BOOST
+    rows = np.arange(N)
+    for key, w in weights.items():
+        if key == "refs":
+            Rs = R.tocsr(copy=True)
+            Rs.data = Rs.data / (Rs.data + 2)
+            s = np.asarray((Rs @ M)[rows, lab]).ravel()
+        else:
+            X = vec[key][0]
+            S = (M.T @ X).tocsr()
+            s = np.asarray(X.multiply(S[lab]).sum(1)).ravel() - np.asarray(X.multiply(X).sum(1)).ravel()
+        cen += w * s
+    return np.where(sizes > 1, cen / np.maximum(sizes - 1, 1), 0.0)
+
+
+def founders(edges: list[Edge], lab: np.ndarray, cl: list[list[int]], cen: np.ndarray) -> np.ndarray:
+    """How much each unit founded its cluster: its share of the cluster's top in-cluster handoffs given (others built
+    on, integrated, tested or fixed its work) plus its share of the top centrality. Clusters without internal
+    handoffs (most wiki sessions) rank by centrality alone."""
+    out = np.zeros(len(lab))
+    for e in edges:
+        if e.kind != "duplicate" and lab[e.src] == lab[e.dst]:
+            out[e.src] += 1
+    rank = np.zeros(len(lab))
+    for c in cl:
+        o, z = out[c], cen[c]
+        rank[c] = (o / o.max() if o.max() > 0 else 0) + (z / z.max() if z.max() > 0 else 0)
+    return rank
+
+
+# --------------------------------------------------------------------------- structure over subtasks
+
+
+@dataclass
+class Link:
+    """Handoffs from units of subtask ``src`` to units of subtask ``dst`` (dst built on src's work)."""
+
+    src: int
+    dst: int
+    kinds: collections.Counter
+    edges: list[int]  # indices into Inference.edges
+    actors: set[tuple[str, str]]  # (giver, taker)
+
+
+def subtask_links(inf: Inference, method: str, level: str, duplicates: bool = False) -> list[Link]:
+    """Unit-level handoffs whose ends lie in different subtasks, aggregated per (src, dst) subtask pair. O(edges)."""
+    lab = inf.label_of[method][level]
+    agg: dict[tuple[int, int], Link] = {}
+    for x, e in enumerate(inf.edges):
+        a, b = int(lab[e.src]), int(lab[e.dst])
+        if a == b or (e.kind == "duplicate") != duplicates:
+            continue
+        ln = agg.setdefault((a, b), Link(a, b, collections.Counter(), [], set()))
+        ln.kinds[e.kind] += 1
+        ln.edges.append(x)
+        ln.actors.add((e.giver, e.taker))
+    return sorted(agg.values(), key=lambda ln: (-len(ln.edges), ln.src, ln.dst))
+
+
+def parents(inf: Inference, method: str, level: str) -> list[tuple[int, float]] | None:
+    """For each subtask at ``level``, the subtask one level coarser holding most of its units, and that share.
+    None at the coarsest level. (Levels are clustered independently, so a subtask can straddle two parents.)"""
+    lv = list(LEVELS)
+    i = lv.index(level)
+    if i == 0:
+        return None
+    up = inf.label_of[method][lv[i - 1]]
+    out = []
+    for c in inf.clusters[method][level]:
+        p, n = collections.Counter(int(up[j]) for j in c).most_common(1)[0]
+        out.append((p, round(n / len(c), 2)))
+    return out
 
 
 # --------------------------------------------------------------------------- main entry
@@ -422,11 +582,10 @@ def infer(
                 break
         return " · ".join(out)
 
-    names = {
-        m: {lvl: [name(c) if len(c) > 1 else order[c[0]].title[:60] for c in cl] for lvl, cl in clusters[m].items()}
-        for m in METHODS
-    }
+    def kw(c: list[int]) -> str:
+        return name(c) if len(c) > 1 else " · ".join(list(dict.fromkeys(text_words(unit_title(order[c[0]]))))[:3])
 
+    keywords = {m: {lvl: [kw(c) for c in cl] for lvl, cl in clusters[m].items()} for m in METHODS}
     # ---- handoffs
     touch_ct = collections.Counter(path for f in F for path in f["files"])
     hub = {p for p, c in touch_ct.items() if c > max(0.08 * N, 4) or am.get(p, {}).get("hub")}
@@ -484,6 +643,23 @@ def infer(
             edges.append(Edge("duplicate", i, j, authors[i] or "?", authors[j] or "?", [], [], [], round(score, 2)))
     edges.sort(key=lambda e: (order[e.dst].start, e.kind))
 
+    # ---- names: the cleaned title of the member the others built on most, else the most central one
+    exemplars: dict[str, dict[str, list[list[int]]]] = {}
+    names: dict[str, dict[str, list[str]]] = {}
+    name_unit: dict[str, dict[str, list[int | None]]] = {}
+    for m in METHODS:
+        exemplars[m], names[m], name_unit[m] = {}, {}, {}
+        for lvl, cl in clusters[m].items():
+            lab = label_of[m][lvl]
+            rank = founders(edges, lab, cl, centrality(vec, R, lab, cl))
+            ex = [sorted(c, key=lambda i: (-rank[i], order[i].start, i))[:EXEMPLARS] for c in cl]
+            exemplars[m][lvl] = ex
+            names[m][lvl], name_unit[m][lvl] = [], []
+            for k, e in enumerate(ex):
+                nm, x = central_name([order[i] for i in e])
+                names[m][lvl].append(nm or keywords[m][lvl][k])
+                name_unit[m][lvl].append(None if x is None else e[x])
+
     return Inference(
         corpus=corpus,
         units=order,
@@ -495,6 +671,9 @@ def infer(
         refs_raw=R,
         clusters=clusters,
         names=names,
+        keywords=keywords,
+        exemplars=exemplars,
+        name_unit=name_unit,
         label_of=label_of,
         agreement=agreement,
         edges=edges,
