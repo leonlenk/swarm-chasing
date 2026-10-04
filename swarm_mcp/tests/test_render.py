@@ -77,7 +77,7 @@ def test_render_synthetic_store(store_path: Path, tmp_path: Path):
     n_lane_rows = data["ctx"]["a"]
     assert sum(ln["shown"] for ln in data["lanes"]) == res["marks"] == n_lane_rows
     # nothing was sampled, so the human's message is embedded as thread context after the lane rows
-    assert data["ctx"] == {"a": n_lane_rows, "n": 1, "complete": True} and res["context_messages"] == 1
+    assert data["ctx"] == {"a": n_lane_rows, "n": 1, "complete": True, "excerpts": 0} and res["context_messages"] == 1
     assert len(data["t"]) == len(data["s"]) == len(data["au"]) == n_lane_rows + 1
     lane_ids = {data["idp"] + i for i in data["id"][:n_lane_rows]}
     assert "village:chat:m0002" in lane_ids and "village:chat:m0001" not in lane_ids  # m0001 is the human
@@ -178,8 +178,11 @@ def test_max_marks_sampling(store_path: Path, tmp_path: Path):
     assert res["sampled"] is True and 0 < res["marks"] <= 50
     data = p.payload
     assert data["sampled"] is True and data["meta"]["sampled"] is True and data["meta"]["marks"] == res["marks"]
-    # a sampled page carries no thread context (the reader says so)
-    assert data["ctx"] == {"a": res["marks"], "n": 0, "complete": False} and len(data["t"]) == res["marks"]
+    # a sampled page carries no general thread context (the reader says so), only the excerpts the
+    # linked panels point at (the busiest threads, the messages behind notable moments)
+    ctx = data["ctx"]
+    assert ctx["a"] == res["marks"] and ctx["complete"] is False and ctx["n"] == ctx["excerpts"]
+    assert len(data["t"]) == res["marks"] + ctx["n"]
     # lane label counts stay the real totals; the histogram bins cover every message
     by_name = {ln["name"]: ln for ln in data["lanes"]}
     assert by_name["GPT-5.2"]["n"] == 253 and by_name["GPT-5.2"]["shown"] < 253
@@ -298,3 +301,57 @@ def test_pagekit_days_and_json():
     s = pagekit.json_for_script({"x": "</script> &"})
     assert "</" not in s and " " not in s and "&" not in s
     assert pagekit.fill("__A__ __B__", {"A": "__B__", "B": "b"}) == "__B__ b"  # one pass: no re-scan
+
+
+def test_linked_panels_payload(store_path: Path, tmp_path: Path):
+    _, page, p = _render(store_path, tmp_path / "t.html")
+    x = p.payload["x"]
+    assert "errors" not in x, x.get("errors")
+    lane_ids = [ln["id"] for ln in p.payload["lanes"]]
+    # a recap per goal on the page, keyed by period id, plus one for the whole render
+    assert set(x["recaps"]) == {pp["id"] for pp in p.payload["periods"]}
+    assert set(x["recap_all"]) >= {"totals", "terms", "bursts", "baseline"}
+    for rc in x["recaps"].values():
+        assert len(rc["terms"]) <= 10 and len(rc["bursts"]) <= 3
+        assert all(len(b["ids"]) <= 25 and b["s"] <= b["e"] for b in rc["bursts"])
+    # one arc per lane, keyed by lane index; bins are [start ms, messages, actions]
+    assert set(x["arcs"]) == {str(i) for i in range(len(lane_ids))}
+    for i, arc in x["arcs"].items():
+        assert sum(b[1] for b in arc["bins"]) == p.payload["lanes"][int(i)]["n"]
+    assert all({"kind", "t", "why", "ids"} <= set(m) for m in x["moments"])
+    assert all(s["groups"] and s["starts"] for s in x["series"])
+    assert set(x["agent_rates"]["lanes"]) <= {str(i) for i in range(len(lane_ids))}
+    # every id the panels point at that falls inside the render is on the page
+    on_page = {p.payload["idp"] + i for i in p.payload["id"]}
+    for rc in x["recaps"].values():
+        for b in rc["bursts"]:
+            assert set(b["ids"]) <= on_page
+
+    _, _, p = _render(store_path, tmp_path / "n.html", explore=False)
+    assert p.payload["x"] == {}
+
+
+def test_excerpts_respect_the_filters(store_path: Path, tmp_path: Path):
+    # a sampled page embeds the threads the panels point at, but only inside the render's filters
+    _, _, p = _render(store_path, tmp_path / "c.html", channel="general", max_marks=40)
+    data = p.payload
+    rest = [i for i, c in enumerate(data["channels"]) if c["name"] == "rest"]
+    assert not rest or all(data["c"][j] != rest[0] for j in range(len(data["t"])))
+    assert data["ctx"]["n"] == data["ctx"]["excerpts"] > 0
+    assert len(data["t"]) == data["ctx"]["a"] + data["ctx"]["n"]
+
+
+def test_sweep_series(store_path: Path, tmp_path: Path):
+    con = duckdb.connect(str(store_path), read_only=True)
+    try:
+        ids = [r[0] for r in con.execute("SELECT evidence_id FROM messages ORDER BY ts LIMIT 40").fetchall()]
+    finally:
+        con.close()
+    sweep = tmp_path / "s1.jsonl"
+    rows = [{"type": "meta", "sweep_id": "s1", "rubric": "synthetic rubric"}]
+    rows += [{"type": "verdict", "event_id": e, "verdict": "yes" if k % 3 == 0 else "no"} for k, e in enumerate(ids)]
+    rows += [{"type": "summary"}]
+    sweep.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    _, _, p = _render(store_path, tmp_path / "w.html", sweeps=[sweep])
+    labels = [s["label"] for s in p.payload["x"]["series"]]
+    assert any("s1" in lbl and "judged yes" in lbl for lbl in labels), labels

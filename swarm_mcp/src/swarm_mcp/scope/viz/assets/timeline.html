@@ -41,7 +41,26 @@ __PAPER_CSS__
 .rmsg.link { cursor: pointer; }
 .rmsg.link:hover { background: var(--wash); }
 .reader-more { display: flex; gap: 8px; margin: 10px 0; }
-@media (max-width: 560px) { .reader { width: 100vw; border-left: 0; } .hint { margin-top: -14px; } }
+.sel { min-width: 0; max-width: 100%; }
+td .lnk { font: inherit; color: inherit; background: none; border: 0; padding: 0; text-decoration: underline; text-decoration-color: var(--ink-3); cursor: pointer; }
+td .lnk + .lnk { margin-left: 8px; }
+td.why { color: var(--ink-2); min-width: 240px; }
+td.term { font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
+@media (max-width: 560px) {
+  .reader { width: 100vw; border-left: 0; } .hint { margin-top: -14px; }
+  /* phones: booktabs rows become small blocks, each value labelled by its column */
+  table.booktabs.stack thead { display: none; }
+  table.booktabs.stack, table.booktabs.stack tbody, table.booktabs.stack tr { display: block; width: 100%; }
+  table.booktabs.stack caption { display: block; width: 100%; }
+  table.booktabs.stack td { display: inline-block; width: auto; margin-right: 12px; }
+  table.booktabs.stack td.why { display: block; margin-right: 0; }
+  table.booktabs.stack tbody { border-top: 1.5px solid var(--rule); border-bottom: 1.5px solid var(--rule); }
+  table.booktabs.stack tbody tr:last-child td { border-bottom: 0; }
+  table.booktabs.stack tr { padding: 6px 0; border-bottom: 0.5px solid var(--hair); }
+  table.booktabs.stack td { padding: 1px 2px; text-align: left !important; white-space: normal !important; min-width: 0; }
+  table.booktabs.stack td[data-label]::before { content: attr(data-label) ": "; color: var(--ink-3); font-style: italic; font-family: var(--serif); font-size: 12.5px; }
+  table.booktabs.stack td[data-label="#"]::before { content: "#"; }
+}
 </style>
 </head>
 <body>
@@ -91,6 +110,46 @@ __PAPER_CSS__
       <figcaption id="cap-act"></figcaption>
     </figure>
   </div>
+  <div class="two-col" id="recap-more" hidden>
+    <div class="tablewrap" id="tbl-terms"></div>
+    <div class="tablewrap" id="tbl-bursts"></div>
+  </div>
+  <p class="small muted" id="recap-hint" hidden></p>
+</section>
+
+<section id="sec-moments" hidden aria-labelledby="h-moments">
+  <h2 id="h-moments"><span class="secnum">3</span>Notable moments</h2>
+  <p class="prose small muted" id="moments-intro"></p>
+  <div class="tablewrap scroll" id="tbl-moments"></div>
+</section>
+
+<section id="sec-agent" hidden aria-labelledby="h-agent">
+  <h2 id="h-agent"><span class="secnum">4</span>One agent over time</h2>
+  <div class="controls"><span class="ctl"><label class="ctl-label" for="agent-sel">Agent</label><select class="sel" id="agent-sel"></select></span>
+    <span class="small muted">or click a name in Figure 1</span></div>
+  <figure class="fig" id="fig-arc">
+    <div class="fig-tools" id="tools-arc"></div>
+    <div class="fig-body" id="arc"></div>
+    <figcaption id="cap-arc"></figcaption>
+  </figure>
+  <figure class="fig" id="fig-partners">
+    <div class="fig-tools" id="tools-partners"></div>
+    <div class="fig-body" id="partners"></div>
+    <figcaption id="cap-partners"></figcaption>
+  </figure>
+  <div class="tablewrap scroll" id="tbl-arc-terms"></div>
+</section>
+
+<section id="sec-metrics" hidden aria-labelledby="h-metrics">
+  <h2 id="h-metrics"><span class="secnum">5</span>Metrics over time</h2>
+  <div class="controls">
+    <span class="ctl"><label class="ctl-label" for="metric-sel">Metric</label><select class="sel" id="metric-sel"></select></span>
+  </div>
+  <figure class="fig" id="fig-series">
+    <div class="fig-tools" id="tools-series"></div>
+    <div class="fig-body" id="series"></div>
+    <figcaption id="cap-series"></figcaption>
+  </figure>
 </section>
 
 <footer class="paper-foot">__FOOTER__</footer>

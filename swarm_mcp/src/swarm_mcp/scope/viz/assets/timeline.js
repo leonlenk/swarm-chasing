@@ -687,7 +687,7 @@
     if (h.type === 'bin') { var pad = (h.t1 - h.t0) * 0.15; setView(h.t0 - pad, h.t1 + pad); }
     else if (h.type === 'msg') { copyId(evid(h.i)); openThread(h.i); }
     else if (h.type === 'period') selectPeriod(h.p);
-    else if (h.type === 'lane') { S.sel = S.sel === h.li ? -1 : h.li; redraw(); }
+    else if (h.type === 'lane') { S.sel = S.sel === h.li ? -1 : h.li; redraw(); if (S.sel >= 0) selectAgent(S.sel, true); }
   }
   ov.addEventListener('pointerup', endPointer);
   ov.addEventListener('pointercancel', endPointer);
@@ -900,9 +900,11 @@
     });
     return { hasActs: hasActs, rows: rows, window: wb };
   }
-  function niceTicks(max, n) {
+  // Ticks from 0 in a 1/2/5 step; with cover=true the last tick is at or above max (axis tops).
+  function niceTicks(max, n, cover) {
     var raw = max / n, p = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / p, step = (f < 1.5 ? 1 : f < 3.5 ? 2 : f < 7.5 ? 5 : 10) * p, out = [];
-    for (var t = 0; t <= max + 1e-9; t += step) out.push(Math.round(t * 1e6) / 1e6);
+    var top = cover ? Math.ceil(max / step - 1e-9) * step : max;
+    for (var t = 0; t <= top + 1e-9; t += step) out.push(Math.round(t * 1e6) / 1e6);
     return out;
   }
 
@@ -921,6 +923,7 @@
     lastAct = drawActivity($('act'), acW, false);
     $('cap-mx').textContent = captionMatrix(lastMx);
     $('cap-act').textContent = captionActivity(lastAct);
+    renderRecap();
   }
   function captionMatrix(m) {
     var s = 'Figure 2: Who names whom, ' + whenRange(m.window[0], m.window[1]) + '. ';
@@ -1014,6 +1017,448 @@
   $('reader-close').onclick = closeReader;
   document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape' && !reader.hidden) closeReader(); });
 
+  // ---------------------------------------------------------------- shared pieces for the linked panels
+  var tableNo = 0;
+  // A booktabs table with its "Table N:" title above. cols: [{label, num, cls, get(row) -> string | Node}]
+  function bookTable(container, caption, cols, rows, emptyText) {
+    container.textContent = '';
+    if (!container.__tableNo) container.__tableNo = ++tableNo;
+    var t = document.createElement('table'); t.className = 'booktabs stack';
+    var cap = document.createElement('caption'); cap.textContent = 'Table ' + container.__tableNo + ': ' + caption; t.appendChild(cap);
+    var thead = document.createElement('thead'), tr = document.createElement('tr');
+    cols.forEach(function (c) { var th = document.createElement('th'); th.scope = 'col'; th.textContent = c.label; if (c.num) th.className = 'num'; tr.appendChild(th); });
+    thead.appendChild(tr); t.appendChild(thead);
+    var tb = document.createElement('tbody');
+    if (!rows.length) {
+      var r0 = document.createElement('tr'), td0 = document.createElement('td');
+      td0.colSpan = cols.length; td0.className = 'muted'; td0.textContent = emptyText || 'Nothing to show.';
+      r0.appendChild(td0); tb.appendChild(r0);
+    }
+    rows.forEach(function (row) {
+      var r = document.createElement('tr');
+      cols.forEach(function (c) {
+        var td = document.createElement('td'); if (c.num) td.className = 'num'; else if (c.cls) td.className = c.cls;
+        if (c.label) td.setAttribute('data-label', c.label);
+        if (c.nowrap) td.style.whiteSpace = 'nowrap';
+        var v = c.get(row);
+        if (v instanceof Node) td.appendChild(v); else td.textContent = v == null ? '–' : String(v);
+        r.appendChild(td);
+      });
+      tb.appendChild(r);
+    });
+    t.appendChild(tb); container.appendChild(t);
+    return t;
+  }
+  function linkBtn(label, fn, title) {
+    var b = document.createElement('button'); b.type = 'button'; b.className = 'lnk'; b.textContent = label;
+    if (title) b.title = title;
+    b.addEventListener('click', fn); return b;
+  }
+  function frag() { var f = document.createElement('span'); for (var k = 0; k < arguments.length; k++) if (arguments[k]) f.appendChild(arguments[k]); return f; }
+
+  // Split time-ordered points into runs wherever consecutive points are more than maxGap apart, so
+  // lines and bands do not bridge stretches with no data.
+  function runs(pts, maxGap) {
+    var out = [], cur = [];
+    pts.forEach(function (p, i) { if (i && p.t - pts[i - 1].t > maxGap) { out.push(cur); cur = []; } cur.push(p); });
+    if (cur.length) out.push(cur);
+    return out;
+  }
+  function bandPath(pts, X, Y) {
+    return 'M' + pts.map(function (p) { return X(p.t).toFixed(1) + ',' + Y(p.hi).toFixed(1); }).join('L') +
+      'L' + pts.slice().reverse().map(function (p) { return X(p.t).toFixed(1) + ',' + Y(p.lo).toFixed(1); }).join('L') + 'Z';
+  }
+  function linePath(pts, X, Y) { return 'M' + pts.map(function (p) { return X(p.t).toFixed(1) + ',' + Y(p.y).toFixed(1); }).join('L'); }
+  var GAP_BREAK = 4.5 * 864e5;
+
+  // Time series with a band: series = [{name, color, dash, pts: [{t, y, lo, hi}]}]; direct labels at the right.
+  function lineBand(host, Wd, spec, exp) {
+    host.textContent = '';
+    var fs = exp ? 11.5 : (Wd < 560 ? 11 : 12), ts = fs - 0.5;
+    var labW = 0; spec.series.forEach(function (se) { labW = Math.max(labW, measure(se.name, { size: fs })); });
+    var ml = measure('100%', { size: ts }) + 14, mr = Math.min(labW + 22, Wd * 0.3), mt = 10, axH = ts + 10 + (DAYS ? ts + 8 : 0);
+    var ph = spec.height || (exp ? 150 : (Wd < 560 ? 170 : 220)), H = mt + ph + axH + (spec.ribbon ? 14 : 0);
+    var x0 = ml, x1 = Wd - mr, y0 = mt + (spec.ribbon ? 14 : 0), y1 = y0 + ph;
+    var a = spec.t0, b = spec.t1, k = (x1 - x0) / Math.max(1, b - a);
+    function X(t) { return x0 + (t - a) * k; }
+    var ymax = spec.ymax != null ? spec.ymax : 0;
+    if (spec.ymax == null) spec.series.forEach(function (se) { se.pts.forEach(function (p) { ymax = Math.max(ymax, p.hi != null ? p.hi : p.y); }); });
+    var yt = niceTicks(ymax || 1, 4, true); ymax = yt[yt.length - 1] || 1;
+    function Y(v) { return y1 - (v / ymax) * ph; }
+    var svg = svgEl(host, 'svg', { 'class': 'viz', width: Wd, height: H, viewBox: '0 0 ' + Wd + ' ' + H, role: 'img', 'aria-label': spec.aria || 'time series' });
+    yt.forEach(function (v) {
+      svgEl(svg, 'line', { x1: x0, x2: x1, y1: Y(v), y2: Y(v), 'class': 'grid' });
+      svgEl(svg, 'text', { x: x0 - 5, y: Y(v) + ts * 0.35, 'text-anchor': 'end', 'class': 'tick' }, spec.yfmt ? spec.yfmt(v) : fmtK(v));
+    });
+    if (spec.ylabel) svgEl(svg, 'text', { x: 2, y: y0 - 2 + (spec.ribbon ? -12 : 0) + 8, 'class': 'tick', style: 'font-style:italic' }, spec.ylabel);
+    // goal changes: hairlines across the plot, numbered in a strip on top
+    if (spec.ribbon) {
+      var n = 0;
+      periods.forEach(function (p) {
+        if (p.kind !== periodKinds[0]) return; n++;
+        if (p.s < a || p.s > b) return;
+        var x = X(p.s);
+        svgEl(svg, 'line', { x1: x, x2: x, y1: y0 - 10, y2: y1, stroke: C.hair, 'stroke-width': 0.6 });
+        if (spec.ribbon === 'numbers' && (x1 - x0) / Math.max(1, periods.length) > 11) svgEl(svg, 'text', { x: x + 2, y: y0 - 3, 'class': 'tick', style: 'font-size:' + (ts - 1.5) + 'px' }, String(n));
+      });
+    }
+    var dt = dateTicks(a, b, x1 - x0, 84);
+    svgEl(svg, 'line', { x1: x0, x2: x1, y1: y1 + 0.5, y2: y1 + 0.5, 'class': 'axis-line' });
+    svgEl(svg, 'line', { x1: x0 - 0.5, x2: x0 - 0.5, y1: y0, y2: y1, 'class': 'axis-line' });
+    dt.forEach(function (tk) {
+      var x = X(tk.t);
+      svgEl(svg, 'line', { x1: x, x2: x, y1: y1, y2: y1 + 3, 'class': 'tick-line' });
+      svgEl(svg, 'text', { x: x, y: y1 + ts + 4, 'text-anchor': 'middle', 'class': 'tick' }, tk.lbl);
+    });
+    if (DAYS) {
+      dayTicks(a, b, x1 - x0, 60).forEach(function (tk) { svgEl(svg, 'text', { x: X(tk.t), y: y1 + 2 * ts + 10, 'text-anchor': 'middle', 'class': 'tick', style: 'fill:' + C.ink3 }, tk.lbl); });
+      svgEl(svg, 'text', { x: x0 - 5, y: y1 + 2 * ts + 10, 'text-anchor': 'end', 'class': 'tick', style: 'font-style:italic;fill:' + C.ink3 }, 'Day');
+    }
+    var ends = [];
+    spec.series.forEach(function (se) {
+      var pts = se.pts.filter(function (p) { return p.y != null && p.t >= a && p.t <= b; });
+      if (!pts.length) return;
+      runs(pts.filter(function (p) { return p.lo != null && p.hi != null; }), GAP_BREAK).forEach(function (band) {
+        if (band.length > 1) svgEl(svg, 'path', { d: bandPath(band, X, Y), fill: se.color, 'fill-opacity': 0.12, stroke: 'none' });
+      });
+      runs(pts, GAP_BREAK).forEach(function (run) {
+        svgEl(svg, 'path', { d: linePath(run, X, Y), fill: 'none', stroke: se.color,
+          'stroke-width': exp ? 1.1 : 1.4, 'stroke-dasharray': se.dash || null, 'stroke-linejoin': 'round' });
+      });
+      var last = pts[pts.length - 1];
+      ends.push({ se: se, x: X(last.t), y: Y(last.y), v: last.y });
+    });
+    // direct labels: keep each near its line's end, nudged apart, with a leader when moved
+    ends.sort(function (p, q) { return p.y - q.y; });
+    var gap = fs + 2;
+    ends.forEach(function (e, j) { e.ly = j ? Math.max(e.y, ends[j - 1].ly + gap) : e.y; });
+    var over = ends.length ? ends[ends.length - 1].ly - (y1 + 4) : 0;
+    if (over > 0) ends.forEach(function (e) { e.ly -= over; });
+    ends.forEach(function (e) {
+      var lx = x1 + 10;
+      if (Math.abs(e.ly - e.y) > 1.5) svgEl(svg, 'path', { d: 'M' + (e.x + 2) + ',' + e.y + 'L' + (lx - 3) + ',' + e.ly, fill: 'none', stroke: C.ink3, 'stroke-width': 0.6 });
+      svgEl(svg, 'text', { x: lx, y: e.ly + fs * 0.35, 'class': 'lbl', style: 'font-size:' + fs + 'px' }, fitMx(e.se.name, mr - 14, fs));
+    });
+    if (!exp && spec.hover !== false) {
+      var cross = svgEl(svg, 'line', { y1: y0, y2: y1, stroke: C.ink3, 'stroke-width': 0.8, visibility: 'hidden' });
+      var ov = svgEl(svg, 'rect', { x: x0, y: y0, width: x1 - x0, height: ph, fill: 'transparent' });
+      ov.addEventListener('pointermove', function (ev) {
+        var r = svg.getBoundingClientRect(), t = a + (ev.clientX - r.left - x0) / k;
+        cross.setAttribute('x1', ev.clientX - r.left); cross.setAttribute('x2', ev.clientX - r.left); cross.setAttribute('visibility', 'visible');
+        Tip.clear(); Tip.add('tt-title', (DAYS ? 'Day ' + dayOf(t) + ' · ' : '') + fmtDate(t));
+        spec.series.forEach(function (se) {
+          var best = null, bd = Infinity;
+          se.pts.forEach(function (p) { var dd = Math.abs(p.t - t); if (dd < bd) { bd = dd; best = p; } });
+          if (best && best.y != null) Tip.row((spec.yfmt ? spec.yfmt(best.y) : fmtN(best.y)) + (best.lo != null ? ' [' + (spec.yfmt ? spec.yfmt(best.lo) : fmtN(best.lo)) + ', ' + (spec.yfmt ? spec.yfmt(best.hi) : fmtN(best.hi)) + ']' : ''), se.name, se.color);
+        });
+        if (spec.tipNote) Tip.add('tt-note', spec.tipNote);
+        Tip.show(ev.clientX, ev.clientY);
+      });
+      ov.addEventListener('pointerleave', function () { cross.setAttribute('visibility', 'hidden'); Tip.hide(); });
+    }
+    return svg;
+  }
+
+  // Rows x columns of shaded cells: rows [{name, cells:[v...]}], cols [{label, title}]
+  function heatStrip(host, Wd, spec, exp) {
+    host.textContent = '';
+    var fs = exp ? 11.5 : (Wd < 560 ? 11 : 12), ts = fs - 0.5;
+    var nameW = 0; spec.rows.forEach(function (r) { nameW = Math.max(nameW, measure(r.name, { size: fs })); });
+    var labelW = Math.min(nameW + 10, Wd * 0.3), nc = spec.cols.length;
+    var cw = Math.max(4, Math.min(26, (Wd - labelW - 8) / Math.max(1, nc))), rh = exp ? 13 : 18, top = ts + 10;
+    var H = top + spec.rows.length * rh + ts + 10, max = 0;
+    spec.rows.forEach(function (r) { r.cells.forEach(function (v) { if (v > max) max = v; }); });
+    var svg = svgEl(host, 'svg', { 'class': 'viz', width: Wd, height: H, viewBox: '0 0 ' + Wd + ' ' + H, role: 'img', 'aria-label': spec.aria || 'heat strip' });
+    var every = Math.max(1, Math.ceil(24 / cw));
+    spec.cols.forEach(function (c, j) {
+      if (j % every === 0) svgEl(svg, 'text', { x: labelW + j * cw + cw / 2, y: top - 4, 'text-anchor': 'middle', 'class': 'tick', style: 'font-size:' + (ts - 1) + 'px' }, c.label);
+    });
+    spec.rows.forEach(function (r, i) {
+      var y = top + i * rh;
+      svgEl(svg, 'text', { x: labelW - 6, y: y + rh / 2 + fs * 0.35, 'text-anchor': 'end', 'class': 'lbl', style: 'font-size:' + fs + 'px' + (r.bold ? ';font-weight:700' : '') }, fitMx(r.name, labelW - 8, fs));
+      r.cells.forEach(function (v, j) {
+        var x = labelW + j * cw;
+        var rect = svgEl(svg, 'rect', { x: x + 0.5, y: y + 0.5, width: cw - 1, height: rh - 1, fill: v ? seqColor(max ? Math.sqrt(v / max) : 0) : C.paper, stroke: v ? null : C.hair, 'stroke-width': v ? null : 0.4 });
+        if (!exp && spec.tip) {
+          rect.addEventListener('pointerenter', function (ev) { spec.tip(r, j, v); Tip.show(ev.clientX, ev.clientY); });
+          rect.addEventListener('pointermove', function (ev) { Tip.show(ev.clientX, ev.clientY); });
+          rect.addEventListener('pointerleave', function () { Tip.hide(); });
+          if (spec.click) { rect.style.cursor = 'pointer'; rect.addEventListener('click', function () { spec.click(r, j, v); }); }
+        }
+      });
+    });
+    if (spec.marks) spec.marks.forEach(function (m) {  // e.g. partner shifts: a tick under the column
+      var x = labelW + m.j * cw + cw / 2, y = top + spec.rows.length * rh + 3;
+      svgEl(svg, 'path', { d: 'M' + (x - 3.5) + ',' + (y + 6) + 'L' + (x + 3.5) + ',' + (y + 6) + 'L' + x + ',' + y + 'Z', fill: C.ink });
+    });
+    return { svg: svg, max: max };
+  }
+
+  // ---------------------------------------------------------------- linked panels: recap, moments, agent arc, metrics
+  var XD = D.x || {};
+  var rowById = null;
+  function rowOf(id) {
+    if (!rowById) { rowById = {}; for (var i = 0; i < N; i++) rowById[D.idp + D.id[i]] = i; }
+    return rowById[id];
+  }
+  function firstRow(ids) { for (var k = 0; k < (ids || []).length; k++) { var r = rowOf(ids[k]); if (r != null) return r; } return null; }
+  function readLink(ids, label) {
+    var r = firstRow(ids);
+    if (r == null) {
+      var sp = document.createElement('span'); sp.className = 'muted'; sp.textContent = '\u2013';
+      sp.title = 'Not on this page (sampled away or outside the filters): ' + (ids || []).slice(0, 3).join(', ');
+      return sp;
+    }
+    return linkBtn(label || 'Read', function () { openThread(r); }, 'Open the conversation around it');
+  }
+  function showLink(a, b) { return linkBtn('Show', function () { var pad = Math.max(36e5, (b - a) * 0.3); setView(a - pad, b + pad); $('fig-tl').scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 'Zoom Figure 1 to this moment'); }
+  function viewIsFull() { return S.v0 <= FULL0 + (FULL1 - FULL0) * 0.02 && S.v1 >= FULL1 - (FULL1 - FULL0) * 0.02; }
+  function currentRecap() {
+    if (S.period >= 0 && XD.recaps && XD.recaps[periods[S.period].id]) return { r: XD.recaps[periods[S.period].id], what: 'this goal', vs: 'the previous goal' };
+    if (viewIsFull() && XD.recap_all) return { r: XD.recap_all, what: 'this render', vs: 'the same length before it' };
+    return null;
+  }
+  function renderRecap() {
+    var more = $('recap-more'), hint = $('recap-hint');
+    if (!XD.recaps && !XD.recap_all) { more.hidden = true; hint.hidden = true; return; }
+    var cr = currentRecap();
+    if (!cr) {
+      more.hidden = true; hint.hidden = false;
+      hint.textContent = 'Rising terms and the busiest threads are computed for each goal and for the whole render: click a goal in Figure 1, or Full range.';
+      return;
+    }
+    more.hidden = false; hint.hidden = true;
+    var r = cr.r;
+    bookTable($('tbl-terms'), 'Terms that rose in ' + cr.what + ' against ' + cr.vs + '. A term is a word or two-word phrase counted once per message; ranked by log-odds with an informative prior (Monroe et al., 2008).', [
+      { label: 'Term', cls: 'term', get: function (t) { return t.term; } },
+      { label: 'Msgs', num: true, get: function (t) { return fmtN(t.n); } },
+      { label: 'Before', num: true, get: function (t) { return t.n_before == null ? '–' : fmtN(t.n_before); } },
+      { label: 'Agents', num: true, get: function (t) { return fmtN(t.agents); } },
+      { label: '', get: function (t) { return t.first_id ? readLink([t.first_id], 'First use') : ''; } }
+    ], r.baseline ? r.terms : [], r.baseline ? 'No term rose clearly.' : 'There are no messages before this window to compare with; pick a goal (each is compared with the previous one).');
+    bookTable($('tbl-bursts'), 'Busiest threads in ' + cr.what + ': runs of messages in one channel with gaps of at most 20 minutes, by length.', [
+      { label: 'When', get: function (b) { return (DAYS ? 'Day ' + dayOf(b.s) + ', ' : '') + fmtTime(b.s) + '–' + fmtTime(b.e) + ' UTC'; } },
+      { label: 'Room', get: function (b) { return '#' + b.channel; } },
+      { label: 'Msgs', num: true, get: function (b) { return fmtN(b.n); } },
+      { label: 'Who', get: function (b) { var a = b.agents || []; return a.slice(0, 3).join(', ') + (a.length > 3 ? ' +' + (a.length - 3) : ''); } },
+      { label: '', get: function (b) { var rr = firstRow(b.ids); return rr == null ? readLink(b.ids) : linkBtn('Read', function () { openThread(rr, 2, Math.min(80, (b.n || 20) + 2)); }, 'Open this thread from its start'); } }
+    ], r.bursts, 'No threads.');
+  }
+
+  var KIND = { burst: 'Burst', silence: 'Silence', partner_shift: 'Partner shift', first_use: 'First use' };
+  function renderMoments() {
+    var ms = XD.moments || [];
+    if (!ms.length) return;
+    $('sec-moments').hidden = false;
+    $('moments-intro').textContent = 'Spikes and changes worth a look, in time order (the strongest of each kind are kept). Bursts and silences compare an agent’s or a channel’s daily messages with its previous 14 active days; partner shifts compare an agent’s mix of mentions between goals (Jensen–Shannon distance); first uses are terms that other agents picked up quickly. Each row says why it was flagged.';
+    bookTable($('tbl-moments'), 'Notable moments in this render (' + ms.length + ').', [
+      { label: '#', num: true, get: function (m) { return String(ms.indexOf(m) + 1); } },
+      { label: 'When', nowrap: true, get: function (m) { return (DAYS ? 'Day ' + dayOf(m.t) + ', ' : '') + fmtDate(m.t); } },
+      { label: 'Kind', nowrap: true, get: function (m) { return KIND[m.kind] || m.kind; } },
+      { label: 'Who or where', get: function (m) { return m.agent || (m.channel ? '#' + m.channel : '') || ''; } },
+      { label: 'Why', cls: 'why', get: function (m) { return m.why; } },
+      { label: '', nowrap: true, get: function (m) { return frag(readLink(m.ids, 'Read'), showLink(m.t, m.e || m.t)); } }
+    ], ms);
+  }
+
+  // ---- one agent over time
+  var arcSel = $('agent-sel');
+  function setupAgentSelect() {
+    var arcs = XD.arcs || {};
+    if (!Object.keys(arcs).length) return false;
+    lanes.forEach(function (L, li) { if (!arcs[li]) return; var o = document.createElement('option'); o.value = String(li); o.textContent = L.name; arcSel.appendChild(o); });
+    arcSel.addEventListener('change', function () { selectAgent(+arcSel.value, false); });
+    return true;
+  }
+  function selectAgent(li, scroll) {
+    if (!XD.arcs || !XD.arcs[li]) return;
+    arcSel.value = String(li); S.arc = li;
+    if (S.sel !== li) { S.sel = li; redraw(); }
+    renderArc();
+    if (scroll) $('sec-agent').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  function arcRates(li) {
+    var R = XD.agent_rates; if (!R || !R.lanes[li]) return null;
+    return R.lanes[li].map(function (p) { return { t: R.starts[p[0]], y: p[2], lo: p[3], hi: p[4], v: p[1], num: p[5], den: p[6] }; });
+  }
+  function drawArc(host, Wd, exp) {
+    host.textContent = '';
+    var li = S.arc, A = XD.arcs[li], L = lanes[li];
+    var fs = exp ? 11.5 : (Wd < 560 ? 11 : 12), ts = fs - 0.5;
+    var ml = measure('100%', { size: ts }) + 16, mr = 12, gap = 26, top = 14;
+    var h1 = exp ? 70 : 96, rates = arcRates(li), h2 = rates ? (exp ? 60 : 84) : 0;
+    var axH = ts + 10 + (DAYS ? ts + 8 : 0), H = top + h1 + (rates ? gap + h2 : 0) + axH + 4;
+    var wk0 = (A.bin_days || 7) * 864e5, lastBin = (A.bins || []).filter(function (q) { return q[1] || q[2]; }).pop();
+    var a = Math.max(D.start, L.first - wk0), b = Math.min(D.end, lastBin ? lastBin[0] + 2 * wk0 : D.end);
+    if (b - a < 14 * 864e5) b = Math.min(D.end, a + 14 * 864e5);
+    var x0 = ml, x1 = Wd - mr, k = (x1 - x0) / Math.max(1, b - a);
+    function X(t) { return x0 + (t - a) * k; }
+    var svg = svgEl(host, 'svg', { 'class': 'viz', width: Wd, height: H, viewBox: '0 0 ' + Wd + ' ' + H, role: 'img', 'aria-label': 'Activity of ' + L.name + ' over time' });
+    svg.__span = [a, b];
+    // goal boundaries as hairlines through both panels
+    periods.forEach(function (p) { if (p.kind === periodKinds[0] && p.s > a && p.s < b) svgEl(svg, 'line', { x1: X(p.s), x2: X(p.s), y1: top - 4, y2: top + h1 + (rates ? gap + h2 : 0), stroke: C.hair, 'stroke-width': 0.6 }); });
+    // (a) messages and actions per bin
+    var bins = A.bins || [], wk = (A.bin_days || 7) * 864e5, maxv = 1;
+    bins.forEach(function (bn) { maxv = Math.max(maxv, bn[1], bn[2]); });
+    var yt = niceTicks(maxv, 3, true); maxv = yt[yt.length - 1] || 1;
+    var ya0 = top, ya1 = top + h1;
+    function Ya(v) { return ya1 - v / maxv * h1; }
+    svgEl(svg, 'text', { x: x0, y: ya0 - 4, 'class': 'panel-title', style: 'font-size:' + fs + 'px' }, '(a) Messages per ' + (A.bin_days === 7 ? 'week' : A.bin_days + ' days') + ' (bars) and actions (line)');
+    yt.forEach(function (v) { svgEl(svg, 'line', { x1: x0, x2: x1, y1: Ya(v), y2: Ya(v), 'class': 'grid' }); svgEl(svg, 'text', { x: x0 - 5, y: Ya(v) + ts * 0.35, 'text-anchor': 'end', 'class': 'tick' }, fmtK(v)); });
+    var bw = Math.max(1, wk * k - (wk * k > 4 ? 1 : 0));
+    bins = bins.filter(function (bn) { return bn[0] + wk > a && bn[0] < b; });
+    bins.forEach(function (bn) {
+      if (!bn[1]) return;
+      var xa = Math.max(x0, X(bn[0])), xb = Math.min(x1, X(bn[0]) + bw);
+      if (xb - xa > 0.4) svgEl(svg, 'rect', { x: xa, y: Ya(bn[1]), width: xb - xa, height: ya1 - Ya(bn[1]), fill: C.ink2 });
+    });
+    var actPts = bins.map(function (bn) { return Math.min(x1, Math.max(x0, X(bn[0]) + bw / 2)).toFixed(1) + ',' + Ya(bn[2]).toFixed(1); });
+    if (bins.some(function (bn) { return bn[2] > 0; })) svgEl(svg, 'path', { d: 'M' + actPts.join('L'), fill: 'none', stroke: C.ink, 'stroke-width': exp ? 0.9 : 1.2, 'stroke-dasharray': '3 2' });
+    svgEl(svg, 'line', { x1: x0, x2: x1, y1: ya1 + 0.5, y2: ya1 + 0.5, 'class': 'axis-line' });
+    svgEl(svg, 'line', { x1: x0 - 0.5, x2: x0 - 0.5, y1: ya0, y2: ya1, 'class': 'axis-line' });
+    var yb1 = ya1;
+    if (rates) {
+      var yb0 = ya1 + gap; yb1 = yb0 + h2;
+      function Yb(v) { return yb1 - v * h2; }
+      svgEl(svg, 'text', { x: x0, y: yb0 - 4, 'class': 'panel-title', style: 'font-size:' + fs + 'px' }, '(b) Share of its messages that name another agent');
+      [0, 0.5, 1].forEach(function (v) { svgEl(svg, 'line', { x1: x0, x2: x1, y1: Yb(v), y2: Yb(v), 'class': 'grid' }); svgEl(svg, 'text', { x: x0 - 5, y: Yb(v) + ts * 0.35, 'text-anchor': 'end', 'class': 'tick' }, Math.round(v * 100) + '%'); });
+      runs(rates.filter(function (p) { return p.lo != null && p.hi != null && p.t >= a; }), GAP_BREAK).forEach(function (band) {
+        if (band.length > 1) svgEl(svg, 'path', { d: bandPath(band, X, Yb), fill: C.ink, 'fill-opacity': 0.12 });
+      });
+      runs(rates.filter(function (p) { return p.y != null && p.t >= a; }), GAP_BREAK).forEach(function (run) {
+        svgEl(svg, 'path', { d: linePath(run, X, Yb), fill: 'none', stroke: C.ink, 'stroke-width': exp ? 1 : 1.4, 'stroke-linejoin': 'round' });
+      });
+      svgEl(svg, 'line', { x1: x0, x2: x1, y1: yb1 + 0.5, y2: yb1 + 0.5, 'class': 'axis-line' });
+      svgEl(svg, 'line', { x1: x0 - 0.5, x2: x0 - 0.5, y1: yb0, y2: yb1, 'class': 'axis-line' });
+    }
+    dateTicks(a, b, x1 - x0, 84).forEach(function (tk) {
+      var x = X(tk.t);
+      svgEl(svg, 'line', { x1: x, x2: x, y1: yb1, y2: yb1 + 3, 'class': 'tick-line' });
+      svgEl(svg, 'text', { x: x, y: yb1 + ts + 4, 'text-anchor': 'middle', 'class': 'tick' }, tk.lbl);
+    });
+    if (DAYS) {
+      dayTicks(a, b, x1 - x0, 60).forEach(function (tk) { svgEl(svg, 'text', { x: X(tk.t), y: yb1 + 2 * ts + 10, 'text-anchor': 'middle', 'class': 'tick', style: 'fill:' + C.ink3 }, tk.lbl); });
+      svgEl(svg, 'text', { x: x0 - 5, y: yb1 + 2 * ts + 10, 'text-anchor': 'end', 'class': 'tick', style: 'font-style:italic;fill:' + C.ink3 }, 'Day');
+    }
+    if (!exp) {
+      var cross = svgEl(svg, 'line', { y1: top, y2: yb1, stroke: C.ink3, 'stroke-width': 0.8, visibility: 'hidden' });
+      var ov2 = svgEl(svg, 'rect', { x: x0, y: top, width: x1 - x0, height: yb1 - top, fill: 'transparent' });
+      ov2.addEventListener('pointermove', function (ev) {
+        var r = svg.getBoundingClientRect(), t = a + (ev.clientX - r.left - x0) / k;
+        cross.setAttribute('x1', ev.clientX - r.left); cross.setAttribute('x2', ev.clientX - r.left); cross.setAttribute('visibility', 'visible');
+        var bn = null; bins.forEach(function (q) { if (q[0] <= t && t < q[0] + wk) bn = q; });
+        Tip.clear(); Tip.add('tt-title', L.name); Tip.add('tt-sub', whenRange(bn ? bn[0] : t, bn ? bn[0] + wk - 1 : t));
+        if (bn) { Tip.row(fmtN(bn[1]), 'messages', C.ink2); Tip.row(fmtN(bn[2]), 'actions', C.ink); }
+        if (rates) {
+          var best = null, bd = Infinity; rates.forEach(function (p) { var dd = Math.abs(p.t - t); if (dd < bd) { bd = dd; best = p; } });
+          if (best && best.y != null && bd < 3 * 864e5) Tip.row(Math.round(best.y * 100) + '% [' + Math.round(best.lo * 100) + ', ' + Math.round(best.hi * 100) + ']', 'name another agent, rolling ' + (XD.agent_rates.window || 7) + '-day', null);
+        }
+        Tip.show(ev.clientX, ev.clientY);
+      });
+      ov2.addEventListener('pointerleave', function () { cross.setAttribute('visibility', 'hidden'); Tip.hide(); });
+    }
+  }
+  function partnerSpec(li) {
+    var A = XD.arcs[li], tot = {};
+    var cols = (A.partners || []).filter(function (p) { return p.out > 0; });
+    cols.forEach(function (p) { (p.to || []).forEach(function (x) { tot[x[0]] = (tot[x[0]] || 0) + x[1]; }); });
+    var names = Object.keys(tot).sort(function (p, q) { return tot[q] - tot[p]; }).slice(0, 8);
+    var goalNo = {}; var n = 0; periods.forEach(function (p) { if (p.kind === periodKinds[0]) goalNo[p.id] = ++n; });
+    return {
+      cols: cols.map(function (p) { return { label: goalNo[p.id] ? String(goalNo[p.id]) : '', p: p }; }),
+      rows: names.map(function (nm) { return { name: nm, cells: cols.map(function (p) { var hit = (p.to || []).filter(function (x) { return x[0] === nm; })[0]; return hit ? hit[1] : 0; }) }; }),
+      marks: cols.map(function (p, j) { return p.js != null && p.js >= 0.5 ? { j: j } : null; }).filter(Boolean),
+      aria: 'Whom ' + lanes[li].name + ' names, goal by goal',
+      tip: function (r, j, v) {
+        var p = cols[j];
+        Tip.clear(); Tip.add('tt-title', (goalNo[p.id] ? 'Goal ' + goalNo[p.id] + ': ' : '') + (p.label || ''));
+        Tip.add('tt-sub', whenRange(p.s, p.e || D.end));
+        Tip.row(fmtN(v), lanes[li].name + ' named ' + r.name, null);
+        Tip.add('tt-note', 'It named others ' + fmtN(p.out) + ' times and was named ' + fmtN(p['in']) + ' times in this goal.' + (p.js != null ? ' Shift vs the previous goal: ' + p.js.toFixed(2) + '.' : '') + ' Click to zoom to the goal.');
+      },
+      click: function (r, j) { var k2 = periods.findIndex(function (q) { return q.id === cols[j].p.id; }); if (k2 >= 0) { selectPeriod(k2); $('fig-tl').scrollIntoView({ behavior: 'smooth', block: 'start' }); } }
+    };
+  }
+  function renderArc() {
+    var li = S.arc; if (li == null || !XD.arcs || !XD.arcs[li]) return;
+    var A = XD.arcs[li], L = lanes[li], W1 = $('arc').clientWidth || 800;
+    drawArc($('arc'), W1, false);
+    $('cap-arc').textContent = captionArc(li);
+    var ps = partnerSpec(li);
+    if (ps.rows.length) { $('fig-partners').hidden = false; heatStrip($('partners'), $('partners').clientWidth || 800, ps, false); $('cap-partners').textContent = captionPartners(li, ps); }
+    else $('fig-partners').hidden = true;
+    var tc = A.term_counts || {};
+    bookTable($('tbl-arc-terms'), 'Novel terms ' + L.name + ' coined (' + fmtN(tc.coined || 0) + ') or adopted (' + fmtN(tc.adopted || 0) + '), most adopters first. A novel term first appears after the first tenth of the data and is used by at least three agents. There is no dictionary, so ordinary words that first appear late count too: read these as candidates.', [
+      { label: 'Term', cls: 'term', get: function (t) { return t.term; } },
+      { label: 'Role', get: function (t) { return t.role; } },
+      { label: 'First use', get: function (t) { return t.t ? (DAYS ? 'Day ' + dayOf(t.t) + ', ' : '') + fmtDate(t.t) : ''; } },
+      { label: 'Its msgs', num: true, get: function (t) { return fmtN(t.n || 0); } },
+      { label: 'Adopters', num: true, get: function (t) { return fmtN(t.adopters || 0); } },
+      { label: '', get: function (t) { return t.first_id ? readLink([t.first_id], 'First use') : ''; } }
+    ], A.terms || [], 'No novel terms.');
+  }
+  function captionArc(li) {
+    var A = XD.arcs[li], L = lanes[li], tot = 0, act = 0;
+    (A.bins || []).forEach(function (b) { tot += b[1]; act += b[2]; });
+    var s = 'Figure 4: ' + L.name + ' over time' + (L.lab ? ' (' + L.lab + ')' : '') + ', from its first message (' + whenRange(L.first, L.first) + ') on. ';
+    s += '(a) Its messages per ' + (A.bin_days === 7 ? 'week' : A.bin_days + ' days') + ' (bars; ' + fmtN(tot) + ' in all) and recorded actions such as session goals and summaries (dashed line; ' + fmtN(act) + ').';
+    if (arcRates(li)) s += ' (b) The share of its messages that name another agent: trailing ' + (XD.agent_rates.window || 7) + '-day mean over its active days with a 95% Wilson band.';
+    s += ' Hairlines mark goal changes. Hover for the numbers.';
+    return s;
+  }
+  function captionPartners(li, ps) {
+    return 'Figure 5: Whom ' + lanes[li].name + ' names, goal by goal. Rows are its ' + ps.rows.length + ' most-named partners; columns are the ' + ps.cols.length +
+      ' goals (numbered as in Figure 1) in which it named anyone; darker cells hold more messages naming that partner (square-root shading). Triangles mark goals where its mix of partners shifted most against the previous goal (Jensen–Shannon distance at least 0.5). Click a cell to zoom Figure 1 to that goal.';
+  }
+
+  // ---- metrics over time
+  var LABCOL = { 'Anthropic': '--lab-anthropic', 'OpenAI': '--lab-openai', 'Google': '--lab-google', 'Other labs': '--lab-other', 'Other': '--lab-other' };
+  var DASH = [null, '5 3', '2 2', '7 2 2 2', '1 3', '9 3'];
+  function seriesSpec(m) {
+    var slots = []; for (var j = 1; j <= 7; j++) slots.push(PK.cssVar('--c' + j));
+    return {
+      t0: D.start, t1: D.end, ribbon: true, aria: m.label,
+      yfmt: m.kind === 'rate' || m.kind === 'share' || (m.unit || '').indexOf('share') >= 0 ? function (v) { return Math.round(v * 100) + '%'; } : null,
+      ymax: (m.kind === 'rate' || (m.unit || '').indexOf('share') >= 0) ? 1 : null,
+      series: m.groups.map(function (g, gi) {
+        var col = m.by === 'lab' && LABCOL[g.name] ? PK.cssVar(LABCOL[g.name]) : (m.by === 'channel' ? (chCol[chans.findIndex(function (c) { return '#' + c.name === g.name || c.name === g.name; })] || slots[gi % 7]) : slots[gi % 7]);
+        return { name: g.name, color: col, dash: DASH[gi % DASH.length], pts: g.pts.map(function (p) { return { t: m.starts[p[0]], y: p[2], lo: p[3], hi: p[4] }; }) };
+      })
+    };
+  }
+  function renderSeries() {
+    var list = XD.series || []; if (!list.length) return;
+    var m = list[+$('metric-sel').value || 0];
+    lineBand($('series'), $('series').clientWidth || 800, seriesSpec(m), false);
+    $('cap-series').textContent = captionSeries(m);
+  }
+  function captionSeries(m) {
+    var isRate = m.kind === 'rate' || (m.unit || '').indexOf('share') >= 0;
+    return 'Figure 6: ' + m.label + ', ' + whenRange(D.start, D.end) + '. Lines are trailing ' + (m.window || 7) + '-day means over active days; bands are 95% ' + (isRate ? 'Wilson intervals on the pooled window counts' : 'intervals on the window mean') + '. Groups are labelled at the right end of their lines and also differ in dash pattern. Hairlines mark goal changes. ' + (m.notes || []).filter(function (n) { return /more .* not shown|excluded/i.test(n); }).join(' ');
+  }
+
+  function setupPanels() {
+    renderMoments();
+    if (setupAgentSelect()) {
+      $('sec-agent').hidden = false;
+      selectAgent(S.sel >= 0 ? S.sel : 0, false);
+    }
+    var list = XD.series || [];
+    if (list.length) {
+      $('sec-metrics').hidden = false;
+      list.forEach(function (m, i) { var o = document.createElement('option'); o.value = String(i); o.textContent = m.label; $('metric-sel').appendChild(o); });
+      $('metric-sel').addEventListener('change', renderSeries);
+      renderSeries();
+    }
+    PK.exportMenu($('tools-arc'), { draw: function (h, w) { drawArc(h, w, true); }, name: function () { return 'swarmscope-agent-' + (lanes[S.arc] || {}).name; }, caption: function () { return captionArc(S.arc); }, status: statusEl });
+    PK.exportMenu($('tools-partners'), { draw: function (h, w) { heatStrip(h, w, partnerSpec(S.arc), true); }, name: function () { return 'swarmscope-partners-' + (lanes[S.arc] || {}).name; }, caption: function () { return captionPartners(S.arc, partnerSpec(S.arc)); }, status: statusEl });
+    PK.exportMenu($('tools-series'), { draw: function (h, w) { lineBand(h, w, seriesSpec((XD.series || [])[+$('metric-sel').value || 0]), true); }, name: function () { return 'swarmscope-metric'; }, caption: function () { return captionSeries((XD.series || [])[+$('metric-sel').value || 0]); }, status: statusEl });
+    if (window.ResizeObserver) {
+      var lw = $('sec-agent').clientWidth;
+      new ResizeObserver(function () { var w = $('sec-agent').clientWidth; if (w !== lw) { lw = w; renderArc(); renderSeries(); } }).observe($('sec-agent'));
+    }
+  }
+
   // ---------------------------------------------------------------- export (current view at 5.5 in)
   function exportTimeline(host, Wd) {
     var g = layout(Wd, true), P = SvgPainter(Wd, g.H);
@@ -1029,7 +1474,7 @@
   PK.exportMenu($('tools-act'), { draw: function (h, w) { drawActivity(h, w, true); }, name: function () { return fileStem('activity'); }, caption: function () { return captionActivity(lastAct); }, status: statusEl });
 
   // ---------------------------------------------------------------- start
-  readColors(); buildKeys(); resize(); renderWindow();
+  readColors(); buildKeys(); resize(); renderWindow(); setupPanels();
   if (window.ResizeObserver) {
     var lastW = plot.clientWidth;
     new ResizeObserver(function () { if (plot.clientWidth !== lastW) { lastW = plot.clientWidth; resize(); scheduleWindow(); } }).observe(plot);

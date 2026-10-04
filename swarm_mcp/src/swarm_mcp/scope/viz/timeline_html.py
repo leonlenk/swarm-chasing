@@ -129,6 +129,8 @@ def render_timeline(
     max_marks: int = DEFAULT_MAX_MARKS,
     day_one: str | bool | None = None,
     annotations: list[dict[str, Any]] | None = None,
+    sweeps: list[Path | str] | None = None,
+    explore: bool = True,
 ) -> dict[str, Any]:
     """Render the explorer HTML to ``out_path`` and return a summary dict.
 
@@ -139,6 +141,9 @@ def render_timeline(
     village goal (``pagekit.village_days``), False turns the day axis off.
     ``annotations``: optional extra events drawn along the top, each
     ``{"t": ISO time or epoch ms, "end": optional, "label": str}`` (e.g. planted events).
+    ``sweeps``: optional sweep result files (``<sweep_id>.jsonl``); each adds a "share of records
+    judged yes" series to the metrics panel. ``explore=False`` skips the linked panels that need
+    ``analysis.recap`` / ``analysis.series`` (period recaps, notable moments, agent arcs, metrics).
     """
     top = max(1, int(top))
     max_marks = max(1, int(max_marks))
@@ -268,11 +273,28 @@ def render_timeline(
                 room_left=max_marks - lane_total if not sampled else 0,
             )
         day_spec = pagekit.village_days(store, day_one)
+        explored: dict[str, Any] = {}
+        if lane_ids and explore:
+            explored = _explore(
+                store,
+                lane_ids=lane_ids,
+                since=since,
+                until=until,
+                source=source,
+                channel=ch,
+                day_spec=day_spec,
+                periods=extra.get("periods", []),
+                sweeps=sweeps or [],
+            )
+            have = {r[0] for r in rows} | {r[0] for r in extra.get("context", [])}
+            extra["excerpts"] = _messages_by_id(
+                store, [i for i in explored.pop("ids", []) if i not in have], where=dated, params=params
+            )
 
     # ---- assemble the compact page payload -------------------------------------------------
     lane_index = {aid: i for i, aid in enumerate(lane_ids)}
     rows.sort(key=lambda r: (lane_index[r[1]], r[3], r[0]))  # lane order, then time
-    ctx_rows = sorted(extra.get("context", []), key=lambda r: (r[3], r[0]))
+    ctx_rows = sorted(extra.get("context", []) + extra.get("excerpts", []), key=lambda r: (r[3], r[0]))
     all_rows = rows + ctx_rows
     chan_names = [c["ch"] for c in chan_counts]
     for r in ctx_rows:  # context may use channels the lanes never posted in
@@ -352,12 +374,18 @@ def render_timeline(
         "rc": recips,
         "actors": actors,
         "lanes": lanes,
-        "ctx": {"a": marks, "n": len(ctx_rows), "complete": bool(extra.get("context_complete"))},
+        "ctx": {
+            "a": marks,
+            "n": len(ctx_rows),
+            "complete": bool(extra.get("context_complete")),
+            "excerpts": len(extra.get("excerpts", [])),
+        },
         "dens": {"bin": bin_ms, "base": bin_base, "lanes": dens},
         "acts": extra.get("acts", [[] for _ in lanes]),
         "ment": extra.get("ment", []),
         "periods": extra.get("periods", []),
         "notes": _annotations(annotations),
+        "x": explored,
         "days": day_spec,
         "channels": [{"name": c["ch"], "n": int(c["n"]), "slot": slot_of.get(c["ch"], -1)} for c in chan_counts],
         "start": min((ln["first"] for ln in lanes), default=agg.get("t_min") or 0),
@@ -497,6 +525,258 @@ def _extras(
         ).fetchall()
         out["context_complete"] = True
     return out
+
+
+MAX_RECAP_TERMS = 10
+MAX_RECAP_BURSTS = 3
+MAX_BURST_IDS = 25  # messages per burst embedded for the thread reader
+MAX_ARC_TERMS = 20
+
+
+def _ms(v: Any) -> int | None:
+    """ISO string / datetime -> epoch ms (UTC); None passes through."""
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return int(v)
+    d = v if isinstance(v, datetime) else datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+    d = d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    return int(d.timestamp() * 1000)
+
+
+def _explore(
+    store: db.Store,
+    *,
+    lane_ids: list[str],
+    since: str | None,
+    until: str | None,
+    source: str | None,
+    channel: str | None,
+    day_spec: dict[str, str] | None,
+    periods: list[dict[str, Any]],
+    sweeps: list[Path | str],
+) -> dict[str, Any]:
+    """Precomputed data for the linked panels, trimmed for the page. Each piece is optional: a
+    failure is reported in ``errors`` and the page simply leaves that panel out."""
+    from swarm_mcp.scope.analysis import recap, series
+
+    lane_index = {aid: i for i, aid in enumerate(lane_ids)}
+    day_one = day_spec["day_one"] if day_spec else False
+    out: dict[str, Any] = {"errors": []}
+    ids: list[str] = []
+
+    def guard(name, fn):
+        try:
+            return fn()
+        except Exception as e:  # noqa: BLE001 - one panel failing must not sink the page
+            out["errors"].append(f"{name}: {type(e).__name__}: {e}")
+            return None
+
+    def trim_recap(rc: dict[str, Any]) -> dict[str, Any]:
+        terms = [
+            {k: t.get(k) for k in ("term", "n", "n_before", "agents", "why", "first_id")}
+            for t in (rc.get("rising_terms") or [])[:MAX_RECAP_TERMS]
+        ]
+        bursts = []
+        for b in (rc.get("bursts") or [])[:MAX_RECAP_BURSTS]:
+            bids = (b.get("ids") or [])[:MAX_BURST_IDS]
+            ids.extend(bids)
+            bursts.append(
+                {
+                    "channel": b.get("channel"),
+                    "s": _ms(b.get("start")),
+                    "e": _ms(b.get("end")),
+                    "n": b.get("n"),
+                    "agents": b.get("agents") or [],
+                    "ids": bids,
+                }
+            )
+        ids.extend(t["first_id"] for t in terms if t.get("first_id"))
+        return {
+            "totals": rc.get("totals") or {},
+            "terms": terms,
+            "bursts": bursts,
+            "baseline": bool((rc.get("totals") or {}).get("baseline_agent_messages")),
+        }
+
+    # recaps: the whole render window, and every period on the page against the previous one
+    whole = guard(
+        "window_recap", lambda: recap.window_recap(store, since, until, source=source, channel=channel, day_one=day_one)
+    )
+    if whole:
+        out["recap_all"] = trim_recap(whole)
+    if periods:
+        wanted = {p["id"] for p in periods}
+        pr = (
+            guard("period_recaps", lambda: recap.period_recaps(store, source=source, channel=channel, day_one=day_one))
+            or []
+        )
+        out["recaps"] = {r["period_id"]: trim_recap(r.get("recap") or {}) for r in pr if r.get("period_id") in wanted}
+
+    # notable moments inside the render window
+    nm = (
+        guard(
+            "notable_moments",
+            lambda: recap.notable_moments(store, since=since, until=until, source=source, day_one=day_one),
+        )
+        or []
+    )
+    moments = []
+    for m in nm:
+        mids = (m.get("ids") or [])[:30]
+        ids.extend(mids)
+        moments.append(
+            {
+                "kind": m.get("kind"),
+                "t": _ms(m.get("t")),
+                "e": _ms(m.get("end")),
+                "agent": m.get("agent"),
+                "lane": lane_index.get(m.get("agent_id")),
+                "channel": m.get("channel"),
+                "term": m.get("term"),
+                "score": m.get("score"),
+                "why": m.get("why"),
+                "ids": mids,
+            }
+        )
+    out["moments"] = moments
+
+    # one arc per agent row
+    arcs: dict[str, Any] = {}
+    for aid in lane_ids:
+        arc = guard(
+            f"agent_arc {aid}",
+            lambda aid=aid: recap.agent_arc(store, aid, top_partners=5, source=source, day_one=day_one),
+        )
+        if not arc:
+            continue
+        terms = arc.get("terms") or []
+        keep = [t for t in terms if t.get("role") == "coined"][:MAX_ARC_TERMS] + [
+            t for t in terms if t.get("role") == "adopted"
+        ][:MAX_ARC_TERMS]
+        arcs[str(lane_index[aid])] = {
+            "bins": [[_ms(b.get("start")), b.get("messages", 0), b.get("actions", 0)] for b in arc.get("bins") or []],
+            "bin_days": arc.get("bin_days"),
+            "partners": [
+                {
+                    "id": p.get("period_id"),
+                    "label": p.get("label"),
+                    "s": _ms(p.get("start")),
+                    "e": _ms(p.get("end")),
+                    "out": p.get("mentions_out", 0),
+                    "in": p.get("mentions_in", 0),
+                    "to": [[x.get("name"), x.get("n")] for x in p.get("top_mentioned") or []],
+                    "from": [[x.get("name"), x.get("n")] for x in p.get("top_mentioned_by") or []],
+                    "js": p.get("change_js"),
+                }
+                for p in arc.get("partners") or []
+            ],
+            "terms": [
+                {k: t.get(k) for k in ("term", "role", "first_id", "n", "n_total", "agents", "adopters")}
+                | {"t": _ms(t.get("first_ts"))}
+                for t in keep
+            ],
+            "term_counts": arc.get("term_counts") or {},
+            "notes": arc.get("notes") or [],
+        }
+    out["arcs"] = arcs
+
+    # metric-over-time series (daily, Village days): store counts and rates, plus any sweeps
+    def trim_series(ms: dict[str, Any], label: str) -> dict[str, Any]:
+        return {
+            "label": label,
+            "unit": ms.get("unit"),
+            "kind": ms.get("kind"),
+            "by": ms.get("by"),
+            "window": ms.get("window"),
+            "starts": [_ms(x) for x in ms.get("starts") or []],
+            "groups": [
+                {"key": g.get("key"), "name": g.get("name"), "pts": [p[:5] + p[5:7] for p in g.get("points") or []]}
+                for g in ms.get("groups") or []
+            ],
+            "notes": ms.get("notes") or [],
+        }
+
+    specs = [
+        ("messages", "lab", "Agent messages per day, by lab"),
+        ("mention_rate", "lab", "Share of messages that name another agent, by lab"),
+        ("messages", "channel", "Agent messages per day, by channel"),
+    ]
+    sers = []
+    for metric, by, label in specs:
+        ms = guard(
+            f"metric_series {metric}/{by}",
+            lambda metric=metric, by=by: series.metric_series(
+                store,
+                metric=metric,
+                by=by,
+                top=6,
+                since=since,
+                until=until,
+                source=source,
+                channel=channel,
+                day_one=day_one,
+            ),
+        )
+        if ms and ms.get("groups"):
+            sers.append(trim_series(ms, label))
+    for sp in sweeps:
+        ms = guard(
+            f"sweep {sp}",
+            lambda sp=sp: series.metric_series(
+                store,
+                metric="sweep",
+                by="lab",
+                top=6,
+                since=since,
+                until=until,
+                source=source,
+                channel=channel,
+                sweep_path=sp,
+                day_one=day_one,
+            ),
+        )
+        if ms and ms.get("groups"):
+            sers.append(trim_series(ms, f"Share of records judged yes ({Path(sp).stem}), by lab"))
+    agent_rates = guard(
+        "metric_series mention_rate/agent",
+        lambda: series.metric_series(
+            store,
+            metric="mention_rate",
+            by="agent",
+            top=min(len(lane_ids), 24),
+            since=since,
+            until=until,
+            source=source,
+            channel=channel,
+            day_one=day_one,
+        ),
+    )
+    if agent_rates:
+        tr = trim_series(agent_rates, "Share of messages that name another agent")
+        out["agent_rates"] = {
+            "starts": tr["starts"],
+            "window": tr["window"],
+            "notes": tr["notes"],
+            "lanes": {str(lane_index[g["key"]]): g["pts"] for g in tr["groups"] if g["key"] in lane_index},
+        }
+    out["series"] = sers
+    out["ids"] = list(dict.fromkeys(i for i in ids if i))
+    if not out["errors"]:
+        del out["errors"]
+    return out
+
+
+def _messages_by_id(store: db.Store, ids: list[str], *, where: str, params: list[Any]) -> list[tuple[Any, ...]]:
+    """Rows (same shape as the lane rows) for the given evidence ids that fall inside the render's
+    filters (``where``), e.g. the busiest threads and the messages behind a notable moment."""
+    if not ids:
+        return []
+    return store.con.execute(
+        f"""SELECT evidence_id, author_id, channel, epoch_ms(ts) AS t, content, recipient_ids
+            FROM messages WHERE ({where}) AND list_contains(?, evidence_id) ORDER BY ts, evidence_id""",
+        params + [ids],
+    ).fetchall()
 
 
 def _periods(store: db.Store, *, source: str | None, t_lo: int, t_hi: int) -> list[dict[str, Any]]:
