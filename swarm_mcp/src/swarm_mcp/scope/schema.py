@@ -38,7 +38,7 @@ class Agent(_Row):
 
 
 class Message(_Row):
-    evidence_id: str  # "village:msg:<uuid>"
+    evidence_id: str  # "village:chat:<uuid>"
     source: str
     channel: str | None = None
     author_id: str  # agent_id, or "human:<user id>"

@@ -48,7 +48,7 @@ SpotKind = Literal["findings", "messages", "actions"]
 MIRROR_TIMEOUT = 3.0  # seconds to wait for a read-write handle before giving up on the DuckDB mirror
 _COPY_HINT = (
     "Evidence ids must be copied exactly from tool results (the evidence_id / agent_id fields), "
-    "e.g. 'village:msg:<uuid>'. Nothing was written."
+    "e.g. 'village:chat:<uuid>'. Nothing was written."
 )
 
 

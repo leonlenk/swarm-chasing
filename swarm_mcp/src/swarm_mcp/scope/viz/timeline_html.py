@@ -92,7 +92,7 @@ def _snippet(text: str | None, scrub: Scrubber, max_chars: int) -> str:
 
 
 def _id_prefix(ids: list[str]) -> str:
-    """Common evidence-id prefix up to the last ':' (e.g. 'village:msg:'), factored out of the page."""
+    """Common evidence-id prefix up to the last ':' (e.g. 'village:chat:'), factored out of the page."""
     if not ids:
         return ""
     p = os.path.commonprefix(ids)

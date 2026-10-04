@@ -44,6 +44,33 @@ writes the same entry into `.mcp.json`, which already exists.
 | `SWARMSCOPE_DB` | `<data dir>/swarmscope.duckdb` | the SwarmScope store (`ctx.store()`) |
 | `SWARMSCOPE_FINDINGS_DIR` | `<project root>/findings` | `findings.jsonl` (source of truth) and `audit.jsonl` |
 | `SWARM_<MODULE>_<KEY>` | | per-module settings via `ctx.setting("key")`, e.g. `SWARM_VILLAGE_DIR` |
+| `SWARM_GIT_DIR` | `<data>/*/repos/` | folder of bare git clones for the `git` and `subtasks` modules |
+| `SWARM_WIKI_DB` | `<data>/*/*.db` | a wiki database (collusion.wiki explorer schema) for the `wiki` and `subtasks` modules |
+
+### Modules in this repo
+
+| module | data | what it gives |
+|---|---|---|
+| `core` | none | module report, config, and `core_get_event` / `core_get_events` / `core_event_sources` for any event id |
+| `village` | `<data>/ai-village/*.jsonl.gz` | agents, goals, chat search and windows, per-agent activity |
+| `git` | bare clones in `<data>/<dataset>/repos/*.git` | repos and PR listings; PRs and commits as event ids |
+| `wiki` | `<data>/<name>/*.db` in the collusion.wiki explorer schema | corpus description with blind spots, search over what each revision added, pages, editor labels; revisions, pages and edit sessions as event ids |
+| `subtasks` | any *corpus* with an adapter in `subtasks/sources.py`: git repos (+ village chat if present) and wikis | work units (PRs...) grouped into subtasks by several methods, typed handoffs between actors, pair tracing |
+
+A repo for `git` is a bare clone with every PR head fetched, so closed and squash-merged PRs keep their commits:
+
+```bash
+git clone --bare https://github.com/ai-village-agents/rpg-game data/ai-village/repos/rpg-game.git
+git -C data/ai-village/repos/rpg-game.git fetch origin '+refs/pull/*/head:refs/pull/*/head'
+```
+
+The first `git`/`subtasks` call on a repo loads it (about 15 s for the RPG week's 458 PRs); later calls are instant.
+
+For collusion.wiki, save Simon Willison's SQLite build of the published export as
+`data/collusion-wiki/collusion-wiki.db` (https://static.simonwillison.net/static/cors-allow/2026/collusion-wiki.db).
+Subtask inference over its ~5,800 edit sessions takes about 10 s on first use.
+`examples/subtasks_demo.py` and `examples/wiki_demo.py` run the tools end to end over stdio;
+`examples/wiki_eval.py` scores the inferred subtasks against the publishers' page_family labels.
 
 ## A module in five lines
 
@@ -92,6 +119,8 @@ Every outcome is recorded with its reason, logged to stderr and shown by
 | `ctx.store(read_only=True)` | `with ctx.store() as s:` a short-lived `scope.db.Store` on the DuckDB store (`s.all/one/scalar`, `resolve_agent`, `author_filter`, `resolve_channel`). Open per call; never cache it, so the CLI and hooks can use the file too |
 | `ctx.store_path` | the store's path (check it in `requires()`) |
 | `ctx.scrub(text)` | masks emails as `[email]` (except allow-listed domains) and phone-like strings as `[phone]` |
+| `ctx.event_id(kind, local_id)` | builds an event id owned by this module (see below) |
+| `@ctx.event_source(kinds={...})` | registers the resolver that makes this module's event ids retrievable through `core_get_event` |
 | `ctx.log` | a logger that writes to stderr |
 | `ctx.registry` | records for all modules (used by `core`) |
 
@@ -99,6 +128,44 @@ Helpers in `swarm_mcp.toolkit` are `ToolInputError`, `untrusted`, `snippet`, `tr
 The SwarmScope core library (`swarm_mcp.scope`: `schema`, `db`, `evidence`,
 `adapters`, `ingest`, `findings`, `analysis`, `viz`) is plain Python, not a
 module; tool modules call into it.
+
+## Event ids and shared retrieval
+
+Every piece of evidence a tool returns carries an `event_id` of the form
+`<source>:<kind>:<local_id>`, e.g. `village:chat:16b4ab90-…`. `source` is the
+dataset (by default the module's `NAME`), `kind` the record type within it, and
+`local_id` the source's own id (it may contain `:`). Callers treat ids as opaque
+and pass them back: `core_get_event` returns the original record plus its
+surrounding context, and `core_get_events` fetches up to 50 at once. Derived
+results (search hits, subtasks, handoffs, claims) should cite event ids rather
+than copy text, so every finding can be expanded and checked.
+
+Records use one shape across sources, built with `swarm_mcp.events.event_record`:
+
+| key | meaning |
+|---|---|
+| `event_id`, `source`, `kind` | identity |
+| `time` | ISO UTC with `Z` |
+| `actor`, `actor_type` | who produced it (agent name, `human:<id>`...) and what kind of actor |
+| `location` | where it happened: room, channel, repo... |
+| `text` | the content, scrubbed and truncated (`truncated: true` when cut) |
+
+Modules may add keys after these. To make a module's ids retrievable:
+
+```python
+from swarm_mcp.events import EventNotFound, event_record
+
+@ctx.event_source(kinds={"thing": "one line on what a thing is and what its context is"})
+def resolve(kind, local_id, *, before, after, max_chars):
+    rec = lookup(local_id)                      # raise EventNotFound if missing
+    return {"event": event_record(ctx.event_id(kind, local_id), time=..., actor=..., text=...),
+            "before": [...], "after": [...],     # up to `before`/`after` neighbouring records
+            "context": "previous/next things in the same room"}
+```
+
+A source name can only be registered once, and a module whose `register()` fails
+has its sources removed along with its tools. `core_event_sources` lists what is
+loaded.
 
 Register everything through `ctx.*`. The raw `mcp` argument is passed only to
 satisfy the contract, and its API depends on the SDK version. `swarm_mcp/sdk.py`

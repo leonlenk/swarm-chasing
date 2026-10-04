@@ -24,7 +24,7 @@ from swarm_mcp.toolkit import ToolInputError
 REPO = Path(__file__).resolve().parents[2]
 AUDIT_HOOK = REPO / "hooks" / "audit_log.py"
 STOP_HOOK = REPO / "hooks" / "require_evidence.py"
-GOOD_IDS = ["village:msg:m0003", f"village:agent:{A_OPUS}", "village:event:e0001", "village:goal:g1"]
+GOOD_IDS = ["village:chat:m0003", f"village:agent:{A_OPUS}", "village:event:e0001", "village:goal:g1"]
 
 
 @pytest.fixture
@@ -55,20 +55,20 @@ def test_record_valid_finding_writes_jsonl_and_duckdb(app, fdir: Path, store_pat
         app,
         "findings_record",
         claim="GPT-5.2 endorsed GiveDirectly early in the charity goal.",
-        evidence_ids=["village:msg:m0003", "village:msg:m0003", f"village:agent:{A_OPUS}", "village:goal:g1"],
+        evidence_ids=["village:chat:m0003", "village:chat:m0003", f"village:agent:{A_OPUS}", "village:goal:g1"],
         confidence="high",
     )
     f = out["finding"]
     assert f["finding_id"].startswith("f-") and len(f["finding_id"]) == 14
-    assert f["evidence_ids"] == ["village:msg:m0003", f"village:agent:{A_OPUS}", "village:goal:g1"]  # deduped
+    assert f["evidence_ids"] == ["village:chat:m0003", f"village:agent:{A_OPUS}", "village:goal:g1"]  # deduped
     assert f["claim"]["untrusted"] is True and "GiveDirectly" in f["claim"]["content"]
     assert f["confidence"] == "high" and f["author"] == "claude" and f["status"] == "open"
     assert f["created_at"].endswith("Z")
     assert out["db_synced"] is True and out["notes"] == []
     ev = {e["evidence_id"]: e for e in out["evidence"]}
-    assert ev["village:msg:m0003"]["table"] == "messages"
-    assert ev["village:msg:m0003"]["content"]["untrusted"] is True
-    assert "GiveDirectly" in ev["village:msg:m0003"]["content"]["content"]
+    assert ev["village:chat:m0003"]["table"] == "messages"
+    assert ev["village:chat:m0003"]["content"]["untrusted"] is True
+    assert "GiveDirectly" in ev["village:chat:m0003"]["content"]["content"]
     assert ev[f"village:agent:{A_OPUS}"]["content"]["content"] == "Claude Opus 4.5"
 
     lines = _lines(fdir / "findings.jsonl")
@@ -84,7 +84,7 @@ def test_record_valid_finding_writes_jsonl_and_duckdb(app, fdir: Path, store_pat
 
 
 def test_record_long_message_snippet_is_capped(app):
-    out = call(app, "findings_record", claim="Opus wrote a long report.", evidence_ids=["village:msg:m0007"])
+    out = call(app, "findings_record", claim="Opus wrote a long report.", evidence_ids=["village:chat:m0007"])
     c = out["evidence"][0]["content"]
     assert c["truncated"] is True and len(c["content"]) < 260
 
@@ -94,11 +94,11 @@ def test_record_rejects_fake_id_and_writes_nothing(app, fdir: Path, store_path: 
         app,
         "findings_record",
         claim="Something happened.",
-        evidence_ids=["village:msg:m0003", "village:msg:does-not-exist"],
+        evidence_ids=["village:chat:m0003", "village:chat:does-not-exist"],
     )
-    assert "village:msg:does-not-exist" in err and "does not resolve" in err
+    assert "village:chat:does-not-exist" in err and "does not resolve" in err
     assert "copied exactly from tool results" in err
-    assert "village:msg:m0003'" not in err  # only bad ids are listed
+    assert "village:chat:m0003'" not in err  # only bad ids are listed
     assert not (fdir / "findings.jsonl").exists()
     with db.connect(store_path) as s:
         assert s.scalar("SELECT count(*) FROM findings") == 0
@@ -111,14 +111,14 @@ def test_record_rejects_malformed_and_empty(app, fdir: Path):
     assert "Unknown evidence kind" in err
     err = call_error(app, "findings_record", claim="x", evidence_ids=[])
     assert "at least one evidence id" in err
-    err = call_error(app, "findings_record", claim="   ", evidence_ids=["village:msg:m0003"])
+    err = call_error(app, "findings_record", claim="   ", evidence_ids=["village:chat:m0003"])
     assert "claim must not be empty" in err
     assert not (fdir / "findings.jsonl").exists()
 
 
 def test_record_finding_library_errors(store_path: Path, tmp_path: Path):
-    with pytest.raises(EvidenceError, match="village:msg:nope"):
-        lib.record_finding(tmp_path / "f", store_path, claim="c", evidence_ids=["village:msg:nope"])
+    with pytest.raises(EvidenceError, match="village:chat:nope"):
+        lib.record_finding(tmp_path / "f", store_path, claim="c", evidence_ids=["village:chat:nope"])
     with pytest.raises(ToolInputError, match="confidence"):
         lib.record_finding(tmp_path / "f", store_path, claim="c", evidence_ids=GOOD_IDS[:1], confidence="sure")
     with pytest.raises(db.StoreMissing):
@@ -141,8 +141,8 @@ def test_record_survives_locked_store(store_path: Path, tmp_path: Path, monkeypa
 
 
 def test_findings_list(app, fdir: Path):
-    a = call(app, "findings_record", claim="first", evidence_ids=["village:msg:m0001"])["finding"]
-    b = call(app, "findings_record", claim="second", evidence_ids=["village:msg:m0002"], confidence="low")["finding"]
+    a = call(app, "findings_record", claim="first", evidence_ids=["village:chat:m0001"])["finding"]
+    b = call(app, "findings_record", claim="second", evidence_ids=["village:chat:m0002"], confidence="low")["finding"]
     out = call(app, "findings_list")
     assert out["total_matching"] == 2 and out["returned"] == 2 and out["has_more"] is False
     assert [f["finding_id"] for f in out["findings"]] == [b["finding_id"], a["finding_id"]]  # newest first
@@ -162,7 +162,7 @@ def test_findings_list(app, fdir: Path):
     # appending after a hand edit without a trailing newline must not glue lines together
     with open(fdir / "findings.jsonl", "a") as fh:
         fh.write('{"note": "no newline"}')
-    call(app, "findings_record", claim="third", evidence_ids=["village:msg:m0004"])
+    call(app, "findings_record", claim="third", evidence_ids=["village:chat:m0004"])
     assert len(_lines(fdir / "findings.jsonl")) == 5
     out = call(app, "findings_list")
     assert out["total_matching"] == 3 and [e["line"] for e in out["parse_errors"]] == [3, 4]
@@ -185,12 +185,12 @@ def test_spotcheck_messages_is_deterministic(app):
     assert len(others) > 1
 
     gen = call(app, "findings_spotcheck", kind="messages", n=50, channel="rest")
-    assert gen["returned"] == 1 and gen["items"][0]["evidence_id"] == "village:msg:m0006" and gen["notes"]
+    assert gen["returned"] == 1 and gen["items"][0]["evidence_id"] == "village:chat:m0006" and gen["notes"]
     window = call(app, "findings_spotcheck", kind="messages", n=50, since="2026-01-05", until="2026-01-05")
     assert {i["evidence_id"] for i in window["items"]} == {
-        "village:msg:m0001",
-        "village:msg:m0002",
-        "village:msg:m0003",
+        "village:chat:m0001",
+        "village:chat:m0002",
+        "village:chat:m0003",
     }
     capped = call(app, "findings_spotcheck", kind="messages", n=200, max_chars=40)
     assert all(len(i["content"]["content"]) < 80 for i in capped["items"])
@@ -211,7 +211,7 @@ def test_spotcheck_library_stable_order(store_path: Path):
 def test_spotcheck_findings(app):
     for i in range(6):
         call(
-            app, "findings_record", claim=f"claim {i}", evidence_ids=[f"village:msg:m{100 + i:04d}", "village:goal:g3"]
+            app, "findings_record", claim=f"claim {i}", evidence_ids=[f"village:chat:m{100 + i:04d}", "village:goal:g3"]
         )
     a = call(app, "findings_spotcheck", kind="findings", n=3, seed=1)
     b = call(app, "findings_spotcheck", kind="findings", n=3, seed=1)
@@ -270,7 +270,7 @@ def test_check_findings_corrupt(store_path: Path, tmp_path: Path):
         tmp_path / "bad.jsonl",
         [
             _finding("f-good", GOOD_IDS),
-            _finding("f-fake", ["village:msg:m0001", "village:msg:does-not-exist", "nonsense"]),
+            _finding("f-fake", ["village:chat:m0001", "village:chat:does-not-exist", "nonsense"]),
             "this is not json",
             "",
             _finding("f-noev", []),
@@ -282,8 +282,8 @@ def test_check_findings_corrupt(store_path: Path, tmp_path: Path):
     by_id = {p["finding_id"]: p for p in res["problems"]}
     assert set(by_id) == {"f-fake", "f-noev"}
     assert by_id["f-fake"]["line"] == 2
-    assert set(by_id["f-fake"]["bad_evidence"]) == {"village:msg:does-not-exist", "nonsense"}
-    assert "does not resolve" in by_id["f-fake"]["bad_evidence"]["village:msg:does-not-exist"]
+    assert set(by_id["f-fake"]["bad_evidence"]) == {"village:chat:does-not-exist", "nonsense"}
+    assert "does not resolve" in by_id["f-fake"]["bad_evidence"]["village:chat:does-not-exist"]
     assert "Malformed" in by_id["f-fake"]["bad_evidence"]["nonsense"]
     assert by_id["f-noev"]["line"] == 5 and "evidence_ids" in by_id["f-noev"]["error"]
     assert [e["line"] for e in res["parse_errors"]] == [3, 6]
@@ -298,11 +298,11 @@ def test_cli_check_findings_exit_codes(store_path: Path, tmp_path: Path, capsys:
     assert e.value.code == 0
     assert json.loads(capsys.readouterr().out)["ok"] is True
 
-    bad = _write_findings(tmp_path / "bad.jsonl", [_finding("f-2", ["village:msg:does-not-exist"])])
+    bad = _write_findings(tmp_path / "bad.jsonl", [_finding("f-2", ["village:chat:does-not-exist"])])
     with pytest.raises(SystemExit) as e:
         main(["check-findings", "--findings", str(bad), "--db", str(store_path)])
     assert e.value.code == 1
-    assert "village:msg:does-not-exist" in json.loads(capsys.readouterr().out)["problems"][0]["bad_evidence"]
+    assert "village:chat:does-not-exist" in json.loads(capsys.readouterr().out)["problems"][0]["bad_evidence"]
 
 
 # --------------------------------------------------------------------------- hooks
@@ -394,10 +394,10 @@ def test_require_evidence_hook(tmp_path: Path, store_path: Path):
     assert r.returncode == 0, r.stderr
     assert r.stdout == ""
 
-    _write_findings(ffile, [_finding("f-ok", GOOD_IDS), _finding("f-fake", ["village:msg:does-not-exist"]), "oops"])
+    _write_findings(ffile, [_finding("f-ok", GOOD_IDS), _finding("f-fake", ["village:chat:does-not-exist"]), "oops"])
     r = _run(STOP_HOOK, stop, env)
     assert r.returncode == 2 and r.stdout == ""
-    assert "f-fake" in r.stderr and "line 2" in r.stderr and "village:msg:does-not-exist" in r.stderr
+    assert "f-fake" in r.stderr and "line 2" in r.stderr and "village:chat:does-not-exist" in r.stderr
     assert "line 3" in r.stderr and "corrupt" in r.stderr and "findings_record" in r.stderr
 
     r = _run(STOP_HOOK, stop_again, env)  # loop guard

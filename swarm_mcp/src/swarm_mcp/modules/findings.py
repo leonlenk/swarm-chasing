@@ -55,7 +55,7 @@ def register(mcp, ctx) -> None:
             list[str],
             Field(
                 description="Evidence ids supporting the claim, copied exactly from tool results "
-                "(e.g. 'village:msg:<uuid>', 'village:agent:<uuid>', 'village:event:<uuid>', "
+                "(e.g. 'village:chat:<uuid>', 'village:agent:<uuid>', 'village:event:<uuid>', "
                 "'village:goal:<uuid>'). Every id must resolve or nothing is recorded."
             ),
         ],

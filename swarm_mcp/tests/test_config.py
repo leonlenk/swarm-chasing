@@ -14,7 +14,16 @@ def _status(app) -> dict[str, str]:
     return {r.name: r.status for r in app.swarm_registry.records.values()}
 
 
-ALL = {"core": "loaded", "findings": "loaded", "scope": "loaded", "village": "loaded"}
+# git/subtasks/wiki need a repo or wiki db, which the synthetic fixtures do not have
+ALL = {
+    "core": "loaded",
+    "findings": "loaded",
+    "scope": "loaded",
+    "village": "loaded",
+    "git": "skipped",
+    "subtasks": "skipped",
+    "wiki": "skipped",
+}
 
 
 def test_default_loads_all(data_dir: Path):

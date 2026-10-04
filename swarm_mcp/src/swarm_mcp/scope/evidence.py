@@ -1,6 +1,6 @@
 """Evidence IDs: ``{source}:{kind}:{native_id}``.
 
-Examples: ``village:msg:<chat message uuid>``, ``village:agent:<agent uuid>``,
+Examples: ``village:chat:<chat message uuid>``, ``village:agent:<agent uuid>``,
 ``village:event:<event uuid>`` (actions), ``village:goal:<goal uuid>`` (periods).
 
 Every record row's primary key *is* its evidence id, so ``resolve`` is one
@@ -19,7 +19,7 @@ from swarm_mcp.toolkit import DEFAULT_MAX_CHARS, ToolInputError, untrusted
 
 # kind -> (table, primary key column)
 KIND_TABLES: dict[str, tuple[str, str]] = {
-    "msg": ("messages", "evidence_id"),
+    "chat": ("messages", "evidence_id"),
     "agent": ("agents", "agent_id"),
     "event": ("actions", "evidence_id"),
     "goal": ("periods", "evidence_id"),
@@ -62,7 +62,7 @@ def parse(evidence_id: str) -> EvidenceRef:
     if len(parts) != 3 or not all(parts) or not _PART.match(parts[0]) or not _PART.match(parts[1]):
         raise EvidenceError(
             f"Malformed evidence id {evidence_id!r}: expected '{{source}}:{{kind}}:{{native_id}}', "
-            "e.g. 'village:msg:<uuid>'. Copy ids exactly from tool results."
+            "e.g. 'village:chat:<uuid>'. Copy ids exactly from tool results."
         )
     if parts[1] not in KIND_TABLES:
         raise EvidenceError(

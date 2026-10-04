@@ -3,7 +3,7 @@
 `swarm-mcp` is a modular MCP server (stdio) for investigating multi-agent
 ("swarm") datasets. Its **SwarmScope** layer loads a dataset into one DuckDB
 store with a unified schema. Every record has an **evidence id**
-(`{source}:{kind}:{native_id}`, e.g. `village:msg:<uuid>`), and every tool
+(`{source}:{kind}:{native_id}`, e.g. `village:chat:<uuid>`), and every tool
 result carries those ids, so claims can be cited and checked against the raw
 records.
 

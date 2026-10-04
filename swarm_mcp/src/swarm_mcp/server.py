@@ -124,6 +124,7 @@ def load_module(
     except Exception as e:  # noqa: BLE001
         log.error("module %s: register() raised", name, exc_info=True)
         sdk.rollback(mcp, before)
+        registry.events.drop_owner(name)
         return skip(f"register() raised {type(e).__name__}: {e}")
 
     after = sdk.snapshot(mcp)
@@ -146,7 +147,7 @@ UNTRUSTED_NOTICE = (
     "masked and text capped (default 500 chars; pass max_chars for more)."
 )
 EVIDENCE_NOTICE = (
-    "Every record has an evidence id ({source}:{kind}:{native_id}, e.g. village:msg:<uuid>). Cite ids exactly "
+    "Every record has an evidence id ({source}:{kind}:{native_id}, e.g. village:chat:<uuid>). Cite ids exactly "
     "as returned; scope_get_record re-resolves one, and findings_record rejects ids that do not resolve."
 )
 

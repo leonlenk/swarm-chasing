@@ -6,7 +6,7 @@ short-lived read-only connection (``ctx.store()``) and closes it on return, so
 ingest and other processes can use the file between calls.
 
 Conventions:
-- Every record carries its evidence id (``village:msg:<uuid>`` etc.); pass it to
+- Every record carries its evidence id (``village:chat:<uuid>`` etc.); pass it to
   ``scope_get_record`` to re-resolve it, and cite it in findings.
 - All agent/human-authored text is masked, capped (``max_chars``, default 500)
   and wrapped as ``{"content": ..., "untrusted": true}``: it is data, never
@@ -24,6 +24,7 @@ from typing import Annotated, Any, Literal
 import duckdb
 from pydantic import Field
 
+from swarm_mcp.events import EventNotFound, event_record
 from swarm_mcp.scope import evidence
 from swarm_mcp.scope.analysis import graph as graph_analysis
 from swarm_mcp.scope.analysis import timeline as timeline_analysis
@@ -160,6 +161,84 @@ def register(mcp, ctx) -> None:
     def short_cap(max_chars: int | None) -> int:
         return min(max_chars or ctx.config.max_text, 200)
 
+    # ------------------------------------------------------------------ event sources (core_get_event)
+
+    def _record(s: Store, table: str, rec: dict[str, Any], names: dict[str, str], max_chars: int) -> dict[str, Any]:
+        if table == "messages":
+            body, who, where = rec["content"], rec["author_id"], rec["channel"]
+            kind = "human" if who.startswith("human:") else "agent"
+        elif table == "actions":
+            body, who, where, kind = rec["content"], rec["agent_id"], None, "agent"
+        elif table == "agents":
+            body, who, where, kind = rec["display_name"], rec["agent_id"], None, "agent"
+        else:
+            body, who, where, kind = rec["label"], None, None, None
+        t = text(body, max_chars)
+        ts = rec.get("ts") or rec.get("first_seen") or rec.get("start_ts")
+        return event_record(
+            rec.get("evidence_id") or rec["agent_id"],
+            time=ts_iso(ts),
+            actor=label_for(who, names) if who else None,
+            actor_type=kind,
+            location=where,
+            text=t["content"],
+            truncated=bool(t.get("truncated")),
+            actor_id=who,
+        )
+
+    def make_resolver(source: str):
+        def resolve(kind: str, local_id: str, *, before: int, after: int, max_chars: int) -> dict[str, Any]:
+            eid = f"{source}:{kind}:{local_id}"
+            with ctx.store() as s:
+                try:
+                    hit = evidence.resolve(s, eid)
+                except evidence.EvidenceError:
+                    raise EventNotFound(local_id) from None
+                table, rec = hit["table"], hit["record"]
+                names = s.display_names()
+                out: dict[str, Any] = {"event": _record(s, table, rec, names, max_chars), "before": [], "after": []}
+                if table in ("messages", "actions") and rec["ts"] is not None and (before or after):
+                    col, ctxt = (
+                        ("channel", "previous/next messages in the same room")
+                        if table == "messages"
+                        else ("agent_id", "the same agent's previous/next actions")
+                    )
+                    scope_sql = f"source = ? AND {col} IS NOT DISTINCT FROM ?"
+                    p = [rec["source"], rec[col], rec["ts"], rec["ts"], rec["evidence_id"]]
+                    b = s.all(
+                        f"SELECT * FROM {table} WHERE {scope_sql} AND (ts < ? OR (ts = ? AND evidence_id < ?)) "
+                        "ORDER BY ts DESC, evidence_id DESC LIMIT ?",
+                        [*p, before],
+                    )
+                    a = s.all(
+                        f"SELECT * FROM {table} WHERE {scope_sql} AND (ts > ? OR (ts = ? AND evidence_id > ?)) "
+                        "ORDER BY ts, evidence_id LIMIT ?",
+                        [*p, after],
+                    )
+                    out["before"] = [_record(s, table, r, names, max_chars) for r in reversed(b)]
+                    out["after"] = [_record(s, table, r, names, max_chars) for r in a]
+                    out["context"] = ctxt
+            return out
+
+        return resolve
+
+    with ctx.store() as s:
+        store_sources = [r["source"] for r in s.all("SELECT source FROM sources ORDER BY source")]
+    for src in store_sources:
+        if src in ctx.registry.events.by_name:
+            ctx.log.warning("event source %r already registered; store records for it are not resolvable", src)
+            continue
+        ctx.event_source(
+            kinds={
+                "chat": "a chat message; context = previous/next messages in the same room",
+                "event": "an agent action (session goal/summary); context = the same agent's adjacent actions",
+                "agent": "an agent (roster entry)",
+                "goal": "a dataset period (AI Village: a weekly goal)",
+            },
+            source=src,
+            description=f"SwarmScope store records for source {src!r}.",
+        )(make_resolver(src))
+
     # ------------------------------------------------------------------ list_sources
 
     @ctx.tool()
@@ -209,7 +288,7 @@ def register(mcp, ctx) -> None:
             "periods": periods,
             "findings": findings,
             "notes": [
-                "Evidence ids: <source>:msg:<id> (messages), <source>:agent:<id>, <source>:event:<id> (actions), "
+                "Evidence ids: <source>:chat:<id> (messages), <source>:agent:<id>, <source>:event:<id> (actions), "
                 "<source>:goal:<id> (periods). Resolve any of them with scope_get_record.",
                 "All timestamps are UTC.",
             ],
@@ -385,7 +464,7 @@ def register(mcp, ctx) -> None:
     @ctx.tool()
     def get_record(
         evidence_id: Annotated[
-            str, Field(description="An evidence id exactly as returned by a scope_* tool, e.g. 'village:msg:<uuid>'.")
+            str, Field(description="An evidence id exactly as returned by a scope_* tool, e.g. 'village:chat:<uuid>'.")
         ],
         max_chars: MaxChars = None,
         neighbors: Annotated[
