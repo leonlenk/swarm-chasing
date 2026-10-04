@@ -246,6 +246,7 @@ def register(mcp, ctx) -> None:
         'yes' verdicts with a Wilson 95% CI."""
         d = directory()
         if labels:
+            engine.check_labels(sweep_id, [lb.event_id for lb in labels], d)  # all or nothing
             recorded = [engine.label(sweep_id, lb.event_id, lb.correct, d, note=lb.note) for lb in labels]
             return {
                 "sweep_id": sweep_id,

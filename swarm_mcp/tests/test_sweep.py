@@ -426,6 +426,20 @@ def test_sweep_tools_end_to_end(sweep_app, monkeypatch):
     )
 
 
+def test_review_labels_are_all_or_nothing(sweep_app, monkeypatch):
+    """One unknown event id in a batch of labels: nothing is written, and the error names it."""
+    app, sweeps = sweep_app
+    monkeypatch.setattr(llm, "get_client", lambda config=None: FakeClient(judge))
+    sid = call(app, "sweep_run", rubric="Claims completion?", ids=ids(6), dry_run=False)["sweep_id"]
+    labels = [{"event_id": "synth:msg:r00", "correct": True}, {"event_id": "synth:msg:zz", "correct": False}]
+    err = call_error(app, "sweep_review", sweep_id=sid, labels=labels)
+    assert "No labels were recorded" in err and "'synth:msg:zz' is not part of sweep" in err
+    path = sweeps / f"{sid}.labels.jsonl"
+    assert not path.exists() or '"type": "label"' not in path.read_text()
+    done = call(app, "sweep_review", sweep_id=sid, labels=labels[:1])
+    assert done["recorded"] == 1 and done["precision"]["based_on_labels"] == 1
+
+
 def test_filters_need_a_registered_provider(sweep_app, monkeypatch):
     app, _ = sweep_app
     monkeypatch.setattr(llm, "get_client", lambda config=None: FakeClient(judge))

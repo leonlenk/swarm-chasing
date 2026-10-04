@@ -725,16 +725,34 @@ def pending_labels(sweep_id: str, directory: Path) -> list[dict[str, Any]]:
     return out
 
 
-def label(
-    sweep_id: str, event_id: str, correct: bool, directory: Path, note: str | None = None, labeler: str | None = None
-) -> dict[str, Any]:
-    """Record whether the sweep's verdict for ``event_id`` was correct (appends; the last label wins)."""
-    s = load(sweep_id, directory)
+def _labelable(s: Mapping[str, Any], sweep_id: str, event_id: str) -> dict[str, Any]:
+    """The verdict row for ``event_id`` in loaded sweep ``s``, or ``SweepError`` if it cannot be labeled."""
     row = next((v for v in s["verdicts"] if v["event_id"] == event_id), None)
     if row is None:
         raise SweepError(f"Event {event_id!r} is not part of sweep {sweep_id!r}.")
     if row.get("error"):
         raise SweepError(f"Event {event_id!r} has no verdict in sweep {sweep_id!r} (the call failed: {row['error']}).")
+    return row
+
+
+def check_labels(sweep_id: str, event_ids: Iterable[str], directory: Path) -> None:
+    """Raise one ``SweepError`` naming every event id that cannot be labeled, before any label is written."""
+    s = load(sweep_id, directory)
+    problems = []
+    for eid in event_ids:
+        try:
+            _labelable(s, sweep_id, eid)
+        except SweepError as e:
+            problems.append(str(e))
+    if problems:
+        raise SweepError("No labels were recorded. " + " ".join(problems))
+
+
+def label(
+    sweep_id: str, event_id: str, correct: bool, directory: Path, note: str | None = None, labeler: str | None = None
+) -> dict[str, Any]:
+    """Record whether the sweep's verdict for ``event_id`` was correct (appends; the last label wins)."""
+    row = _labelable(load(sweep_id, directory), sweep_id, event_id)
     rec = {"type": "label", "event_id": event_id, "correct": bool(correct), "verdict": row["verdict"],
            "labeled_at": _now()}  # fmt: skip
     if note:
