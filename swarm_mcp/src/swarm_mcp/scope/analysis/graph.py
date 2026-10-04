@@ -52,7 +52,9 @@ def comm_graph(
         raise ToolInputError("reply_window_minutes must be > 0")
     where, params = record_filters("messages", source=source, channel=channel, since=since, until=until)
     base = " AND ".join(where) or "TRUE"
-    no_humans = "" if include_humans else " AND src NOT LIKE 'human:%' AND dst NOT LIKE 'human:%'"
+    # agents are tested positively (listed in the agents table): human:, external: and unknown actors are not agents
+    agents_only = "(SELECT agent_id FROM agents)"
+    no_humans = "" if include_humans else f" AND src IN {agents_only} AND dst IN {agents_only}"
 
     considered = store.scalar(f"SELECT count(*) FROM messages WHERE {base}", params) or 0
     edges: list[dict[str, Any]] = []

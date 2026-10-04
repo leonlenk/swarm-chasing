@@ -49,8 +49,8 @@ def record_row(rec: StandardRecord, source: str, category: str) -> tuple[str, di
     if ts is None:
         quality = "missing"
     meta: dict[str, Any] = {"kind": rec.kind, "category": category, **(rec.meta or {})}
-    if rec.actor_type:
-        meta["actor_type"] = rec.actor_type
+    # always stored, so readers never guess "agent" for an unmatched (external:...) or missing actor
+    meta["actor_type"] = rec.actor_type or ("external" if rec.actor else UNKNOWN_ACTOR)
     if category == "message":
         return "messages", {
             "evidence_id": rec.event_id,

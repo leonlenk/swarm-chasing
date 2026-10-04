@@ -148,9 +148,9 @@ def render_timeline(
         agg = (
             store.one(
                 f"""SELECT count(*) AS total,
-                       count(*) FILTER (WHERE author_id LIKE 'human:%') AS humans,
+                       count(*) FILTER (WHERE author_id NOT IN (SELECT agent_id FROM agents)) AS humans,
                        count(*) FILTER (WHERE ts IS NULL) AS undated,
-                       count(DISTINCT author_id) FILTER (WHERE author_id NOT LIKE 'human:%') AS n_agents,
+                       count(DISTINCT author_id) FILTER (WHERE author_id IN (SELECT agent_id FROM agents)) AS n_agents,
                        epoch_ms(min(ts)) AS t_min, epoch_ms(max(ts)) AS t_max
                 FROM messages WHERE {base}""",
                 params,
@@ -161,7 +161,7 @@ def render_timeline(
 
         lane_rows = store.all(
             f"""SELECT author_id, count(*) AS n, epoch_ms(min(ts)) AS first_ms
-                FROM messages WHERE {dated} AND author_id NOT LIKE 'human:%'
+                FROM messages WHERE {dated} AND author_id IN (SELECT agent_id FROM agents)
                 GROUP BY 1 ORDER BY n DESC, author_id LIMIT ?""",
             params + [top],
         )

@@ -163,7 +163,9 @@ def _record(
         text, cut = truncate(text, max_chars)
     who = r["who"]
     meta = _meta(r["meta"])
-    actor_type = meta.get("actor_type") or ("human" if str(who).startswith("human:") else "agent")
+    actor_type = meta.get("actor_type") or (
+        "agent" if who in names else "human" if str(who).startswith("human:") else "external" if who else "unknown"
+    )
     extra = {"actor_id": who, ("msg_type" if r["tbl"] == "messages" else "action_kind"): r["subtype"]}
     return event_record(
         r["evidence_id"],

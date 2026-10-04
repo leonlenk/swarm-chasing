@@ -115,6 +115,30 @@ def test_ingest_mapped_refuses_to_replace_another_adapters_source(mapped_store, 
     assert res["counts"] == mapped_store["result"]["counts"]
 
 
+def test_unmatched_and_missing_actors_are_not_agents(tmp_path: Path):
+    """Regression: anything not 'human:...' counted as an agent, so external: and unknown actors became lanes,
+    graph nodes and actor_type 'agent'."""
+    from swarm_mcp.scope.analysis.graph import comm_graph
+    from swarm_mcp.scope.viz.timeline_html import render_timeline
+
+    root = make_sqlite_board(tmp_path / "board")
+    spec = json.loads(json.dumps(BOARD_SPEC))
+    spec["records"][0]["actor"] = {"field": "author_ref", "match": "name"}  # ids never match names: all external:
+    spec["records"][1].pop("actor")  # thread openings: no actor at all
+    mapping = tmp_path / "ext.json"
+    mapping.write_text(json.dumps({**spec, "source": "ext"}))
+    store = tmp_path / "s.duckdb"
+    ingest_mapped(mapping, root, store)
+    recs = list(store_records(store, {"source": "ext"}))
+    assert {r["actor_type"] for r in recs} == {"external", "unknown"}
+    with db.connect(store) as s:
+        assert s.scalar("SELECT count(*) FROM messages WHERE author_id LIKE 'external:%'") == 240
+        g = comm_graph(s, source="ext")
+        assert g["nodes"] == [] and g["edges"] == []
+    meta = render_timeline(store, tmp_path / "t.html", source="ext")
+    assert meta["agents"] == [] and meta["messages_in_lanes"] == 0 and meta["human_messages_excluded"] == 240
+
+
 def test_mapped_ids_resolve_through_the_store_event_source(mapped_store):
     app = build_server(config_for(mapped_store["data_dir"]))
     hits = call(app, "scope_search", query="the", source="board", limit=3)
