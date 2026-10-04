@@ -84,7 +84,8 @@ a:hover { text-decoration: underline; }
 .source-health span { font-size: 12px; color: var(--muted); display: block; }
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .topbar { display: flex; align-items: center; gap: 16px; padding: 14px 32px; border-bottom: 1px solid var(--line); background: var(--canvas); }
-.crumbs { display: flex; align-items: center; gap: 10px; font-size: 14.5px; color: var(--ink-2); min-width: 0; flex: 1; }
+.crumbs { display: flex; align-items: center; gap: 10px; font-size: 14.5px; color: var(--ink-2); min-width: 0; flex: 1 1 auto; overflow: hidden; }
+.crumbs > button, .crumbs > .sep { flex: none; white-space: nowrap; }
 .crumbs .sep { color: var(--faint); }
 .crumbs button:hover { color: var(--green-800); }
 .crumbs .current { color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -512,8 +513,10 @@ button.ref-available:hover { background: var(--green-100); }
 .bar { height: 8px; border-radius: 4px; background: var(--surface-3); overflow: hidden; }
 .bar i { display: block; height: 100%; background: var(--green-500); border-radius: 4px; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
-.menu-wrap { position: relative; }
-.source-btn { display: flex; align-items: center; gap: 10px; height: 42px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); font-size: 14px; max-width: 400px; }
+.menu-wrap { position: relative; flex: 0 1 400px; min-width: 170px; }
+.source-btn { display: flex; align-items: center; gap: 10px; height: 42px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); font-size: 14px; width: 100%; max-width: 400px; min-width: 0; }
+.source-btn svg, .source-btn .tag { flex: none; }
+.source-btn .lbl { flex: 1; min-width: 0; text-align: left; }
 .source-btn:hover { border-color: var(--line-2); }
 .source-btn .lbl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .menu { position: absolute; top: calc(100% + 8px); right: 0; width: 520px; max-height: 72vh; overflow-y: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow-lg); z-index: 30; padding: 8px; animation: drop .18s ease both; }
@@ -913,3 +916,23 @@ table.agree td { width: 46px; height: 26px; text-align: center; border-radius: 4
   .sessions-grid, .explorer-grid, .recap-grid { grid-template-columns: 1fr; }
   .subtask-detail { position: static; max-height: none; }
 }
+
+/* topbar at narrower widths: the source picker truncates, the record counter and search label give way first */
+@media (max-width: 1500px) { .context-header { display: none; } }
+.search-btn > span { white-space: nowrap; }
+@media (max-width: 1400px) { .search-btn { width: auto; } .search-btn > span:last-child { display: none; } }
+
+/* Connect */
+.connect-grid { align-items: start; }
+.connect-step { display: grid; grid-template-columns: 28px 1fr; gap: 12px; }
+.step-n { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: var(--green-100); color: var(--green-900); font-size: 12.5px; font-weight: 600; }
+.code-block { display: grid; gap: 4px; min-width: 0; }
+.code-wrap { position: relative; min-width: 0; }
+.code-wrap pre { margin: 0; padding: 12px 84px 12px 14px; border-radius: 10px; background: #18291f; color: #e7efe6; font-family: var(--mono); font-size: 12px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.code-copy { position: absolute; top: 8px; right: 8px; height: 28px; background: rgba(255,255,255,.08); color: #e7efe6; border-color: rgba(255,255,255,.18); }
+.code-copy:hover { background: rgba(255,255,255,.16); }
+.connect-links { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.connect-link { display: grid; gap: 4px; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); text-decoration: none !important; color: var(--ink); }
+.connect-link:hover { border-color: #bcd2bf; box-shadow: var(--shadow-sm); }
+.connect-link b { font-weight: 500; display: flex; gap: 6px; align-items: center; color: var(--green-900); }
+@media (max-width: 1280px) { .connect-grid { grid-template-columns: 1fr; } }

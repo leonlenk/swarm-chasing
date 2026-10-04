@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useRecall, type View } from './context';
 import {
-  IBranch, IChevron, IDb, IDoc, IExternal, IGrid, IHome, ILive, IMap, IPulse, ISearch, IShield, ITasks, IUpload, IUsers, IX, Logo,
+  IBranch, IChevron, IDb, IDoc, IExternal, IGrid, IHome, ILive, IMap, IPlug, IPulse, ISearch, IShield, ITasks, IUpload, IUsers, IX, Logo,
 } from './icons';
 import { copyText } from './scopeData';
 import { Record, RefLink, UnavailableRecord } from './Record';
@@ -26,6 +26,9 @@ const NAV: { group: string; items: { view: View; label: string; icon: ReactNode 
   { group: 'SwarmScope store', items: [
     { view: 'explorer', label: 'Explorer', icon: <IMap /> },
     { view: 'subtasks', label: 'Subtasks', icon: <IGrid /> },
+  ] },
+  { group: 'Integrate', items: [
+    { view: 'connect', label: 'Plugin & MCP', icon: <IPlug /> },
   ] },
 ];
 

@@ -4,8 +4,8 @@ import type { LiveSessionEntry, ScopeIndex } from '../model/scope';
 import type { AnalysisInput, WorldState } from '../engine/reconstruct';
 import type { Finding } from '../engine/monitors';
 
-export type View = 'overview' | 'propagation' | 'tasks' | 'agents' | 'incidents' | 'monitors' | 'evidence' | 'swarm' | 'sessions' | 'explorer' | 'subtasks';
-export const VIEWS: View[] = ['overview', 'propagation', 'tasks', 'agents', 'incidents', 'monitors', 'evidence', 'swarm', 'sessions', 'explorer', 'subtasks'];
+export type View = 'overview' | 'propagation' | 'tasks' | 'agents' | 'incidents' | 'monitors' | 'evidence' | 'swarm' | 'sessions' | 'explorer' | 'subtasks' | 'connect';
+export const VIEWS: View[] = ['overview', 'propagation', 'tasks', 'agents', 'incidents', 'monitors', 'evidence', 'swarm', 'sessions', 'explorer', 'subtasks', 'connect'];
 
 export interface SourceEntry {
   id: string;
