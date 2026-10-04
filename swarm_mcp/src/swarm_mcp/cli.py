@@ -198,6 +198,8 @@ def cmd_add(args: argparse.Namespace, config: Config) -> int:
     if not path.exists():
         raise CommandError(f"dataset not found: {path}")
     db = _db(args, config)
+    if db.is_dir():
+        raise CommandError(f"the store path {db} is a directory; pass a file, e.g. --db {db / 'swarmscope.duckdb'}")
     adapter = args.adapter
     if args.mapping and adapter not in ("auto", "mapped"):
         raise CommandError(f"--mapping only applies to mapped datasets (got --adapter {adapter})")
@@ -696,6 +698,12 @@ def main(argv: list[str] | None = None) -> None:
         code = args.fn(args, config)
     except (ValueError, FileNotFoundError, ConfigError) as e:  # ToolInputError and CommandError are ValueErrors
         print(f"error: {e}", file=sys.stderr)
+        code = 2
+    except Exception as e:  # a store DuckDB cannot open (locked by another process, not a DuckDB file): one line
+        if not type(e).__module__.lstrip("_").startswith("duckdb"):
+            raise
+        first = (str(e).strip().splitlines() or [""])[0]
+        print(f"error: the store could not be used: {type(e).__name__}: {first}", file=sys.stderr)
         code = 2
     sys.exit(code)
 

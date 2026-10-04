@@ -487,3 +487,20 @@ def test_add_hints_keep_db_name_and_replace(project: Path, capsys):
     make_repo(project / "data" / "repos")
     assert cli("add", "data/repos/rpg.git", *db) == 0
     assert f"swarm-mcp info --db '{store}'" in capsys.readouterr().out
+
+
+def test_add_reports_a_bad_store_path_in_one_line(project: Path, capsys):
+    """Regression: `add --db <a directory>` (or a file that is not a DuckDB store) ended in a raw duckdb
+    traceback: main() only caught ValueError, FileNotFoundError and ConfigError."""
+    make_nested_jsonl(project / "data" / "crew")
+    folder = project / "data" / "stores"
+    folder.mkdir()
+    assert cli("add", "data/crew", "--db", str(folder)) == 2
+    err = capsys.readouterr().err
+    assert f"the store path {folder} is a directory" in err and "Traceback" not in err
+    junk = project / "data" / "junk.duckdb"
+    junk.write_text("not a database\n")
+    assert cli("add", "data/crew", "--db", str(junk)) == 2
+    err = capsys.readouterr().err
+    assert "error: the store could not be used: IOException" in err and "not a valid DuckDB" in err
+    assert junk.read_text() == "not a database\n"
