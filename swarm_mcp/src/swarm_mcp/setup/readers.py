@@ -34,6 +34,7 @@ from typing import Any, Iterator
 DOC_SUFFIXES = {".md", ".markdown", ".txt", ".rst"}
 SKIP_DIRS = {"__pycache__", "node_modules", ".git", ".swarmscope", ".cache", ".venv"}
 JSON_OBJECT_MAX_BYTES = 64 * 1024 * 1024  # a .json *object* must be parsed whole; bigger ones are skipped
+# (decompressed bytes: a .json.gz is measured after decompression, not by its file size)
 MAX_FILES = 5000
 
 _csv_limit = sys.maxsize
@@ -170,7 +171,7 @@ class Table:
             self.raw_pos, self.eof = self.size, True
             return
         raw, fh = _open_binary(self.path, self.gz)
-        text = io.TextIOWrapper(fh, encoding="utf-8")
+        text = io.TextIOWrapper(fh, encoding="utf-8-sig")  # -sig: a leading BOM is not part of the JSON
         try:
             yield from self._iter_array(text, raw, byte_budget)
         finally:
@@ -353,9 +354,22 @@ def connect_sqlite(path: Path) -> sqlite3.Connection:
     return sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
 
 
+class JsonTooLarge(ValueError):
+    """A JSON object over JSON_OBJECT_MAX_BYTES (decompressed); it is not parsed."""
+
+
 def _load_json(path: Path, gz: bool) -> Any:
-    with gzip.open(path, "rt", encoding="utf-8") if gz else open(path, encoding="utf-8") as f:
-        return json.load(f)
+    """Parse a whole JSON file (a leading BOM is fine). Reads at most JSON_OBJECT_MAX_BYTES decompressed
+    bytes, so a small .json.gz that inflates past the cap raises ``JsonTooLarge`` instead of filling memory."""
+    raw, fh = _open_binary(path, gz)
+    try:
+        data = fh.read(JSON_OBJECT_MAX_BYTES + 1)
+    finally:
+        fh.close()
+        raw.close()
+    if len(data) > JSON_OBJECT_MAX_BYTES:
+        raise JsonTooLarge(f"{path.name} is larger than {JSON_OBJECT_MAX_BYTES // (1024 * 1024)} MB")
+    return json.loads(data.decode("utf-8-sig"))
 
 
 def _first_char(path: Path, gz: bool) -> str:
@@ -434,14 +448,17 @@ def _table_for(root: Path, path: Path) -> tuple[list[Table], dict[str, Any] | No
         except OSError as e:
             return [], {"path": rel, "reason": f"unreadable: {e}"}
         if first == "{":
-            if path.stat().st_size > JSON_OBJECT_MAX_BYTES:
-                return [], {
-                    "path": rel,
-                    "reason": "JSON object larger than 64 MB: convert it to JSONL (one record per line) to profile it",
-                }
+            too_big = {
+                "path": rel,
+                "reason": "JSON object larger than 64 MB: convert it to JSONL (one record per line) to profile it",
+            }
+            if not gz and path.stat().st_size > JSON_OBJECT_MAX_BYTES:
+                return [], too_big
             try:
-                obj = _load_json(path, gz)
-            except ValueError as e:
+                obj = _load_json(path, gz)  # a .json.gz is capped on its decompressed size here
+            except JsonTooLarge:
+                return [], too_big
+            except (ValueError, OSError, EOFError) as e:
                 return [], {"path": rel, "reason": f"invalid JSON: {e}"}
             keys = _array_keys(obj) if isinstance(obj, dict) else []
             if keys:
@@ -456,20 +473,26 @@ def discover(root: Path) -> tuple[list[Table], list[dict[str, Any]], list[dict[s
     root = Path(root)
     files: list[Path]
     base = root
+    tables: list[Table] = []
+    docs: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
     if root.is_file():
         files, base = [root], root.parent
     else:
         files = []
-        for dirpath, dirnames, filenames in os.walk(root):
+        real_root = root.resolve()
+        for dirpath, dirnames, filenames in os.walk(root):  # does not descend into symlinked folders
             dirnames[:] = sorted(d for d in dirnames if not d.startswith(".") and d not in SKIP_DIRS)
             for fn in sorted(filenames):
-                if not fn.startswith("."):
-                    files.append(Path(dirpath) / fn)
+                if fn.startswith("."):
+                    continue
+                f = Path(dirpath) / fn
+                if f.is_symlink() and not f.resolve().is_relative_to(real_root):
+                    skipped.append({"path": f.relative_to(root).as_posix(), "reason": "symlink to outside the dataset folder"})
+                    continue
+                files.append(f)
             if len(files) > MAX_FILES:
                 break
-    tables: list[Table] = []
-    docs: list[dict[str, Any]] = []
-    skipped: list[dict[str, Any]] = []
     for f in files[:MAX_FILES]:
         rel = f.relative_to(base).as_posix()
         if file_format(f) == "doc":
