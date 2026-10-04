@@ -1183,7 +1183,9 @@ def register(mcp, ctx) -> None:
                     "end": b["end"],
                     **({"day": b["day"]} if "day" in b else {}),
                     "messages": b["n"],
-                    "agents": b["agents"][:8],
+                    "agents": [n for n, k in zip(b["agents"], b["author_kinds"], strict=True) if k == "agent"][:8],
+                    "humans": [n for n, k in zip(b["agents"], b["author_kinds"], strict=True) if k == "human"][:8],
+                    "external": sum(k == "external" for k in b["author_kinds"]),
                     "first_snippet": text(snip.get(b["first_id"]), cap),
                     "evidence_ids": b["ids"][:10],
                 }
@@ -1197,7 +1199,8 @@ def register(mcp, ctx) -> None:
             "rising_terms are candidates: lowercased words and two-word phrases of agent messages, ranked by the "
             "z-score of a log-odds ratio against the baseline window with an informative Dirichlet prior "
             "(Monroe et al. 2008). Read them in context before claiming anything.",
-            "threads: runs of messages in one channel with gaps of at most 20 minutes, longest first; "
+            "threads: runs of messages in one channel with gaps of at most 20 minutes, longest first; agents and "
+            "humans list who wrote in it (most messages first, up to 8 each), external counts other authors; "
             "evidence_ids are the first 10 messages of each.",
         ]
         return res
