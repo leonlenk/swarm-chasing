@@ -1221,7 +1221,7 @@ def register(mcp, ctx) -> None:
         open. Kinds: burst (an agent's or channel's messages on one day far above its previous 14 active days,
         by z-score), silence (an active agent posts nothing for 3+ active days, then returns), partner_shift (an
         agent's mix of mention partners changes sharply between consecutive periods, by Jensen-Shannon distance)
-        and first_use (the first use of a term that other agents picked up within 14 days). Scores are not
+        and first_use (the first use of a coined word that other agents picked up within 14 days). Scores are not
         comparable across kinds, so the ranking interleaves them: the strongest of each kind first, then the
         second of each, and so on. Read a moment with core_get(evidence_ids[0], before=5, after=5)."""
         lo, hi = _window(since, until)
@@ -1271,8 +1271,10 @@ def register(mcp, ctx) -> None:
             "silence: >= 3 consecutive active days without a message after >= 3 messages per active day.",
             "partner_shift: Jensen-Shannon distance (0 = same mix, 1 = disjoint) between consecutive periods "
             "(village goals, else 14-day bins) with >= 20 mentions each.",
-            "first_use: a term first used after the first tenth of the data that >= 2 other agents used in >= 2 "
-            "messages within 14 days; ordinary words that first appear late can qualify, so read it in context.",
+            "first_use: a coined word (letters, hyphens allowed; not a common English word or agent name) that no "
+            "message used before, first used after the first tenth of the data, and used by >= 1 other agent within "
+            "14 days (once is enough); score = those other agents. A word in > 10% of agent messages in those 14 "
+            "days is a new topic and left out. Read it in context before calling it copied.",
             "reason and term are dataset-derived text (untrusted).",
         ]
         res: dict[str, Any] = {
