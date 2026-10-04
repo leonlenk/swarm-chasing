@@ -414,6 +414,11 @@ def _drop_invalid_draft(res: dict[str, Any], path: Path) -> None:
     else:
         msg = "the drafted mapping does not match the mapping schema (see the report), so it was not written"
     msg += " (to map it anyway, write a mapping by hand and pass --mapping FILE)"
+    from swarm_mcp.setup.readers import discover, skipped_note
+
+    note = skipped_note(discover(path)[2])  # e.g. the data is behind symlinks to outside the folder
+    if note:
+        msg += f"\n{note}"
     top = enclosing_repo(path)
     if top is not None and top.resolve() != path.resolve():
         msg += (

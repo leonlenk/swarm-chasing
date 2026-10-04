@@ -504,3 +504,24 @@ def test_add_reports_a_bad_store_path_in_one_line(project: Path, capsys):
     err = capsys.readouterr().err
     assert "error: the store could not be used: IOException" in err and "not a valid DuckDB" in err
     assert junk.read_text() == "not a database\n"
+
+
+def test_add_says_which_files_it_skipped(project: Path, tmp_path: Path, capsys):
+    """Regression: `add` skipped symlinks to outside the dataset folder silently (files and folders), so data
+    reached through a link just went missing."""
+    make_nested_jsonl(project / "data" / "crew")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "more.jsonl").write_text('{"id": 1, "text": "synthetic"}\n')
+    (project / "data" / "crew" / "more.jsonl").symlink_to(outside / "more.jsonl")
+    (project / "data" / "crew" / "linked").symlink_to(outside, target_is_directory=True)
+    note = "skipped 2 files or folders (not read): symlink to outside the dataset folder: linked/, more.jsonl"
+    assert cli("add", "data/crew", "--dry-run") == 0  # the draft's check
+    assert f"note: {note}" in capsys.readouterr().out
+    assert cli("add", "data/crew") == 0  # an existing mapping's check, before ingesting
+    assert f"note: {note}" in capsys.readouterr().out
+
+    (project / "data" / "links").mkdir()
+    (project / "data" / "links" / "more.jsonl").symlink_to(outside / "more.jsonl")
+    assert cli("add", "data/links", "--dry-run") == 2  # nothing left to map: the refusal says why
+    assert "symlink to outside the dataset folder: more.jsonl" in capsys.readouterr().err

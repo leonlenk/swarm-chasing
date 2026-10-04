@@ -388,13 +388,14 @@ class MappedAdapter:
         self._lookups: dict[str, dict[str, Any]] | None = None
         self._tables_cache: dict[str, list[readers.Table]] = {}
         self._discovered: list[readers.Table] | None = None  # one walk of the root for every 'from'
+        self.skipped_files: list[dict[str, Any]] = []  # what that walk skipped (outside symlinks, unreadable files)
         self._seen: dict[str, list[Any]] = {}
 
     # ------------------------------------------------------------------ tables
     def tables(self, pattern: str) -> list[readers.Table]:
         if pattern not in self._tables_cache:
             if self._discovered is None:
-                self._discovered = readers.discover(self.root)[0]
+                self._discovered, _, self.skipped_files = readers.discover(self.root)
             # copies: each pattern keeps its own read state (eof, raw_pos, bad_rows), as before the cache
             found = [copy.copy(t) for t in readers.match_tables(self._discovered, pattern)]
             if not found:
