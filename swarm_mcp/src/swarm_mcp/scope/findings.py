@@ -47,8 +47,8 @@ SpotKind = Literal["findings", "messages", "actions"]
 
 MIRROR_TIMEOUT = 3.0  # seconds to wait for a read-write handle before giving up on the DuckDB mirror
 _COPY_HINT = (
-    "Evidence ids must be copied exactly from tool results (the evidence_id / agent_id fields), "
-    "e.g. 'village:chat:<uuid>'. Nothing was written."
+    "Evidence ids must be copied exactly from tool results (the evidence_id / agent_id / artifact_id fields), "
+    "e.g. 'village:msg:<uuid>'. Nothing was written."
 )
 
 
@@ -150,6 +150,8 @@ def record_text(table: str, record: dict[str, Any]) -> str:
         return record.get("label") or ""
     if table == "agents":
         return record.get("display_name") or ""
+    if table == "artifacts":
+        return record.get("name") or ""
     return ""
 
 
@@ -166,6 +168,8 @@ def evidence_view(resolved: dict[str, Any]) -> dict[str, Any]:
         out.update(ts=_iso(rec.get("ts")), agent_id=rec.get("agent_id"), kind=rec.get("kind"))
     elif table == "periods":
         out.update(start_ts=_iso(rec.get("start_ts")), end_ts=_iso(rec.get("end_ts")), kind=rec.get("kind"))
+    elif table == "artifacts":
+        out.update(kind=rec.get("kind"))
     out["text"] = record_text(table, rec)
     return out
 

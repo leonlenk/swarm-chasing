@@ -65,9 +65,11 @@ def explain(result: dict) -> str:
         lines.append(f"- ... and {hidden} more (run `swarm-mcp info` for the list)")
     lines += [
         "How to fix:",
-        "  - For a finding with bad evidence ids: re-run findings_record with ids copied exactly from "
-        "tool results (e.g. the evidence_id field of search results; drop any id you cannot find), "
-        "then delete the old line from findings.jsonl.",
+        (
+            "  - For a finding with bad evidence ids: re-run findings_record with ids copied exactly from "
+            "tool results (e.g. the evidence_id field of search results; drop any id you cannot find), "
+            "then delete the old line from findings.jsonl."
+        ),
         "  - For a corrupt line: fix it so it is one JSON object per line, or remove it.",
         "  - Verify with: uv run --directory swarm_mcp swarm-mcp info",
     ]

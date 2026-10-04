@@ -76,7 +76,7 @@ def test_render_synthetic_store(store_path: Path, tmp_path: Path):
     assert [ln["name"] for ln in data["lanes"]] == res["agents"]
     assert sum(ln["shown"] for ln in data["lanes"]) == res["marks"] == len(data["t"]) == len(data["s"])
     ids = {data["idp"] + i for i in data["id"]}
-    assert "village:chat:m0002" in ids and "village:chat:m0001" not in ids  # m0001 is the human
+    assert "village:msg:m0002" in ids and "village:msg:m0001" not in ids  # m0001 is the human
     assert {c["name"] for c in data["channels"]} == {"general", "rest"}
     # lanes index a contiguous, time-sorted slice of the marks
     for ln in data["lanes"]:
@@ -93,7 +93,7 @@ def test_snippets_are_masked(store_path: Path, tmp_path: Path):
     assert "bob.smith@gmail.com" not in page
     assert "555 0134" not in page and "555-0199" not in page
     data = p.payload
-    m4 = data["s"][[data["idp"] + i for i in data["id"]].index("village:chat:m0004")]
+    m4 = data["s"][[data["idp"] + i for i in data["id"]].index("village:msg:m0004")]
     assert "[email]" in m4 and "[phone]" in m4
 
 
@@ -114,9 +114,9 @@ def test_script_injection_is_neutralised(store_path: Path, tmp_path: Path):
     try:
         con.execute(
             """INSERT INTO messages (evidence_id, source, channel, author_id, recipient_ids, ts, ts_quality, content, meta)
-               SELECT 'village:chat:evil', source, 'general', author_id, [], TIMESTAMP '2026-01-09 12:00:00',
+               SELECT 'village:msg:evil', source, 'general', author_id, [], TIMESTAMP '2026-01-09 12:00:00',
                       'exact', ?, '{}'
-               FROM messages WHERE evidence_id = 'village:chat:m0002'""",
+               FROM messages WHERE evidence_id = 'village:msg:m0002'""",
             [INJECTION + " & <b>bold</b>"],
         )
     finally:
@@ -128,7 +128,7 @@ def test_script_injection_is_neutralised(store_path: Path, tmp_path: Path):
     # exactly one closing tag per script element: nothing in the data closed a tag early
     assert page.count("</script>") == len(p.scripts) == 2
     data = p.payload  # and the text survives intact once JSON-decoded
-    evil = data["s"][[data["idp"] + i for i in data["id"]].index("village:chat:evil")]
+    evil = data["s"][[data["idp"] + i for i in data["id"]].index("village:msg:evil")]
     assert evil.startswith(INJECTION)
     assert res["marks"] == 260
 
@@ -150,7 +150,7 @@ def test_date_filter(store_path: Path, tmp_path: Path):
     until = parse_time("2026-01-06", end=True, field="until")  # bare date includes that day
     res, _, p = _render(store_path, tmp_path / "t.html", since=since, until=until)
     ids = sorted(p.payload["idp"] + i for i in p.payload["id"])
-    assert ids == ["village:chat:m0002", "village:chat:m0003", "village:chat:m0004"]
+    assert ids == ["village:msg:m0002", "village:msg:m0003", "village:msg:m0004"]
     assert res["total_messages_in_filter"] == 4  # + the human's m0001
     assert res["range"] == ["2026-01-05T13:00:00Z", "2026-01-06T09:00:00Z"]
 

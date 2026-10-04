@@ -22,8 +22,8 @@ def register(mcp, ctx) -> None:
     def info() -> dict[str, Any]:
         """Start here. What this server has loaded and what is in it:
         - modules: loaded ones with their tools/prompts, skipped ones with the reason;
-        - sources: every record source with its kinds and id format, plus (for the SwarmScope store) row counts,
-          message/action date ranges, channels and action kinds;
+        - sources: every ingested source with its adapter, row counts per table, message/action date ranges,
+          channels, action kinds, the id kinds present (with id format) and ingest_meta.notes (its blind spots);
         - findings: whether every recorded finding still cites ids that resolve;
         - config: data dir, store, findings/sweeps dirs, limits, privacy and LLM settings (no secrets)."""
         return server_info(ctx.config, ctx.registry)

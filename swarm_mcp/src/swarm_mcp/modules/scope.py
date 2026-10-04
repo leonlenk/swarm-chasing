@@ -165,63 +165,6 @@ def register(mcp, ctx) -> None:
     def short_cap(max_chars: int | None) -> int:
         return min(max_chars or ctx.config.max_text, 200)
 
-    # ------------------------------------------------------------------ list_sources
-
-    def list_sources() -> dict[str, Any]:
-        """What is in the SwarmScope store: per source the adapter, path, ingest time, row counts per table,
-        message and action time ranges, and channels with message counts (most active first). Also the total
-        number of periods and recorded findings. Start here."""
-        with ctx.store() as s:
-            out = []
-            for r in s.all("SELECT source, adapter, path, ingested_at, counts, meta FROM sources ORDER BY source"):
-                src = r["source"]
-                rows = {
-                    t: s.scalar(f"SELECT count(*) FROM {t} WHERE source = ?", [src])
-                    for t in ("agents", "messages", "actions", "periods", "artifacts", "touches")
-                    if s.has_table(t)
-                }
-                mt = s.one("SELECT min(ts) AS lo, max(ts) AS hi FROM messages WHERE source = ?", [src]) or {}
-                at = s.one("SELECT min(ts) AS lo, max(ts) AS hi FROM actions WHERE source = ?", [src]) or {}
-                channels = s.all(
-                    "SELECT coalesce(channel, '(none)') AS channel, count(*) AS messages FROM messages "
-                    "WHERE source = ? GROUP BY 1 ORDER BY 2 DESC, 1",
-                    [src],
-                )
-                kinds = s.all(
-                    "SELECT kind, count(*) AS n FROM actions WHERE source = ? GROUP BY 1 ORDER BY 2 DESC, 1", [src]
-                )
-                out.append(
-                    {
-                        "source": src,
-                        "adapter": r["adapter"],
-                        "path": r["path"],
-                        "ingested_at": ts_iso(r["ingested_at"]),
-                        "row_counts": rows,
-                        "ingest_counts": _meta(r["counts"]),
-                        "ingest_meta": _meta(r["meta"]),
-                        "messages_ts": {"min": ts_iso(mt.get("lo")), "max": ts_iso(mt.get("hi"))},
-                        "actions_ts": {"min": ts_iso(at.get("lo")), "max": ts_iso(at.get("hi"))},
-                        "action_kinds": {k["kind"]: k["n"] for k in kinds},
-                        "channels": channels,
-                    }
-                )
-            periods = s.scalar("SELECT count(*) FROM periods")
-            findings = s.scalar("SELECT count(*) FROM findings") if s.has_table("findings") else 0
-        return {
-            "store": str(ctx.store_path),
-            "source_count": len(out),
-            "sources": out,
-            "periods": periods,
-            "findings": findings,
-            "notes": [
-                "Evidence ids are <source>:<kind>:<id> with the same kinds for every source: msg (messages), "
-                "event (actions), agent, period (periods; AI Village goals keep 'goal'), artifact (files, pages...). "
-                "Resolve any of them with core_get.",
-                "ingest_meta.notes lists each source's blind spots; read them before drawing conclusions.",
-                "All timestamps are UTC.",
-            ],
-        }
-
     # ------------------------------------------------------------------ records (core_get)
 
     def get_record(
@@ -257,7 +200,14 @@ def register(mcp, ctx) -> None:
                 if before or after:
                     scope = "source = ? AND channel IS NOT DISTINCT FROM ?"
                     out["neighbors"] = _neighbors(
-                        s, "messages", scope, [rec["source"], rec["channel"]], rec, (before, after), cap, names,
+                        s,
+                        "messages",
+                        scope,
+                        [rec["source"], rec["channel"]],
+                        rec,
+                        (before, after),
+                        cap,
+                        names,
                         "author_id",
                     )
                     out["context"] = "previous/next messages in the same channel"
@@ -276,7 +226,14 @@ def register(mcp, ctx) -> None:
                 if before or after:
                     scope = "source = ? AND agent_id = ?"
                     out["neighbors"] = _neighbors(
-                        s, "actions", scope, [rec["source"], rec["agent_id"]], rec, (before, after), cap, names,
+                        s,
+                        "actions",
+                        scope,
+                        [rec["source"], rec["agent_id"]],
+                        rec,
+                        (before, after),
+                        cap,
+                        names,
                         "agent_id",
                     )
                     out["context"] = "the same agent's previous/next actions"
@@ -378,8 +335,9 @@ def register(mcp, ctx) -> None:
 
         return {"before": [item(r) for r in reversed(before)], "after": [item(r) for r in after]}
 
-    # core_get and core_info read the store through these (the scope module owns the store's tools)
-    ctx.registry.store_api = {"get_record": get_record, "list_sources": list_sources}
+    # core_get resolves ids through this (the scope module owns the store's tools); core_info reads the
+    # store's sources itself (info.store_sources) so it also works when this module is disabled
+    ctx.registry.store_api = {"get_record": get_record}
 
     # sweep_run(filters=...) reads records straight from the store (masked like every tool result)
     sweep.register_provider(
@@ -504,7 +462,9 @@ def register(mcp, ctx) -> None:
         ] = None,
         source: Source = None,
         since: Annotated[str | None, Field(description="Profile only: inclusive UTC start for counts/samples.")] = None,
-        until: Annotated[str | None, Field(description="Profile only: exclusive UTC end (bare date = whole day).")] = None,
+        until: Annotated[
+            str | None, Field(description="Profile only: exclusive UTC end (bare date = whole day).")
+        ] = None,
         sort_by: Annotated[
             Literal["joined", "messages", "name"],
             Field(description="List only: sort by message count (desc), join date, or name."),
@@ -762,7 +722,9 @@ def register(mcp, ctx) -> None:
             if 1 <= i <= len(rows):
                 return i, rows[i - 1]
             raise ToolInputError(f"period index {i} out of range 1..{len(rows)}; call scope_periods() to list them")
-        hits = [(i, r) for i, r in enumerate(rows, 1) if r["evidence_id"] == q or q.lower() in (r["label"] or "").lower()]
+        hits = [
+            (i, r) for i, r in enumerate(rows, 1) if r["evidence_id"] == q or q.lower() in (r["label"] or "").lower()
+        ]
         if len(hits) == 1:
             return hits[0]
         if not hits:
@@ -814,16 +776,18 @@ def register(mcp, ctx) -> None:
                     params,
                 )
                 actions = s.all(f"SELECT kind, count(*) n FROM actions WHERE {window} GROUP BY 1 ORDER BY 1", params)
-                humans = s.scalar(
-                    f"SELECT count(*) FROM messages WHERE {window} AND author_id LIKE 'human:%'", params
-                )
+                humans = s.scalar(f"SELECT count(*) FROM messages WHERE {window} AND author_id LIKE 'human:%'", params)
                 d = _period_dict(r, i)
                 d.update(
                     {
                         "meta": _meta(r["meta"]),
                         "human_messages": humans,
                         "top_speakers": [
-                            {"author": label_for(x["author_id"], names), "author_id": x["author_id"], "messages": x["n"]}
+                            {
+                                "author": label_for(x["author_id"], names),
+                                "author_id": x["author_id"],
+                                "messages": x["n"],
+                            }
                             for x in speakers
                         ],
                         "channels": [{"channel": x["channel"], "messages": x["n"]} for x in channels],
@@ -833,7 +797,11 @@ def register(mcp, ctx) -> None:
                             f"for centrality call scope_graph(since={d['start']!r}, until={d['end']!r}); "
                             "for the activity curve call scope_timeline with the same window",
                         ]
-                        + (["'type' is a keyword heuristic from the goal text, not a dataset field"] if "type" in d else []),
+                        + (
+                            ["'type' is a keyword heuristic from the goal text, not a dataset field"]
+                            if "type" in d
+                            else []
+                        ),
                     }
                 )
                 return d
