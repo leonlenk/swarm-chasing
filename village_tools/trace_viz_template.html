@@ -1,333 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Idea Spread Viewer</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
 <style>
-/* Layout: one 1240px analytical column on a cool neutral plane. Trace picker on top, then the trace's header, the swimlane (main view), the network scrubber, cumulative curves and quotes; every chart sits in a near-white card with its own table view. */
-:root{
-  --bg:#eef0f0; --surface:#fcfcfb; --surface-2:#f1f2f1;
-  --ink:#111314; --ink-2:#4e5053; --ink-3:#6f7175;
-  --grid:#e4e5e3; --axis:#c3c5c3; --line:rgba(17,19,20,.10); --line-strong:rgba(17,19,20,.24);
-  --band:rgba(17,19,20,.055); --stripe:rgba(17,19,20,.022);
-  /* lab identity (row chips, network nodes) */
-  --c-anthropic:#2a78d6; --c-openai:#eb6834; --c-google:#1baf7a; --c-other:#9a9891;
-  /* stance: diverging warm (pro) / grey midpoint / cool (contra); mutates = ink star */
-  --s-orig:#9c1238; --s-endo:#dc3d55; --s-act:#d99a1e; --s-neu:#8f8d86; --s-que:#8d86e8; --s-rej:#4f35b0; --s-mut:#111314;
-  --tip-bg:#ffffff; --shadow:0 8px 28px rgba(17,19,20,.14); --scrim:rgba(238,240,240,.86);
-  --font-display:"Bricolage Grotesque","Hanken Grotesk",system-ui,-apple-system,"Segoe UI",sans-serif;
-  --font-body:"Hanken Grotesk",system-ui,-apple-system,"Segoe UI",sans-serif;
-  --font-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  --radius:10px;
-}
-@media (prefers-color-scheme: dark){
-  :root:not([data-theme="light"]){
-    --bg:#0f1112; --surface:#1a1a19; --surface-2:#232423;
-    --ink:#f3f3f1; --ink-2:#c4c4bd; --ink-3:#97968f;
-    --grid:#2c2c2a; --axis:#41413e; --line:rgba(255,255,255,.10); --line-strong:rgba(255,255,255,.26);
-    --band:rgba(255,255,255,.07); --stripe:rgba(255,255,255,.025);
-    --c-anthropic:#3987e5; --c-openai:#d95926; --c-google:#199e70; --c-other:#7d7b75;
-    --s-orig:#e65494; --s-endo:#b02838; --s-act:#bc861e; --s-neu:#6b6a64; --s-que:#8c82e8; --s-rej:#6247d8; --s-mut:#f3f3f1;
-    --tip-bg:#242524; --shadow:0 8px 28px rgba(0,0,0,.5); --scrim:rgba(15,17,18,.86);
-    color-scheme:dark;
-  }
-}
-:root[data-theme="dark"]{
-  --bg:#0f1112; --surface:#1a1a19; --surface-2:#232423;
-  --ink:#f3f3f1; --ink-2:#c4c4bd; --ink-3:#97968f;
-  --grid:#2c2c2a; --axis:#41413e; --line:rgba(255,255,255,.10); --line-strong:rgba(255,255,255,.26);
-  --band:rgba(255,255,255,.07); --stripe:rgba(255,255,255,.025);
-  --c-anthropic:#3987e5; --c-openai:#d95926; --c-google:#199e70; --c-other:#7d7b75;
-  --s-orig:#e65494; --s-endo:#b02838; --s-act:#bc861e; --s-neu:#6b6a64; --s-que:#8c82e8; --s-rej:#6247d8; --s-mut:#f3f3f1;
-  --tip-bg:#242524; --shadow:0 8px 28px rgba(0,0,0,.5); --scrim:rgba(15,17,18,.86);
-  color-scheme:dark;
-}
-*,*::before,*::after{box-sizing:border-box}
-[hidden]{display:none!important}
-body{background:var(--bg);color:var(--ink);font:400 15px/1.6 var(--font-body);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
-main{max-width:1240px;margin-inline:auto;padding-inline:clamp(16px,3vw,32px);padding-block:40px 80px;display:flex;flex-direction:column;gap:56px}
-a{color:var(--ink);text-decoration-color:var(--axis);text-underline-offset:3px}
-:focus-visible{outline:2px solid var(--ink);outline-offset:2px;border-radius:4px}
-h1,h2,h3{margin:0;text-wrap:balance}
-h1{font:700 clamp(2.1rem,4.8vw,3.1rem)/1.04 var(--font-display);letter-spacing:-.025em}
-h2{font:650 clamp(1.5rem,2.8vw,1.95rem)/1.15 var(--font-display);letter-spacing:-.015em}
-h3{font:600 16.5px/1.35 var(--font-body)}
-p{margin:0}
-code,.mono-t{font-family:var(--font-mono);font-size:.88em}
-.eyebrow{font:500 12px/1.4 var(--font-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--ink-2)}
-.lede{font-size:17px;line-height:1.55;color:var(--ink-2);max-width:70ch}
-.prose{display:flex;flex-direction:column;gap:12px;max-width:72ch}
-
-/* masthead + picker */
-.mast{display:flex;flex-direction:column;gap:18px}
-.picker{display:flex;flex-direction:column;gap:12px}
-.pk-group{display:grid;grid-template-columns:92px minmax(0,1fr);gap:8px 12px;align-items:start}
-.pk-label{font:500 11.5px/1.2 var(--font-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);padding-top:9px}
-.pk-items{display:flex;flex-wrap:wrap;gap:6px}
-.pk-btn{font:500 13.5px/1.2 var(--font-body);color:var(--ink);background:var(--surface);border:1px solid var(--line-strong);border-radius:7px;padding:7px 11px;cursor:pointer;display:inline-flex;align-items:baseline;gap:8px;max-width:100%;text-align:left}
-.pk-btn small{font:400 11.5px/1 var(--font-mono);color:var(--ink-3)}
-.pk-btn:hover{background:var(--surface-2)}
-.pk-btn[aria-pressed="true"]{background:var(--ink);color:var(--surface);border-color:var(--ink)}
-.pk-btn[aria-pressed="true"] small{color:var(--surface);opacity:.75}
-.pk-btn.bad{border-style:dashed}
-.open-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;padding-top:12px;border-top:1px solid var(--line)}
-.open-row .note{flex:1 1 280px}
-.msg{font-size:13.5px;line-height:1.5;border-radius:8px;padding:10px 12px;border:1px solid var(--line-strong);background:var(--surface)}
-.msg b{font-weight:600}
-.msg ul{margin:6px 0 0;padding-left:1.2em;font:12.5px/1.5 var(--font-mono);color:var(--ink-2);max-height:260px;overflow:auto}
-.msg.err{border-color:var(--s-endo)}
-@media (max-width:520px){.pk-group{grid-template-columns:1fr}.pk-label{padding-top:0}}
-
-/* trace header */
-.thead{display:flex;flex-direction:column;gap:14px}
-.statement{margin:0;font:500 clamp(1.05rem,2vw,1.25rem)/1.45 var(--font-body);color:var(--ink);max-width:70ch;padding-left:14px;border-left:3px solid var(--line-strong)}
-.source{font-size:13.5px;line-height:1.5;color:var(--ink-2);max-width:90ch}
-.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px}
-.tile{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px 14px;display:flex;flex-direction:column-reverse;justify-content:flex-end;gap:4px;min-width:0}
-.tile-label{font-size:12.5px;line-height:1.35;color:var(--ink-2)}
-.tile-value{font:600 24px/1.1 var(--font-body);letter-spacing:-.01em;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
-details.issues{font-size:13px;color:var(--ink-2)}
-details.issues summary{cursor:pointer}
-details.issues ul{margin:6px 0 0;padding-left:1.2em;font:12px/1.5 var(--font-mono);max-height:200px;overflow:auto}
-
-/* cards */
-section{display:flex;flex-direction:column;gap:20px;scroll-margin-top:16px}
-.views{display:flex;flex-direction:column;gap:22px}
-.card{margin:0;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px 16px;display:flex;flex-direction:column;gap:12px;min-width:0}
-.card-head{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:10px 20px}
-.card-titles{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1 1 420px;max-width:80ch}
-.card-sub{font-size:13.5px;line-height:1.5;color:var(--ink-2)}
-.note{font-size:12.5px;line-height:1.5;color:var(--ink-3);max-width:90ch}
-.chart{position:relative;min-width:0;width:100%;overflow:hidden}
-.controls{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px}
-.ctl-label{font:500 11.5px/1 var(--font-mono);letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3)}
-.btn{font:500 13px/1.2 var(--font-body);color:var(--ink);background:var(--surface);border:1px solid var(--line-strong);border-radius:7px;padding:7px 11px;cursor:pointer}
-.btn:hover{background:var(--surface-2)}
-.btn[aria-pressed="true"]{background:var(--ink);color:var(--surface);border-color:var(--ink)}
-.btn:disabled{opacity:.4;cursor:default;background:var(--surface)}
-.btn-quiet{border-color:var(--line);color:var(--ink-2);font-size:12.5px;padding:6px 10px;white-space:nowrap}
-.seg{display:inline-flex}
-.seg .btn{border-radius:0;margin-left:-1px}
-.seg .btn:first-child{border-radius:7px 0 0 7px;margin-left:0}
-.seg .btn:last-child{border-radius:0 7px 7px 0}
-.chk{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--ink-2);cursor:pointer}
-.chk input{accent-color:var(--ink);margin:0}
-@media (max-width:560px){.card{padding:14px 12px 12px}}
-
-/* legends */
-.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12.5px;color:var(--ink-2);align-items:center}
-.lg-item{display:inline-flex;align-items:center;gap:6px}
-.lg-item svg{flex:none;overflow:visible}
-.lg-title{font:500 11px/1 var(--font-mono);letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
-.lg-sep{width:1px;height:14px;background:var(--line-strong)}
-
-/* svg */
-.viz{display:block}
-.viz text{font-family:var(--font-body)}
-.viz .tick{fill:var(--ink-3);font-size:11px;font-variant-numeric:tabular-nums}
-.viz .lbl{fill:var(--ink-2);font-size:12px}
-.viz .lbl-dim{fill:var(--ink-3);font-size:12px}
-.viz .ghead{fill:var(--ink-3);font:500 10.5px var(--font-mono);letter-spacing:.05em;text-transform:uppercase}
-.viz .ann{fill:var(--ink-2);font-size:11px}
-.viz .val{fill:var(--ink);font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
-.viz .ptitle{fill:var(--ink);font-size:12.5px;font-weight:600}
-.viz .halo{paint-order:stroke;stroke:var(--surface);stroke-width:3px;stroke-linejoin:round}
-.viz .node{cursor:default}
-.lane-wrap{position:relative}
-.overview-label{font:500 11px/1 var(--font-mono);letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
-.viz .selection{fill:var(--ink);fill-opacity:.08;stroke:var(--ink-2);stroke-width:1}
-.viz .handle{fill:var(--ink-2);fill-opacity:.5}
-
-/* detail panel */
-.detail{border-top:1px solid var(--line);padding-top:12px;display:flex;flex-direction:column;gap:8px;min-height:64px}
-.detail-empty{font-size:13px;color:var(--ink-3)}
-.d-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px}
-.d-agent{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:14.5px}
-.d-time{font:500 12.5px/1 var(--font-mono);color:var(--ink-2)}
-.d-snip{margin:0;font-size:14.5px;line-height:1.5;max-width:80ch;padding-left:12px;border-left:3px solid var(--k,var(--line-strong))}
-.d-meta{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12.5px;color:var(--ink-2)}
-.d-meta b{font-weight:600;color:var(--ink)}
-.d-close{margin-left:auto}
-.dot{display:inline-block;flex:none;width:9px;height:9px;border-radius:50%;background:var(--k)}
-
-/* network */
-.net-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px}
-.net-bar input[type=range]{flex:1 1 240px;min-width:0;accent-color:var(--ink)}
-.net-date{font:500 13px/1 var(--font-mono);min-width:96px;font-variant-numeric:tabular-nums}
-.counter{display:flex;flex-wrap:wrap;gap:6px}
-.cnt{background:var(--surface-2);border-radius:6px;padding:3px 9px;font-size:12.5px;color:var(--ink-2);display:inline-flex;align-items:center;gap:6px}
-.cnt b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}
-
-/* curves */
-.mini-note{font-size:12px;color:var(--ink-3)}
-
-/* quotes */
-.quotes{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:0}
-.quotes li{display:grid;grid-template-columns:118px minmax(0,1fr);gap:4px 16px;padding:12px 0;border-top:1px solid var(--line)}
-.quotes li:first-child{border-top:none}
-.q-date{font:500 12.5px/1.5 var(--font-mono);color:var(--ink-2);font-variant-numeric:tabular-nums}
-.q-body{display:flex;flex-direction:column;gap:5px;min-width:0}
-.q-text{margin:0;font-size:15.5px;line-height:1.5;max-width:75ch}
-.q-text::before{content:"\201C"}.q-text::after{content:"\201D"}
-.q-note{font-size:13px;color:var(--ink-3);max-width:80ch}
-.chip{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;line-height:1.2;padding:3px 9px 3px 7px;border-radius:999px;background:var(--surface-2);color:var(--ink);align-self:flex-start;max-width:100%}
-@media (max-width:520px){.quotes li{grid-template-columns:1fr}}
-
-/* tables */
-.tablewrap{overflow:auto;max-height:440px;border:1px solid var(--line);border-radius:8px}
-.tablewrap + .tablewrap{margin-top:4px}
-table{border-collapse:collapse;width:100%;font-size:12.5px;line-height:1.4}
-th,td{padding:6px 10px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
-th{position:sticky;top:0;background:var(--surface-2);font-weight:600;color:var(--ink-2);white-space:nowrap;z-index:1}
-td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
-td.wrap{min-width:240px}
-td.code{font-family:var(--font-mono);white-space:nowrap}
-tbody tr:last-child td{border-bottom:none}
-caption{caption-side:top;text-align:left;font-weight:600;font-size:12.5px;padding:8px 10px;color:var(--ink-2)}
-
-/* format + method */
-.fmt-table td:first-child{font-family:var(--font-mono);white-space:nowrap;color:var(--ink)}
-.method ul{margin:0;padding-left:1.2em;display:flex;flex-direction:column;gap:9px;max-width:80ch}
-pre.cmd,pre.schema{margin:0;overflow:auto;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:12px 14px;font:12.5px/1.5 var(--font-mono);color:var(--ink)}
-pre.schema{max-height:420px}
-footer{font-size:12.5px;color:var(--ink-3);border-top:1px solid var(--line);padding-top:14px}
-
-/* tooltip + drop overlay */
-#tip{position:fixed;left:0;top:0;z-index:50;pointer-events:none;max-width:min(360px,calc(100vw - 16px));background:var(--tip-bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);padding:10px 12px;font-size:12.5px;line-height:1.4}
-.tt-title{font-weight:600;font-size:13px}
-.tt-sub{color:var(--ink-2);margin-top:2px}
-.tt-row{display:flex;align-items:center;gap:8px;margin-top:5px}
-.tt-row strong{font-weight:650;font-variant-numeric:tabular-nums;white-space:nowrap}
-.tt-lab{color:var(--ink-2)}
-.tt-snip{margin-top:6px;color:var(--ink);border-left:2px solid var(--k,var(--line-strong));padding-left:8px}
-.tt-note{color:var(--ink-3);margin-top:6px}
-#drop{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;background:var(--scrim);pointer-events:none}
-#drop div{border:2px dashed var(--ink-2);border-radius:14px;padding:28px 36px;font:600 18px/1.3 var(--font-body);color:var(--ink);background:var(--surface)}
-.nojs{padding:12px 14px;border:1px solid var(--line);border-radius:8px;color:var(--ink-2);font-size:13.5px}
-@media (prefers-reduced-motion:no-preference){.viz .nd,.viz .ne{transition:opacity .15s}}
+/*__PAPER_CSS__*/
 </style>
-
-<main id="top">
-  <header class="mast">
+<style>
+/* Idea Spread Viewer: page-specific layout on top of the shared paper style (paper.css). */
+[hidden] { display: none !important; }
+.picker-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 14px 0 4px; font-size: var(--fs-ctl); }
+.picker-row .sel { flex: 1 1 320px; max-width: 640px; min-width: 0; }
+.picker-row .ctl-label { flex: none; }
+.picker-note { font-size: 13px; color: var(--ink-3); margin: 4px 0 0; max-width: 90ch; }
+.msg { font-size: 13.5px; line-height: 1.45; border: 1px solid var(--hair); border-left: 3px solid var(--ink-3); padding: 8px 11px; margin: 10px 0; max-width: 96ch; }
+.msg.err { border-left-color: var(--st-for); }
+.msg b { font-weight: 700; }
+.msg ul { margin: 6px 0 0; padding-left: 1.2em; font: 12px/1.5 var(--mono); color: var(--ink-2); max-height: 260px; overflow: auto; }
+details.issues { font-size: 13px; color: var(--ink-3); margin: 0 0 8px; }
+details.issues summary { cursor: pointer; }
+details.issues ul { margin: 6px 0 0; padding-left: 1.2em; font: 12px/1.5 var(--mono); max-height: 200px; overflow: auto; }
+blockquote.statement { margin: 4px 0 10px; padding: 0 0 0 12px; border-left: 2px solid var(--hair); font-style: italic; max-width: 72ch; font-size: 16.5px; }
+.source { font-size: 13.5px; color: var(--ink-2); max-width: 96ch; }
+.fig-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 16px; margin: 0 0 2px; }
+.fig-head .controls { margin: 0; }
+.fig-head .fig-tools { margin: 0; flex: 1 1 auto; }
+.fig-status { font-size: 12.5px; color: var(--ink-3); min-height: 1em; }
+.chart { position: relative; min-width: 0; width: 100%; }
+.lane-wrap { position: relative; }
+.zoomstrip { margin-top: 2px; }
+.ann-key { margin: 6px 0 0; padding: 0; list-style: none; font-size: 13px; line-height: 1.4; color: var(--ink-2); columns: 2 360px; column-gap: 28px; }
+.ann-key li { break-inside: avoid; display: flex; gap: 6px; margin: 0 0 3px; }
+.ann-key .num { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 17px; height: 17px; border: 0.8px solid var(--rule); border-radius: 50%; font-size: 11px; color: var(--ink); font-variant-numeric: tabular-nums; margin-top: 1px; }
+.ann-key .when { color: var(--ink-3); white-space: nowrap; }
+.detail { border-top: 1px solid var(--hair); margin-top: 8px; padding-top: 8px; min-height: 40px; font-size: 14px; }
+.detail-empty { font-size: 13px; color: var(--ink-3); font-style: italic; margin: 0; }
+.d-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.d-agent { font-weight: 700; }
+.d-time { color: var(--ink-2); font-size: 13px; font-variant-numeric: tabular-nums; }
+.d-close { margin-left: auto; }
+.d-snip { margin: 6px 0; padding-left: 10px; border-left: 2px solid var(--hair); max-width: 86ch; white-space: pre-wrap; word-break: break-word; }
+.d-meta { display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: 13px; color: var(--ink-3); }
+.d-meta b { font-weight: 400; color: var(--ink); }
+.d-meta code { font-size: 11.5px; }
+.tablewrap.data { margin-top: 8px; max-height: 440px; }
+table.booktabs td.quote { min-width: 260px; max-width: 70ch; }
+table.booktabs td.quote::before { content: "\201C"; }
+table.booktabs td.quote::after { content: "\201D"; }
+table.booktabs td.note { color: var(--ink-2); min-width: 160px; }
+table.booktabs .lab { color: var(--ink-3); }
+table.metrics td:first-child { max-width: 60ch; }
+table.fmt td:first-child { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+pre.cmd, pre.schema { margin: 6px 0; overflow: auto; border-top: 1px solid var(--hair); border-bottom: 1px solid var(--hair); padding: 8px 2px; font: 12.5px/1.5 var(--mono); color: var(--ink); background: var(--paper); }
+pre.schema { max-height: 420px; }
+.method ul { margin: 0; padding-left: 1.2em; max-width: 80ch; }
+.method li { margin: 0 0 6px; }
+#drop { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; background: rgba(255, 255, 255, 0.88); pointer-events: none; }
+#drop div { border: 1.5px dashed var(--ink-2); padding: 26px 34px; font-size: 18px; background: var(--paper); }
+@media (max-width: 560px) {
+  table.booktabs.stack, table.booktabs.stack tbody, table.booktabs.stack tr, table.booktabs.stack td { display: block; width: 100%; }
+  table.booktabs.stack thead { display: none; }
+  table.booktabs.stack caption { display: block; }
+  table.booktabs.stack tr { border-top: 0.75px solid var(--hair); padding: 6px 0; }
+  table.booktabs.stack tr:first-child { border-top: 1.5px solid var(--rule); }
+  table.booktabs.stack tbody tr:last-child { border-bottom: 1.5px solid var(--rule); }
+  table.booktabs.stack tbody tr:last-child td { border-bottom: 0; }
+  table.booktabs.stack td { padding: 1px 2px; min-width: 0; }
+  table.booktabs.stack td.when { color: var(--ink-3); font-size: 13px; }
+  .ann-key { columns: 1; }
+}
+</style>
+</head>
+<body>
+<main class="paper" id="top">
+  <header>
     <p class="eyebrow">Swarm trace viewer · format v0</p>
     <h1>Idea Spread Viewer</h1>
-    <p class="lede">Follow one belief, norm or coined term as it moves through a group of AI agents: who said it first, who was exposed, who took it up, who pushed back, and how long it stayed in memory. Pick a bundled trace or open your own trace file.</p>
-    <div class="card picker" id="picker-card">
-      <div class="picker" id="picker"></div>
-      <div class="open-row">
-        <label class="btn" for="file-input">Open trace file</label>
-        <input type="file" id="file-input" accept=".json,application/json" multiple hidden>
-        <p class="note">Or drop JSON files anywhere on the page. Opened files are checked against format v0 and stay in this tab only; nothing is uploaded or saved.</p>
-      </div>
-      <div id="load-msg" aria-live="polite"></div>
+    <div class="abstract"><p>Follow one belief, norm or coined term as it moves through a group of AI agents: who said it first, who was exposed, who took it up, who pushed back, and how long it stayed in saved memory. Pick a bundled trace or open your own trace file.</p></div>
+    <div class="picker-row">
+      <label class="ctl-label" for="trace-select">Trace</label>
+      <select class="sel" id="trace-select"></select>
+      <label class="btn" for="file-input" tabindex="0" id="open-btn">Open trace file…</label>
+      <input type="file" id="file-input" accept=".json,application/json" multiple hidden>
     </div>
+    <p class="picker-note">Or drop JSON files anywhere on the page. Opened files are checked against format v0 and stay in this tab only; nothing is uploaded or saved.</p>
+    <div id="load-msg" aria-live="polite"></div>
   </header>
 
   <section id="trace" aria-labelledby="t-title">
-    <div class="thead" id="thead">
-      <p class="eyebrow" id="t-eyebrow"></p>
-      <h2 id="t-title">No trace loaded</h2>
-      <p class="statement" id="t-statement" hidden></p>
-      <p class="source" id="t-source"></p>
-      <div class="tiles" id="t-tiles"></div>
-      <details class="issues" id="t-issues" hidden><summary id="t-issues-sum"></summary><ul id="t-issues-list"></ul></details>
-    </div>
+    <h2 id="t-title"><span class="secnum">1</span><span id="t-title-text">No trace loaded</span></h2>
+    <p class="byline" id="t-byline"></p>
+    <blockquote class="statement" id="t-statement" hidden></blockquote>
+    <p class="source" id="t-source"></p>
+    <details class="issues" id="t-issues" hidden><summary id="t-issues-sum"></summary><ul id="t-issues-list"></ul></details>
     <div class="msg err" id="t-errors" hidden></div>
 
-    <div class="views" id="views">
-      <figure class="card" id="card-lane">
-        <div class="card-head">
-          <div class="card-titles">
-            <h3>Who said what, and when</h3>
-            <p class="card-sub">One row per agent, grouped by role. Marker shape is the channel, colour is the stance. Grey shading behind a row is how often the agent was exposed that week, with a tick at the first exposure; the thin bar under a row is the time the idea sat in saved memory. Drag across the strip below the chart to zoom. Hover a marker for its text; click to pin it.</p>
+    <div id="views">
+      <div class="controls" id="axis-controls" hidden>
+        <span class="ctl"><span class="ctl-label">Time axis</span>
+          <span class="seg" role="group" aria-label="Time axis">
+            <button class="btn" type="button" data-axis="date" aria-pressed="true">Date (UTC)</button>
+            <button class="btn" type="button" data-axis="day" aria-pressed="false">Village day</button>
+          </span>
+        </span>
+      </div>
+
+      <div class="tablewrap" id="metrics-wrap"></div>
+
+      <figure class="fig" id="fig-curves">
+        <div class="fig-head">
+          <div class="fig-tools" id="tools-curves"></div>
+        </div>
+        <div class="fig-body"><div class="chart" id="curves-chart"></div></div>
+        <figcaption id="cap-curves"></figcaption>
+        <div class="controls"><button class="btn" type="button" data-table="tbl-curves" aria-expanded="false" aria-controls="tbl-curves">Show data</button><span class="fig-status" id="status-curves" aria-live="polite"></span></div>
+        <div class="tablewrap data" id="tbl-curves" hidden></div>
+      </figure>
+
+      <figure class="fig" id="fig-lane">
+        <div class="fig-head">
+          <div class="controls">
+            <span class="ctl"><span class="ctl-label">Rows</span>
+              <span class="seg" role="group" aria-label="Row order">
+                <button class="btn" type="button" data-order="role" aria-pressed="true">By role</button>
+                <button class="btn" type="button" data-order="first" aria-pressed="false">By first event</button>
+                <button class="btn" type="button" data-order="lab" aria-pressed="false">By lab</button>
+              </span>
+            </span>
+            <label class="chk"><input type="checkbox" id="show-edges" checked> Links</label>
+            <button class="btn" type="button" id="zoom-reset" disabled>Reset zoom</button>
           </div>
-          <button class="btn btn-quiet" type="button" data-table="tbl-lane" aria-expanded="false" aria-controls="tbl-lane">Show table</button>
+          <div class="fig-tools" id="tools-lane"></div>
         </div>
-        <div class="controls">
-          <span class="ctl-label">Order</span>
-          <div class="seg" role="group" aria-label="Row order">
-            <button class="btn" type="button" data-order="role" aria-pressed="true">Role</button>
-            <button class="btn" type="button" data-order="first" aria-pressed="false">First event</button>
-            <button class="btn" type="button" data-order="lab" aria-pressed="false">Lab</button>
-          </div>
-          <label class="chk"><input type="checkbox" id="show-edges" checked> Edges</label>
-          <button class="btn btn-quiet" type="button" id="zoom-reset" disabled>Reset zoom</button>
+        <div class="fig-body lane-wrap">
+          <div class="chart" id="lane-chart" tabindex="0" role="group" aria-label="Swimlane: one row per agent. Left and right arrow keys step through events; Escape clears the pinned event."></div>
+          <div class="chart zoomstrip" id="lane-overview" aria-label="Zoom strip: drag across it to zoom the swimlane"></div>
+          <ol class="ann-key" id="ann-key" hidden></ol>
         </div>
-        <div class="legend" id="lg-lane"></div>
-        <div class="legend" id="lg-lane2"></div>
-        <div class="lane-wrap">
-          <div class="chart" id="lane-chart" tabindex="0" role="group" aria-label="Swimlane timeline. Use left and right arrow keys to step through events; Escape clears the pinned event."></div>
-          <div class="chart" id="lane-overview" aria-label="Overview strip: drag to zoom the timeline"></div>
-        </div>
+        <figcaption id="cap-lane"></figcaption>
         <div class="detail" id="detail" aria-live="polite"></div>
-        <div class="tablewrap" id="tbl-lane" hidden></div>
+        <div class="controls"><button class="btn" type="button" data-table="tbl-lane" aria-expanded="false" aria-controls="tbl-lane">Show data</button><span class="fig-status" id="status-lane" aria-live="polite"></span></div>
+        <div class="tablewrap data" id="tbl-lane" hidden></div>
       </figure>
 
-      <figure class="card" id="card-net">
-        <div class="card-head">
-          <div class="card-titles">
-            <h3>Spread over time</h3>
-            <p class="card-sub" id="net-sub"></p>
-          </div>
-          <button class="btn btn-quiet" type="button" data-table="tbl-net" aria-expanded="false" aria-controls="tbl-net">Show table</button>
-        </div>
-        <div class="controls">
-          <span class="ctl-label">View</span>
-          <div class="seg" role="group" aria-label="Network view">
-            <button class="btn" type="button" data-net="flow" aria-pressed="true">Who passed it on</button>
-            <button class="btn" type="button" data-net="ring" aria-pressed="false">Who could have heard it</button>
-          </div>
-        </div>
-        <div class="net-bar">
-          <button class="btn" type="button" id="play" aria-label="Play">Play</button>
-          <input type="range" id="scrub" min="0" max="1000" step="1" value="1000" aria-label="Time">
-          <span class="net-date" id="net-date"></span>
-        </div>
-        <div class="counter" id="counter" aria-live="polite"></div>
-        <div class="legend" id="lg-net"></div>
-        <div class="chart" id="net-chart"></div>
-        <p class="note" id="net-note" hidden></p>
-        <div class="tablewrap" id="tbl-net" hidden></div>
-      </figure>
-
-      <figure class="card" id="card-curves">
-        <div class="card-head">
-          <div class="card-titles">
-            <h3>Running totals</h3>
-            <p class="card-sub">Agents reached so far, one panel per measure on a shared scale. Dashed lines are the trace’s annotations other than goals. Hover for the counts on a given day.</p>
-          </div>
-          <button class="btn btn-quiet" type="button" data-table="tbl-curves" aria-expanded="false" aria-controls="tbl-curves">Show table</button>
-        </div>
-        <div class="chart" id="curves-chart"></div>
-        <div class="tablewrap" id="tbl-curves" hidden></div>
-      </figure>
-
-      <figure class="card" id="card-quotes">
-        <div class="card-head">
-          <div class="card-titles">
-            <h3>How the wording changed</h3>
-            <p class="card-sub">Quotes picked by the trace’s producer, oldest first.</p>
-          </div>
-        </div>
-        <ol class="quotes" id="quotes"></ol>
-      </figure>
+      <div class="tablewrap" id="quotes-wrap"></div>
     </div>
   </section>
 
   <section id="format" aria-labelledby="h-format">
-    <h2 id="h-format">Trace format</h2>
+    <h2 id="h-format"><span class="secnum">2</span>Trace format</h2>
     <div class="prose">
-      <p>A trace is one JSON object about one idea in one group of agents. Times are ISO 8601 in UTC. Every list may be empty, and the viewer draws whatever is present: a coined-term trace with no exposures or edges still gets a timeline and curves. Agent names in every list must match <code>agents[].name</code> exactly. To bundle several traces, put them in one folder with an <code>index.json</code> that lists them.</p>
+      <p>A trace is one JSON object about one idea in one group of agents. Times are ISO 8601 in UTC. Every list may be empty, and the viewer draws whatever is present: a coined-term trace with no exposures or links still gets a timeline and running totals. Agent names in every list must match <code>agents[].name</code> exactly. To bundle several traces, put them in one folder with an <code>index.json</code> that lists them.</p>
       <p id="schema-line">The full rules are in the JSON Schema at <code>village_tools/swarmtrace/trace.schema.json</code>.</p>
     </div>
-    <div class="tablewrap" style="max-height:none">
-      <table class="fmt-table">
+    <div class="tablewrap">
+      <table class="booktabs fmt">
+        <caption id="fmt-caption">Table: Fields of a v0 trace.</caption>
         <thead><tr><th>Field</th><th>What to put there</th></tr></thead>
         <tbody>
           <tr><td>version, id, title</td><td class="wrap"><code>0</code>; a short id (used in the page address, for example <code>#hostility</code>); a display title.</td></tr>
           <tr><td>kind</td><td class="wrap"><code>belief</code>, <code>norm</code> or <code>term</code>. Used only to group the picker.</td></tr>
           <tr><td>statement, source</td><td class="wrap">The idea in one sentence, and where the data came from and how it was labelled.</td></tr>
           <tr><td>start, end</td><td class="wrap">The time window to draw.</td></tr>
-          <tr><td>agents[]</td><td class="wrap"><code>name</code>, <code>lab</code> (Anthropic, OpenAI and Google get their own colours; any other lab is grey), <code>group</code> (any label, or null), <code>joined</code> and <code>left</code> (or null).</td></tr>
+          <tr><td>agents[]</td><td class="wrap"><code>name</code>, <code>lab</code>, <code>group</code> (any label, or null), <code>joined</code> and <code>left</code> (or null).</td></tr>
           <tr><td>events[]</td><td class="wrap">One per labelled message or action: <code>id</code>, <code>t</code>, <code>agent</code>, <code>channel</code> (chat, memory, session, search, summary), <code>stance</code> (originates, endorses, acts_on, mentions, uses, questions, rejects, mutates), <code>conf</code> (1–3 or null), <code>room</code>, <code>snippet</code>.</td></tr>
           <tr><td>exposures[]</td><td class="wrap">When an agent could have seen the idea: <code>t</code>, <code>agent</code>, <code>source</code> (agent or null), <code>via</code> (room, named, search, other), <code>event</code> (the event id seen, or null).</td></tr>
           <tr><td>adoptions[]</td><td class="wrap">When each agent took the idea up: <code>agent</code>, <code>t</code>, <code>event</code>, <code>independent</code> (true if no prior exposure explains it), <code>sources</code> (agent names).</td></tr>
@@ -335,41 +171,46 @@ footer{font-size:12.5px;color:var(--ink-3);border-top:1px solid var(--line);padd
           <tr><td>persistence[]</td><td class="wrap">Intervals when the idea sat in an agent’s saved memory: <code>agent</code>, <code>start</code>, <code>end</code>, <code>where</code>.</td></tr>
           <tr><td>annotations[]</td><td class="wrap">Context markers: <code>t</code>, <code>label</code>, <code>kind</code> (goal, intervention, scaffolding, artifact, note).</td></tr>
           <tr><td>quotes[]</td><td class="wrap">Wording over time: <code>t</code>, <code>agent</code>, <code>text</code>, <code>note</code>.</td></tr>
-          <tr><td>metrics</td><td class="wrap">Any <code>{name: number or text}</code> pairs; each becomes a tile under the title.</td></tr>
+          <tr><td>metrics</td><td class="wrap">Any <code>{name: number or text}</code> pairs; they become the trace’s key-numbers table.</td></tr>
         </tbody>
       </table>
     </div>
     <div class="controls" id="schema-controls" hidden>
-      <button class="btn btn-quiet" type="button" id="schema-toggle" aria-expanded="false" aria-controls="schema-pre">Show JSON Schema</button>
-      <button class="btn btn-quiet" type="button" id="schema-copy">Copy schema</button>
-      <span class="note" id="schema-copied" aria-live="polite"></span>
+      <button class="btn" type="button" id="schema-toggle" aria-expanded="false" aria-controls="schema-pre">Show JSON Schema</button>
+      <button class="btn" type="button" id="schema-copy">Copy schema</button>
+      <span class="status" id="schema-copied" aria-live="polite"></span>
     </div>
     <pre class="schema" id="schema-pre" hidden></pre>
     <h3>Build the page</h3>
-    <pre class="cmd">python village_tools/build_trace_viz.py [TRACE_FILES_OR_DIRS ...] -o OUT.html</pre>
-    <p class="note">With no arguments it reads <code>out/sprint_idea/traces/</code> (its <code>index.json</code>, or every <code>*.json</code> there) and writes <code>out/sprint_idea/idea_spread.html</code>. Files that fail the check are reported and skipped.</p>
+    <pre class="cmd">python village_tools/build_trace_viz.py [TRACE_FILES_OR_DIRS ...] -o OUT.html [--day-one YYYY-MM-DD]</pre>
+    <p class="small muted">With no arguments it reads <code>out/sprint_idea/traces/</code> (its <code>index.json</code>, or every <code>*.json</code> there), writes <code>out/sprint_idea/idea_spread.html</code>, and numbers AI Village days from day 1 = 2 April 2025 (Pacific time). Files that fail the check are reported and skipped.</p>
   </section>
 
   <section id="method" class="method" aria-labelledby="h-method">
-    <h2 id="h-method">How to read it</h2>
+    <h2 id="h-method"><span class="secnum">3</span>How to read it</h2>
     <ul>
-      <li><b>Stance colours.</b> Warm means for the idea (dark red: originates, red: endorses, amber: acts on it). Grey is neutral (mentions, uses). Cool means against it (lavender: questions, violet: rejects). A star is a mutation, whatever the channel. Lab colours appear only in row chips and network nodes, never in stance marks.</li>
-      <li><b>Channel shapes.</b> Circle: chat. Square: saved memory. Triangle: session action. Diamond: history search. Ring: summary.</li>
-      <li><b>Labels are model-assigned.</b> Stances, exposures, adoptions and edges come from the trace producer, usually an LLM labeller with a confidence of 1 (weak) to 3 (clear). Confidence 1 and auto-detected events with no label (confidence null) are drawn faded. Read the snippets before trusting a pattern, and check the source note for hand-check rates.</li>
-      <li><b>States in the network.</b> Unexposed until the first exposure, or the first event when a trace has no exposure data. Adopted from the agent’s adoption (or an originates event). Rejecting while the agent’s latest for-or-against event is a rejection. If a trace lists no adoptions, the first warm event counts as adoption. The counters count agents who have ever reached each state.</li>
-      <li><b>Rows and exposure.</b> Rows are grouped by role: the trace’s own group label when it has one, otherwise derived (origin if the agent has an originates event, adopter if it adopted, exposed if it was exposed or active, other). Grey shading is the number of exposures in each week (Monday to Sunday, UTC); darker means more. The tick marks the first exposure.</li>
-      <li><b>Adoption rings.</b> A solid ring marks an adoption that follows exposure; a dashed ring marks one the producer judged independent.</li>
-      <li><b>Edges.</b> Solid: transmission. Dotted: phrase echo. Dashed: tip. Violet: correction. A small dot marks the receiving end. Edges are the producer’s claims, not observed causation.</li>
-      <li><b>Network views.</b> “Who passed it on” draws only agents with a link or an adoption, placed left to right by adoption time (or first link) and spread by a force layout with a fixed seed. “Who could have heard it” puts every agent on a ring by lab and first activity. Both draw the same way every time for the same trace. Times are UTC.</li>
+      <li><b>Stance</b> has three classes. For the idea (originates, endorses, acts on it, uses it): a filled vermillion marker. Neutral (mentions, questions): a filled light-grey marker. Against (rejects): a hollow blue marker. A star is a reworded version of the idea (mutates), whatever the channel. In black-and-white print these read as dark, light and hollow.</li>
+      <li><b>Channel</b> is the marker shape: circle, chat; square, saved memory; triangle, session action; diamond, history search; cross, summary.</li>
+      <li><b>Labels are model-assigned.</b> Stances, exposures, adoptions and links come from the trace producer, usually an LLM labeller with a confidence of 1 (weak) to 3 (clear). Confidence 1 and auto-detected events with no label (confidence null) are drawn faded. Read the snippets before trusting a pattern, and check the source note for hand-check rates.</li>
+      <li><b>Rows</b> are grouped by role: the trace’s own group label when it has one, otherwise derived (origin if the agent has an originates event, adopter if it adopted, exposed if it was exposed or active, other). The faint line through a row runs from when the agent joined to when it left.</li>
+      <li><b>Exposure and memory.</b> Grey shading behind a row is the number of exposures in each week (Monday to Sunday, UTC); darker means more. The short vertical tick marks the first exposure. The thin grey line along the bottom of a row is the time the idea sat in the agent’s saved memory.</li>
+      <li><b>Adoptions</b> are rings: solid when the adoption follows exposure, dashed when the producer judged it independent. If a trace lists no adoptions, the first “for” event counts as adoption in the running totals.</li>
+      <li><b>Links</b> are the producer’s claims, not observed causation. Solid grey: transmission. Dotted: phrase echo. Dashed: tip. Blue: correction. A small dot marks the receiving end. Hover a row to see only that agent’s links.</li>
+      <li><b>Annotations</b> other than goals are numbered markers; the key is listed under the swimlane. Goals are the light band along the top. Times are UTC; “Day N” is the Village day when the page was built with a day-one date.</li>
     </ul>
-    <footer id="footer">Built <span id="built"></span>. Bundled traces may include short excerpts from a gated research dataset; keep this page private.</footer>
+    <footer class="paper-foot" id="footer">Built <span id="built"></span>. Bundled traces may include short excerpts from a gated research dataset; keep this page private.</footer>
   </section>
 </main>
-<div id="tip" role="tooltip" hidden></div>
+<div class="tip" id="tip" role="tooltip" hidden></div>
 <div id="drop" hidden><div>Drop trace JSON to open it</div></div>
 
 <script type="application/json" id="trace-data">__TRACE_PAYLOAD__</script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script>
+/*__D3_JS__*/
+</script>
+<script>
+/*__PAPERKIT_JS__*/
+</script>
 <script>
 (function () {
 'use strict';
@@ -659,12 +500,13 @@ if (typeof window === 'undefined') { if (typeof module !== 'undefined') module.e
 const $ = s => document.querySelector(s);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 if (!window.d3) {
-  document.querySelectorAll('.chart').forEach(c => { c.textContent = 'The charts need d3 from cdnjs.cloudflare.com, which did not load. Reload the page to try again.'; c.className = 'nojs'; });
+  document.querySelectorAll('.chart').forEach(c => { c.textContent = 'The charts could not start: the inlined d3 library is missing. Rebuild the page with build_trace_viz.py.'; c.className = 'nojs'; });
   return;
 }
+const PK = window.PaperKit || null;
 
 /* ---------- payload + store ---------- */
-let PAYLOAD = { traces: [], schema: null, generated: null };
+let PAYLOAD = { traces: [], schema: null, generated: null, days: null };
 try {
   const p = JSON.parse(document.getElementById('trace-data').textContent);
   if (p && Array.isArray(p.traces)) PAYLOAD = p;
@@ -691,36 +533,56 @@ const Store = {
 };
 PAYLOAD.traces.forEach(t => Store.add(t, 'bundled'));
 
-const state = { token: null, order: 'role', netView: 'flow', showEdges: true, zoom: null, pin: null, cursor: null, playing: false };
+/* Village days: present only when the builder was given a day-one date (AI Village: day 1 = 2025-04-02). */
+const DAYS = PAYLOAD.days && PAYLOAD.days.day_one && PK && PK.days ? PK.days(PAYLOAD.days.day_one, PAYLOAD.days.tz) : null;
+const state = { token: null, order: 'role', showEdges: true, zoom: null, pin: null, cursor: null, axis: 'date' };
 
 /* ---------- formatting ---------- */
 const fmtDate = d3.utcFormat('%-d %b %Y');
 const fmtDT = d3.utcFormat('%-d %b %Y, %H:%M UTC');
-const fmtShort = d3.utcFormat('%-d %b');
 const int = d3.format(',');
 const trunc = (s, n) => s.length > n ? s.slice(0, Math.max(1, n - 1)) + '…' : s;
 const fmtMetric = v => typeof v === 'number' ? (Number.isInteger(v) ? int(v) : (Math.abs(v) < 1 ? d3.format('.2~f')(v) : d3.format(',.1~f')(v))) : String(v);
-const STANCE_LABEL = { originates: 'Originates', endorses: 'Endorses', acts_on: 'Acts on it', mentions: 'Mentions', uses: 'Uses', questions: 'Questions', rejects: 'Rejects', mutates: 'Mutates' };
-const CHANNEL_LABEL = { chat: 'Chat', memory: 'Memory', session: 'Session action', search: 'History search', summary: 'Summary' };
+const dayOf = t => DAYS ? DAYS.of(t) : null;
+const withDay = (s, t) => DAYS ? s + ' (Day ' + DAYS.of(t) + ')' : s;
+const fmtWhen = t => withDay(fmtDate(new Date(t)), t);
+const fmtWhenT = t => withDay(fmtDT(new Date(t)), t);
+function daySpan(t0, t1) { if (!DAYS) return ''; const a = DAYS.of(t0), b = DAYS.of(t1); return a === b ? 'Day ' + a : 'Days ' + a + '–' + b; }
+function spanText(t0, t1) { return fmtDate(new Date(t0)) + ' – ' + fmtDate(new Date(t1)) + (DAYS ? ' (' + daySpan(t0, t1) + ')' : ''); }
+const STANCE_LABEL = { originates: 'Originates', endorses: 'Endorses', acts_on: 'Acts on it', mentions: 'Mentions', uses: 'Uses', questions: 'Questions', rejects: 'Rejects', mutates: 'Rewords (mutates)' };
+const CHANNEL_LABEL = { chat: 'Chat', memory: 'Saved memory', session: 'Session action', search: 'History search', summary: 'Summary' };
 const EDGE_LABEL = { transmission: 'Transmission', echo: 'Echo', tip: 'Tip', correction: 'Correction' };
-const VIA_LABEL = { room: 'in the room', named: 'named directly', search: 'via search', other: 'other' };
 const STATE_LABEL = ['Not yet exposed', 'Exposed', 'Adopted', 'Rejecting'];
+/* Stance in three classes (for / neutral / against); mutates keeps its own star. */
+const stanceClass = s => s === 'rejects' ? 'against' : (s === 'mentions' || s === 'questions') ? 'neutral' : s === 'mutates' ? 'mutates' : 'for';
+const CLASS_LABEL = { for: 'For the idea', neutral: 'Neutral', against: 'Against', mutates: 'Reworded' };
 
-/* ---------- theme colours ---------- */
-let C = {};
+/* ---------- colours (paper.css tokens) ---------- */
+let C = {}, SERIF = 'serif';
 function readColors() {
   const cs = getComputedStyle(document.documentElement);
   const v = n => cs.getPropertyValue(n).trim();
-  C = {
-    surface: v('--surface'), surface2: v('--surface-2'), ink: v('--ink'), ink2: v('--ink-2'), ink3: v('--ink-3'),
-    grid: v('--grid'), axis: v('--axis'), band: v('--band'), stripe: v('--stripe'),
-    lab: { anthropic: v('--c-anthropic'), openai: v('--c-openai'), google: v('--c-google'), other: v('--c-other') },
-    s: { originates: v('--s-orig'), endorses: v('--s-endo'), acts_on: v('--s-act'), mentions: v('--s-neu'), uses: v('--s-neu'),
-      questions: v('--s-que'), rejects: v('--s-rej'), mutates: v('--s-mut') }
-  };
+  C = { paper: v('--paper'), ink: v('--ink'), ink2: v('--ink-2'), ink3: v('--ink-3'), rule: v('--rule'), hair: v('--hair'), wash: v('--wash'), wash2: v('--wash-2'),
+    stFor: v('--st-for'), stNeutral: v('--st-neutral'), stAgainst: v('--st-against') };
+  SERIF = v('--serif') || 'serif';
 }
-const labColor = a => C.lab[a.labKey] || C.lab.other;
-const labVar = key => 'var(--c-' + key + ')';
+const classFill = k => k === 'for' ? C.stFor : k === 'neutral' ? C.stNeutral : k === 'against' ? C.paper : C.ink;
+const classStroke = k => k === 'against' ? C.stAgainst : C.paper;
+
+/* ---------- text measurement (layout must match the exported SVG) ---------- */
+const mctx = document.createElement('canvas').getContext('2d');
+function textW(s, px, weight) { mctx.font = (weight || 400) + ' ' + px + 'px ' + SERIF; return mctx.measureText(s).width; }
+function fitText(s, px, maxW, weight) {
+  if (textW(s, px, weight) <= maxW) return s;
+  while (s.length > 1 && textW(s + '…', px, weight) > maxW) s = s.slice(0, -1);
+  return s + '…';
+}
+/* Figure type sizes in CSS px. On screen they follow paper.css; the paper export lays the figure out at
+   528 px = 5.5 in, so 12.5 px prints at 9.4 pt and 11.5 px at 8.6 pt (never below 7 pt). */
+function sizes(preset, W) {
+  if (preset === 'paper') return { fig: 11.5, tick: 10.5, small: 10, paper: true };
+  return W < 560 ? { fig: 12, tick: 11, small: 10.5 } : { fig: 13, tick: 12, small: 11 };
+}
 
 /* ---------- tooltip ---------- */
 const tipEl = $('#tip');
@@ -728,13 +590,14 @@ const Tip = {
   open() { tipEl.replaceChildren(); return this; },
   title(t) { tipEl.append(el('div', 'tt-title', t)); return this; },
   sub(t) { tipEl.append(el('div', 'tt-sub', t)); return this; },
-  row(value, label, color) {
+  row(value, label, key) {
     const r = el('div', 'tt-row');
-    const k = el('span', 'dot'); if (color) k.style.setProperty('--k', color); else k.style.visibility = 'hidden';
-    r.append(k, el('strong', null, value), el('span', 'tt-lab', label));
+    if (key) r.append(key);
+    r.append(el('strong', null, value), el('span', 'tt-sub', label));
     tipEl.append(r); return this;
   },
-  snip(t, color) { const d = el('div', 'tt-snip', t); if (color) d.style.setProperty('--k', color); tipEl.append(d); return this; },
+  quote(t) { tipEl.append(el('div', 'tt-quote', t)); return this; },
+  id(t) { tipEl.append(el('div', 'tt-id', t)); return this; },
   note(t) { tipEl.append(el('div', 'tt-note', t)); return this; },
   show(x, y) {
     tipEl.hidden = false;
@@ -749,50 +612,135 @@ const Tip = {
 };
 window.addEventListener('scroll', () => Tip.hide(), { passive: true });
 
-/* ---------- shared svg helpers ---------- */
+/* ---------- svg helpers ---------- */
+const SVGNS = 'http://www.w3.org/2000/svg';
 function newSvg(box, W, H) {
   return d3.select(box).html('').append('svg').attr('class', 'viz').attr('width', W).attr('height', H).attr('viewBox', '0 0 ' + W + ' ' + H);
 }
-const SYM = { chat: d3.symbolCircle, memory: d3.symbolSquare, session: d3.symbolTriangle, search: d3.symbolDiamond, summary: d3.symbolCircle };
-function markerPath(e, size) { return d3.symbol(e.stance === 'mutates' ? d3.symbolStar : SYM[e.channel], e.stance === 'mutates' ? size * 1.5 : size)(); }
+function txt(g, x, y, s, px, opt) {
+  opt = opt || {};
+  const t = g.append('text').attr('x', x).attr('y', y).style('font-size', px + 'px').style('fill', opt.fill || C.ink).text(s);
+  if (opt.anchor) t.attr('text-anchor', opt.anchor);
+  if (opt.italic) t.style('font-style', 'italic');
+  if (opt.weight) t.style('font-weight', opt.weight);
+  if (opt.ls) t.style('letter-spacing', opt.ls);
+  if (opt.num) t.style('font-variant-numeric', 'tabular-nums');
+  return t;
+}
+const SYM = { chat: d3.symbolCircle, memory: d3.symbolSquare, session: d3.symbolTriangle, search: d3.symbolDiamond, summary: d3.symbolCross };
+function markerPath(e, size) { return d3.symbol(e.stance === 'mutates' ? d3.symbolStar : SYM[e.channel], e.stance === 'mutates' ? size * 1.45 : size)(); }
 function styleMarker(sel) {
-  sel.attr('fill', e => e.channel === 'summary' && e.stance !== 'mutates' ? C.surface : C.s[e.stance])
-    .attr('stroke', e => e.channel === 'summary' && e.stance !== 'mutates' ? C.s[e.stance] : C.surface)
-    .attr('stroke-width', e => e.channel === 'summary' && e.stance !== 'mutates' ? 2 : 1)
-    .attr('opacity', e => e.conf === 1 || e.conf == null ? 0.35 : e.conf === 2 ? 0.85 : 1);
+  sel.attr('fill', e => classFill(stanceClass(e.stance)))
+    .attr('stroke', e => classStroke(stanceClass(e.stance)))
+    .attr('stroke-width', e => stanceClass(e.stance) === 'against' ? 1.35 : 0.6)
+    .attr('opacity', e => e.conf === 1 || e.conf == null ? 0.38 : e.conf === 2 ? 0.85 : 1);
 }
 const confText = c => c == null ? 'auto-detected (unlabelled)' : 'confidence ' + c + ' of 3';
-function expHeat(M) { return d3.scaleSqrt().domain([1, Math.max(2, M.expWeekMax)]).range([0.05, 0.34]).clamp(true); }
-const EDGE_DASH = { transmission: null, echo: '1.5 3', tip: '5 3', correction: null };
-const edgeColor = k => k === 'correction' ? C.s.rejects : C.ink2;
-function timeTicks(x, W) { return x.ticks(Math.max(2, Math.floor(W / 120))); }
-function tickFmt(x) {
-  const [a, b] = x.domain(); const span = b - a;
-  return span > 400 * 864e5 ? d3.utcFormat('%b %Y') : span > 60 * 864e5 ? d3.utcFormat('%-d %b') : span > 3 * 864e5 ? d3.utcFormat('%-d %b') : d3.utcFormat('%-d %b %H:%M');
-}
-function svgKey(draw, w, h) {
-  const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  s.setAttribute('width', w || 14); s.setAttribute('height', h || 14); s.setAttribute('aria-hidden', 'true');
+function expHeat(M) { return d3.scaleSqrt().domain([1, Math.max(2, M.expWeekMax)]).range([0.05, 0.24]).clamp(true); }
+const EDGE_DASH = { transmission: null, echo: '1 2.6', tip: '4 2.5', correction: null };
+const edgeColor = k => k === 'correction' ? C.stAgainst : C.ink2;
+function keySvg(draw, w, h) {
+  const s = document.createElementNS(SVGNS, 'svg');
+  s.setAttribute('width', w || 12); s.setAttribute('height', h || 12); s.setAttribute('aria-hidden', 'true');
   draw(d3.select(s)); return s;
 }
-function legend(container, items) {
-  container.replaceChildren();
-  for (const it of items) {
-    if (it.sep) { container.append(el('span', 'lg-sep')); continue; }
-    if (it.title) { container.append(el('span', 'lg-title', it.title)); continue; }
-    const s = el('span', 'lg-item');
-    s.append(svgKey(it.draw, it.w, it.h), document.createTextNode(it.label));
-    container.append(s);
+
+/* Time axis ticks: UTC dates, or Village days when the page has a day-one date and the reader picked them. */
+function axisTicks(x, plotW, px) {
+  const [a, b] = x.domain().map(Number);
+  const target = Math.max(2, Math.floor(plotW / (px * 7.5)));
+  if (state.axis === 'day' && DAYS) {
+    const d0 = DAYS.of(a), d1 = DAYS.of(b), span = Math.max(1, d1 - d0);
+    const steps = [1, 2, 5, 10, 20, 25, 50, 100, 150, 200, 250, 500];
+    const step = steps.find(s => span / s <= target) || 1000;
+    const out = [];
+    for (let n = Math.ceil(Math.max(1, d0) / step) * step; n <= d1; n += step) { const t = DAYS.start(n); if (t >= a && t <= b) out.push({ t, label: String(n) }); }
+    return { ticks: out, title: 'Village day' };
   }
+  const span = b - a, ts = x.ticks(target);
+  const f = (t, i) => {
+    const d = new Date(t), first = i === 0;
+    if (span > 300 * 864e5) return d3.utcFormat(d.getUTCMonth() === 0 || first ? '%b %Y' : '%b')(d);
+    if (span > 3 * 864e5) return d3.utcFormat(d.getUTCDate() === 1 ? (d.getUTCMonth() === 0 || first ? '%b %Y' : '%b') : (first ? '%-d %b %Y' : '%-d %b'))(d);
+    return d3.utcFormat(d.getUTCHours() === 0 && d.getUTCMinutes() === 0 ? '%-d %b' : '%H:%M')(d);
+  };
+  return { ticks: ts.map((t, i) => ({ t: +t, label: f(t, i) })), title: 'Date (UTC)' };
 }
-function makeTable(container, cols, rows, caption) {
-  const t = el('table');
+/* Draw a bottom time axis: rule, ticks, labels (thinned if they would touch) and a centred title. */
+function drawTimeAxis(svg, x, y, x0, x1, S) {
+  const ax = axisTicks(x, x1 - x0, S.tick);
+  const g = svg.append('g');
+  g.append('line').attr('x1', x0).attr('x2', x1).attr('y1', y + 0.5).attr('y2', y + 0.5).attr('stroke', C.rule).attr('stroke-width', 0.8).attr('shape-rendering', 'crispEdges');
+  let lastEnd = -Infinity;
+  ax.ticks.forEach(tk => {
+    const px = x(tk.t);
+    if (px < x0 - 0.5 || px > x1 + 0.5) return;
+    g.append('line').attr('x1', px).attr('x2', px).attr('y1', y).attr('y2', y + 3.5).attr('stroke', C.rule).attr('stroke-width', 0.8);
+    const w = textW(tk.label, S.tick), lx = Math.max(x0 + w / 2, Math.min(x1 - w / 2, px));
+    if (lx - w / 2 < lastEnd + 6) return;
+    lastEnd = lx + w / 2;
+    txt(g, lx, y + 4 + S.tick, tk.label, S.tick, { anchor: 'middle', fill: C.ink, num: true });
+  });
+  txt(g, (x0 + x1) / 2, y + 8 + S.tick * 2.15, ax.title, S.tick, { anchor: 'middle', fill: C.ink2 });
+  return ax;
+}
+/* A flowing legend inside the SVG, so an exported figure carries its own key. Returns the height used. */
+function svgKeys(svg, items, x0, y0, maxX, S) {
+  const g = svg.append('g');
+  const fs = S.tick, lineH = Math.round(fs * 1.55);
+  let x = x0, y = y0 + lineH / 2;
+  items.forEach(it => {
+    if (it.br) { if (x > x0) { x = x0; y += lineH; } return; }
+    if (it.title) {
+      const tw = textW(it.title, fs) + 5;
+      if (x + tw + 40 > maxX && x > x0) { x = x0; y += lineH; }
+      txt(g, x, y + fs * 0.34, it.title, fs, { italic: true, fill: C.ink3 });
+      x += tw + 3; return;
+    }
+    const gw = it.w || 11, tw = textW(it.label, fs), total = gw + 4 + tw;
+    if (x + total > maxX && x > x0) { x = x0; y += lineH; }
+    it.draw(g, x, y, gw);
+    txt(g, x + gw + 4, y + fs * 0.34, it.label, fs, { fill: C.ink2 });
+    x += total + Math.round(fs * 1.1);
+  });
+  return y + lineH / 2 - y0;
+}
+/* Non-goal annotations as numbered markers, levelled so numbers never overlap. */
+function annMarks(M) { return M.annotations.filter(a => a.kind !== 'goal').map((an, i) => ({ an, n: i + 1 })); }
+function annLevels(marks, x, x0, x1, r) {
+  const ends = [];
+  return marks.map(m => {
+    const px = x(m.an.tt);
+    if (px < x0 - 1 || px > x1 + 1) return Object.assign({ px, level: -1 }, m);
+    let level = 0;
+    while (ends[level] != null && ends[level] > px - 2 * r - 2) level++;
+    ends[level] = px;
+    return Object.assign({ px, level }, m);
+  });
+}
+function drawAnnNumber(g, cx, cy, n, r, S, strong) {
+  g.append('circle').attr('cx', cx).attr('cy', cy).attr('r', r).attr('fill', strong ? C.ink : C.paper).attr('stroke', C.rule).attr('stroke-width', 0.8);
+  txt(g, cx, cy + S.small * 0.35, String(n), S.small, { anchor: 'middle', fill: strong ? C.paper : C.ink, num: true });
+}
+
+/* ---------- tables (booktabs) ---------- */
+function makeTable(cols, rows, caption, cls) {
+  const t = el('table', 'booktabs' + (cls ? ' ' + cls : ''));
   if (caption) t.append(el('caption', null, caption));
   const thead = el('thead'), htr = el('tr');
   cols.forEach(c => { const th = el('th', c.num ? 'num' : null, c.label); th.scope = 'col'; htr.append(th); });
   thead.append(htr);
   const tb = el('tbody');
-  rows.forEach(r => { const tr = el('tr'); cols.forEach(c => { const v = c.get(r); tr.append(el('td', c.num ? 'num' : (c.cls || null), v == null ? '–' : String(v))); }); tb.append(tr); });
+  rows.forEach(r => {
+    const tr = el('tr');
+    cols.forEach(c => {
+      const v = c.get(r);
+      const td = el('td', c.num ? 'num' : (c.cls || null));
+      if (v instanceof Node) td.append(v); else td.textContent = v == null ? '–' : String(v);
+      tr.append(td);
+    });
+    tb.append(tr);
+  });
   t.append(thead, tb);
   return t;
 }
@@ -801,7 +749,7 @@ document.querySelectorAll('[data-table]').forEach(b => b.addEventListener('click
   const t = document.getElementById(b.dataset.table);
   t.hidden = !t.hidden;
   b.setAttribute('aria-expanded', String(!t.hidden));
-  b.textContent = t.hidden ? 'Show table' : 'Hide table';
+  b.textContent = t.hidden ? 'Show data' : 'Hide data';
   if (!t.hidden) fillTable(b.dataset.table);
 }));
 function fillTable(id) {
@@ -814,40 +762,31 @@ function refreshTables() { Object.keys(tables).forEach(fillTable); }
 
 /* ---------- picker + loading ---------- */
 function renderPicker() {
-  const box = $('#picker');
-  box.replaceChildren();
-  const groups = [['belief', KIND_LABEL.belief], ['norm', KIND_LABEL.norm], ['term', KIND_LABEL.term], ['file', 'Opened files']];
+  const sel = $('#trace-select');
+  sel.replaceChildren();
+  const groups = [['belief', KIND_LABEL.belief], ['norm', KIND_LABEL.norm], ['term', KIND_LABEL.term], ['other', 'Other'], ['file', 'Opened files']];
   let any = false;
   for (const [k, label] of groups) {
-    const list = Store.entries.filter(e => k === 'file' ? e.origin === 'file' : e.origin === 'bundled' && (e.raw && e.raw.kind) === k);
+    const list = Store.entries.filter(e => k === 'file' ? e.origin === 'file'
+      : k === 'other' ? e.origin === 'bundled' && !TraceData.KINDS.includes(e.raw && e.raw.kind)
+        : e.origin === 'bundled' && (e.raw && e.raw.kind) === k);
     if (!list.length) continue;
     any = true;
-    const g = el('div', 'pk-group');
-    g.append(el('div', 'pk-label', label));
-    const items = el('div', 'pk-items');
+    const og = el('optgroup'); og.label = label;
     list.forEach(e => {
-      const b = el('button', 'pk-btn' + (e.check.errors.length ? ' bad' : ''));
-      b.type = 'button';
-      b.setAttribute('aria-pressed', String(e.token === state.token));
       const r = e.raw || {};
-      b.append(document.createTextNode(String(r.title || r.id || e.fileName || e.token)));
       const n = Array.isArray(r.agents) ? r.agents.length : 0, m = Array.isArray(r.events) ? r.events.length : 0;
-      b.append(el('small', null, e.check.errors.length ? 'invalid' : n + ' agents · ' + int(m) + ' events'));
-      b.addEventListener('click', () => select(e.token));
-      items.append(b);
+      const o = el('option', null, String(r.title || r.id || e.fileName || e.token) + (e.check.errors.length ? ' (invalid)' : ' · ' + n + ' agents, ' + int(m) + ' events'));
+      o.value = e.token;
+      og.append(o);
     });
-    // bundled entries of unknown kind
-    g.append(items); box.append(g);
+    sel.append(og);
   }
-  const odd = Store.entries.filter(e => e.origin === 'bundled' && !TraceData.KINDS.includes(e.raw && e.raw.kind));
-  if (odd.length) {
-    const g = el('div', 'pk-group'); g.append(el('div', 'pk-label', 'Other'));
-    const items = el('div', 'pk-items');
-    odd.forEach(e => { const b = el('button', 'pk-btn bad', String((e.raw && (e.raw.title || e.raw.id)) || e.token)); b.type = 'button'; b.setAttribute('aria-pressed', String(e.token === state.token)); b.addEventListener('click', () => select(e.token)); items.append(b); });
-    g.append(items); box.append(g); any = true;
-  }
-  if (!any) box.append(el('p', 'note', 'This page has no bundled traces. Open a trace file to view it.'));
+  if (!any) { const o = el('option', null, 'No bundled traces: open a trace file'); o.value = ''; sel.append(o); }
+  sel.value = state.token || '';
 }
+$('#trace-select').addEventListener('change', ev => { if (ev.target.value) select(ev.target.value); });
+$('#open-btn').addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); $('#file-input').click(); } });
 function loadMsg(kind, title, lines) {
   const box = $('#load-msg');
   box.replaceChildren();
@@ -890,9 +829,8 @@ function readFiles(files) {
       const okN = results.length;
       loadMsg('ok', 'Opened ' + okN + (okN === 1 ? ' trace' : ' traces') + '. It is kept in this tab only.', []);
     }
-    renderPicker();
     const target = lastOk || (bad.length && bad[bad.length - 1].entry) || null;
-    if (target) select(target.token);
+    if (target) select(target.token); else renderPicker();
   }
 }
 $('#file-input').addEventListener('change', ev => { readFiles(ev.target.files); ev.target.value = ''; });
@@ -910,19 +848,27 @@ function currentModel() { const e = currentEntry(); return e ? Store.model(e) : 
 function select(token, fromHash) {
   const e = Store.get(token);
   if (!e) return;
-  stopPlay();
   state.token = token; state.zoom = null; state.pin = null; state.cursor = null;
-  $('#scrub').value = 1000;
   if (!fromHash) { try { history.replaceState(null, '', '#' + token); } catch (err) { location.hash = token; } }
   renderPicker();
   renderAll();
 }
 window.addEventListener('hashchange', () => { const t = location.hash.slice(1); if (t && t !== state.token && Store.get(t)) select(t, true); });
 
-/* ---------- header ---------- */
+/* ---------- numbering: tables and figures in reading order ---------- */
+let NUM = { metrics: 0, curves: 1, lane: 2, quotes: 0, fmt: 1 };
+function numberThings(M) {
+  let t = 0;
+  NUM = { metrics: M.metrics.length ? ++t : 0, curves: 1, lane: 2, quotes: 0, fmt: 0 };
+  NUM.quotes = M.quotes.length ? ++t : 0;
+  NUM.fmt = ++t;
+  $('#fmt-caption').textContent = 'Table ' + NUM.fmt + ': Fields of a v0 trace.';
+}
+
+/* ---------- header + key-numbers table ---------- */
 function renderHeader(entry, M) {
   const raw = entry.raw || {};
-  $('#t-title').textContent = String(raw.title || raw.id || entry.fileName || 'Trace');
+  $('#t-title-text').textContent = String(raw.title || raw.id || entry.fileName || 'Trace');
   const errs = entry.check.errors;
   const errBox = $('#t-errors');
   $('#views').hidden = !!errs.length || !M;
@@ -938,26 +884,138 @@ function renderHeader(entry, M) {
     $('#t-issues-sum').textContent = warns.length + (warns.length === 1 ? ' format note' : ' format notes') + ' (drawn anyway)';
     const ul = $('#t-issues-list'); ul.replaceChildren(); warns.forEach(w => ul.append(el('li', null, w)));
   }
-  const tiles = $('#t-tiles'); tiles.replaceChildren();
   const st = $('#t-statement');
   if (!M) {
-    $('#t-eyebrow').textContent = (entry.origin === 'file' ? 'Opened file · ' + entry.fileName : 'Bundled trace');
+    $('#t-byline').textContent = entry.origin === 'file' ? 'Opened file · ' + entry.fileName : 'Bundled trace';
     st.hidden = true; $('#t-source').textContent = '';
     return;
   }
-  const span = fmtDate(new Date(M.t0)) + ' – ' + fmtDate(new Date(M.t1));
-  $('#t-eyebrow').textContent = [KIND_ONE[M.kind], M.agents.length + ' agents', int(M.events.length) + ' events', span, entry.origin === 'file' ? 'opened file' : null].filter(Boolean).join(' · ');
+  $('#t-byline').textContent = [KIND_ONE[M.kind], M.agents.length + ' agents', int(M.events.length) + ' events', spanText(M.t0, M.t1), entry.origin === 'file' ? 'opened file ' + entry.fileName : null].filter(Boolean).join(' · ');
   st.hidden = !M.statement; st.textContent = M.statement;
   $('#t-source').textContent = M.source;
-  M.metrics.forEach(([k, v]) => {
-    const t = el('div', 'tile');
-    t.append(el('div', 'tile-label', k.replace(/_/g, ' ')), el('div', 'tile-value', fmtMetric(v)));
-    tiles.append(t);
-  });
+  const mw = $('#metrics-wrap');
+  mw.replaceChildren();
+  if (M.metrics.length) {
+    mw.append(makeTable([{ label: 'Measure', get: r => r[0].replace(/_/g, ' ') }, { label: 'Value', get: r => fmtMetric(r[1]), num: true }],
+      M.metrics, 'Table ' + NUM.metrics + ': Key numbers reported by the trace producer.', 'metrics'));
+  }
 }
 
-/* ---------- swimlane ---------- */
-let lane = null; // live geometry for cursor + hover
+/* ---------- Figure 1: running totals ---------- */
+let curves = null;
+function sameTimes(a, b) { return a.length === b.length && a.every((t, i) => t === b[i]); }
+function curveSeries(M) {
+  const merged = !M.hasExposures && sameTimes(M.cum.exposed, M.cum.adopted);
+  if (merged) return [
+    { key: 'adopted', label: 'Active and adopted', color: C.stFor, dash: '5 2.5', width: 1.7 },
+    { key: 'rejected', label: 'Rejected', color: C.stAgainst, dash: '0.1 3', width: 2.1, round: true }
+  ];
+  return [
+    { key: 'exposed', label: M.hasExposures ? 'Exposed' : 'Active', color: C.ink2, dash: null, width: 1.5 },
+    { key: 'adopted', label: 'Adopted', color: C.stFor, dash: '5 2.5', width: 1.7 },
+    { key: 'rejected', label: 'Rejected', color: C.stAgainst, dash: '0.1 3', width: 2.1, round: true }
+  ];
+}
+function drawCurves(box, M, W, preset) {
+  const live = !preset;
+  const S = sizes(preset, W);
+  const narrow = W < 560 && !S.paper;
+  const series = curveSeries(M);
+  const ends = series.map(s => ({ s, v: M.cum[s.key].length, label: s.label + ' ' + int(M.cum[s.key].length) }));
+  const ymax = Math.max(1, d3.max(ends, e => e.v));
+  const y = d3.scaleLinear().domain([0, ymax]).nice(narrow || S.paper ? 4 : 5);
+  const yt = y.ticks(narrow || S.paper ? 4 : 5).filter(Number.isInteger);
+  const yTitleW = S.tick + 6;
+  const ml = yTitleW + Math.ceil(d3.max(yt, t => textW(int(t), S.tick)) || 10) + 9;
+  const mr = Math.ceil(d3.max(ends, e => textW(e.label, S.fig)) + 14);
+  const marks = annMarks(M);
+  const r = S.small * 0.78;
+  const x = d3.scaleUtc().domain([M.t0, M.t1]).range([ml, W - mr]);
+  const levels = annLevels(marks, x, ml, W - mr, r);
+  const nLev = levels.length ? d3.max(levels, l => l.level + 1) : 0;
+  const titleH = 2, annH = nLev ? nLev * (2 * r + 3) + 4 : 0;
+  const top = titleH + annH + 4;
+  const plotH = S.paper ? 150 : narrow ? 150 : 190;
+  const axisH = S.tick * 2.4 + 12;
+  const H = Math.round(top + plotH + axisH);
+  y.range([top + plotH, top]);
+  const svg = newSvg(box, W, H).attr('aria-hidden', 'true');
+  txt(svg, 0, 0, 'Agents (cumulative)', S.tick, { anchor: 'middle', fill: C.ink2 }).attr('transform', 'translate(' + (S.tick * 0.85) + ',' + (top + plotH / 2) + ') rotate(-90)');
+  // faint horizontal gridlines at the y ticks: counts are read off this axis
+  const g = svg.append('g');
+  yt.forEach(t => {
+    if (t > 0) g.append('line').attr('x1', ml).attr('x2', W - mr).attr('y1', Math.round(y(t)) + 0.5).attr('y2', Math.round(y(t)) + 0.5).attr('stroke', C.hair).attr('stroke-width', 0.6);
+    g.append('line').attr('x1', ml - 3.5).attr('x2', ml).attr('y1', Math.round(y(t)) + 0.5).attr('y2', Math.round(y(t)) + 0.5).attr('stroke', C.rule).attr('stroke-width', 0.8);
+    txt(g, ml - 6, y(t) + S.tick * 0.35, int(t), S.tick, { anchor: 'end', num: true });
+  });
+  g.append('line').attr('x1', ml + 0.5).attr('x2', ml + 0.5).attr('y1', top).attr('y2', top + plotH).attr('stroke', C.rule).attr('stroke-width', 0.8).attr('shape-rendering', 'crispEdges');
+  drawTimeAxis(svg, x, top + plotH, ml, W - mr, S);
+  // annotations: numbered markers and a hairline down to the axis
+  const ag = svg.append('g');
+  levels.forEach(l => {
+    if (l.level < 0) return;
+    const cy = titleH + r + 2 + l.level * (2 * r + 3), strong = l.an.kind === 'intervention';
+    ag.append('line').attr('x1', l.px).attr('x2', l.px).attr('y1', cy + r).attr('y2', top + plotH)
+      .attr('stroke', strong ? C.ink : C.ink3).attr('stroke-width', strong ? 0.9 : 0.7).attr('stroke-dasharray', strong ? null : '2 2.5');
+    drawAnnNumber(ag, l.px, cy, l.n, r, S, strong);
+  });
+  // the three step lines
+  series.forEach(s => {
+    const times = M.cum[s.key];
+    const pts = [[M.t0, 0]].concat(times.map((t, j) => [t, j + 1])).concat([[M.t1, times.length]]);
+    svg.append('path').datum(pts).attr('fill', 'none').attr('stroke', s.color).attr('stroke-width', s.width)
+      .attr('stroke-dasharray', s.dash).attr('stroke-linecap', s.round ? 'round' : 'butt').attr('stroke-linejoin', 'round')
+      .attr('d', d3.line().curve(d3.curveStepAfter).x(d => x(d[0])).y(d => y(d[1])));
+  });
+  // direct end labels, nudged apart so they never touch, with a short leader when moved
+  const lab = ends.map(e => ({ e, y0: y(e.v), y: y(e.v) })).sort((a, b) => a.y0 - b.y0);
+  const gap = S.fig * 1.15;
+  for (let i = 1; i < lab.length; i++) if (lab[i].y - lab[i - 1].y < gap) lab[i].y = lab[i - 1].y + gap;
+  const over = lab.length ? lab[lab.length - 1].y - (top + plotH) : 0;
+  if (over > 0) lab.forEach(l => { l.y -= over; });
+  for (let i = lab.length - 2; i >= 0; i--) if (lab[i + 1].y - lab[i].y < gap) lab[i].y = lab[i + 1].y - gap;
+  const lx = x(M.t1);
+  lab.forEach(l => {
+    const s = l.e.s;
+    svg.append('line').attr('x1', lx + 1).attr('x2', lx + 9).attr('y1', l.y0).attr('y2', l.y).attr('stroke', s.color).attr('stroke-width', 0.8);
+    txt(svg, lx + 11, l.y + S.fig * 0.35, l.e.label, S.fig, { fill: C.ink, num: true });
+  });
+  if (!live) return svg.node();
+  // hover: crosshair, dots on each line and a readout
+  const hov = svg.append('line').attr('y1', top).attr('y2', top + plotH).attr('stroke', C.ink3).attr('stroke-width', 0.8).attr('opacity', 0).attr('pointer-events', 'none');
+  const cur = svg.append('line').attr('y1', top).attr('y2', top + plotH).attr('stroke', C.ink).attr('stroke-width', 1).attr('opacity', 0).attr('pointer-events', 'none');
+  const dots = series.map(s => svg.append('circle').attr('r', 3).attr('fill', s.color).attr('stroke', C.paper).attr('stroke-width', 1.2).attr('opacity', 0).attr('pointer-events', 'none'));
+  const lineKey = s => keySvg(k => k.append('line').attr('x1', 0).attr('x2', 16).attr('y1', 6).attr('y2', 6).attr('stroke', s.color).attr('stroke-width', s.width).attr('stroke-dasharray', s.dash).attr('stroke-linecap', s.round ? 'round' : 'butt'), 16, 12);
+  svg.append('rect').attr('x', ml).attr('y', top).attr('width', W - mr - ml).attr('height', plotH).attr('fill', 'transparent')
+    .on('pointermove', ev => {
+      const t = +x.invert(d3.pointer(ev)[0]), c = M.countAt(t), px = x(t);
+      hov.attr('x1', px).attr('x2', px).attr('opacity', 1);
+      series.forEach((s, i) => dots[i].attr('cx', px).attr('cy', y(c[s.key])).attr('opacity', 1));
+      Tip.open().title(fmtWhen(t));
+      series.forEach(s => Tip.row(int(c[s.key]), s.key === 'rejected' ? 'rejected at least once' : s.label.toLowerCase(), lineKey(s)));
+      levels.filter(l => Math.abs(l.px - px) < 6).forEach(l => Tip.note(l.n + '. ' + l.an.label));
+      Tip.show(ev.clientX, ev.clientY);
+      setLaneCursor(t);
+    })
+    .on('pointerleave', () => { hov.attr('opacity', 0); dots.forEach(d => d.attr('opacity', 0)); Tip.hide(); setLaneCursor(null); });
+  curves = { x, cur, setCursor(t) { if (t == null) cur.attr('opacity', 0); else cur.attr('x1', x(t)).attr('x2', x(t)).attr('opacity', 0.7); } };
+  return svg.node();
+}
+function curvesCaption(M) {
+  const ann = annMarks(M).length;
+  if (!M.hasExposures && sameTimes(M.cum.exposed, M.cum.adopted)) {
+    return 'Figure ' + NUM.curves + ': How far the idea spread. Running totals of the ' + M.agents.length + ' agents in the trace who adopted it (dashed; ' +
+      'the trace has no exposure data, and every agent active in it adopted it, so active and adopted coincide) and who rejected it at least once (dotted), ' +
+      spanText(M.t0, M.t1) + '.' + (ann ? ' Numbered markers are the trace’s annotations, keyed under Figure ' + NUM.lane + '.' : '');
+  }
+  return 'Figure ' + NUM.curves + ': How far the idea spread. Running totals of the ' + M.agents.length + ' agents in the trace who were ' +
+    (M.hasExposures ? 'exposed to it (solid)' : 'active in it (solid; the trace has no exposure data)') + ', who adopted it (dashed' +
+    (M.derivedAdoption ? '; the trace lists no adoptions, so the first event in favour counts' : '') + ') and who rejected it at least once (dotted), ' +
+    spanText(M.t0, M.t1) + '.' + (ann ? ' Numbered markers are the trace’s annotations, keyed under Figure ' + NUM.lane + '.' : '');
+}
+
+/* ---------- Figure 2: swimlane ---------- */
+let lane = null;
 function laneRows(M) {
   const firstKey = a => [a.firstEvent, a.everT, a.idx];
   const byFirst = (a, b) => { const x = firstKey(a), y = firstKey(b); for (let i = 0; i < 3; i++) { if (x[i] !== y[i]) return x[i] === Infinity ? 1 : y[i] === Infinity ? -1 : x[i] - y[i]; } return 0; };
@@ -969,178 +1027,224 @@ function laneRows(M) {
   for (const k of order) {
     const list = sorted.filter(a => keyOf(a) === k);
     if (!list.length) continue;
-    rows.push({ head: k + ' · ' + list.length });
+    rows.push({ head: k, n: list.length });
     list.forEach(a => rows.push({ a }));
   }
   return rows;
 }
-function annLevels(M, x, minX, maxX, maxLevels) {
-  const ends = [];
-  return M.annotations.filter(a => a.kind !== 'goal').map(an => {
-    const px = x(an.tt);
-    if (px < minX - 1 || px > maxX + 1) return { an, px, level: -1, text: '' };
-    const full = an.label;
-    let level = -1;
-    for (let l = 0; l < maxLevels; l++) if (ends[l] == null || ends[l] < px - 6) { level = l; break; }
-    if (level < 0) return { an, px, level: -1, text: '' };
-    const room = Math.min(190, maxX - px - 4);
-    const chars = Math.max(0, Math.floor(room / 6.1));
-    const text = chars >= 4 ? trunc(full, chars) : '';
-    ends[level] = px + text.length * 6.1 + 4;
-    return { an, px, level, text };
+function laneKeyItems(M, S) {
+  const ms = S.paper ? 30 : 40;
+  const present = new Set(M.events.map(e => stanceClass(e.stance)));
+  const chans = new Set(M.events.map(e => e.channel));
+  const mk = (path, fill, stroke, sw) => (g, x, cy, w) => g.append('path').attr('transform', 'translate(' + (x + w / 2) + ',' + cy + ')').attr('d', path).attr('fill', fill).attr('stroke', stroke).attr('stroke-width', sw);
+  const items = [{ title: 'Stance:' }];
+  ['for', 'neutral', 'against', 'mutates'].filter(k => present.has(k)).forEach(k => {
+    const p = d3.symbol(k === 'mutates' ? d3.symbolStar : d3.symbolCircle, k === 'mutates' ? ms * 1.45 : ms)();
+    items.push({ label: k === 'for' ? 'for' : k === 'neutral' ? 'neutral' : k === 'against' ? 'against' : 'reworded', draw: mk(p, classFill(k), classStroke(k), k === 'against' ? 1.35 : 0.6) });
   });
+  items.push({ title: 'Channel:' });
+  TraceData.CHANNELS.filter(c => chans.has(c)).forEach(c => {
+    items.push({ label: c === 'memory' ? 'memory' : c === 'session' ? 'session' : c === 'search' ? 'search' : c, draw: mk(d3.symbol(SYM[c], ms)(), C.ink2, C.paper, 0.6) });
+  });
+  items.push({ br: true });
+  if (M.adoptions.length) {
+    items.push({ label: 'adoption', w: 13, draw: (g, x, cy) => g.append('circle').attr('cx', x + 6.5).attr('cy', cy).attr('r', 5.5).attr('fill', 'none').attr('stroke', C.ink).attr('stroke-width', 1) });
+    if (M.adoptions.some(a => a.independent)) items.push({ label: 'independent adoption', w: 13, draw: (g, x, cy) => g.append('circle').attr('cx', x + 6.5).attr('cy', cy).attr('r', 5.5).attr('fill', 'none').attr('stroke', C.ink).attr('stroke-width', 1).attr('stroke-dasharray', '2 1.6') });
+  }
+  if (M.hasExposures) {
+    const heat = expHeat(M), mx = Math.max(2, M.expWeekMax);
+    items.push({ label: 'exposures per week (1–' + mx + ')', w: 22, draw: (g, x, cy) => [1, Math.round(Math.sqrt(mx)), mx].forEach((v, i) => g.append('rect').attr('x', x + i * 7.5).attr('y', cy - 5).attr('width', 7).attr('height', 10).attr('fill', C.ink).attr('fill-opacity', heat(v))) });
+    items.push({ label: 'first exposure', w: 4, draw: (g, x, cy) => g.append('line').attr('x1', x + 2).attr('x2', x + 2).attr('y1', cy - 5).attr('y2', cy + 5).attr('stroke', C.ink2).attr('stroke-width', 1) });
+  }
+  if (M.persistence.length) items.push({ label: 'in saved memory', w: 16, draw: (g, x, cy) => g.append('line').attr('x1', x).attr('x2', x + 16).attr('y1', cy).attr('y2', cy).attr('stroke', C.ink2).attr('stroke-width', 1).attr('opacity', 0.75) });
+  if (M.events.some(e => e.conf === 1 || e.conf == null)) items.push({ label: 'faded: low confidence', draw: mk(d3.symbol(d3.symbolCircle, ms)(), C.stFor, C.paper, 0.6), fade: true });
+  const ek = new Set(M.edges.map(e => e.kind));
+  if (ek.size && state.showEdges) {
+    items.push({ title: 'Links:' });
+    TraceData.EDGE_KINDS.filter(k => ek.has(k)).forEach(k => items.push({ label: k, w: 18, draw: (g, x, cy) => g.append('line').attr('x1', x).attr('x2', x + 18).attr('y1', cy).attr('y2', cy).attr('stroke', edgeColor(k)).attr('stroke-width', k === 'correction' ? 1.2 : 1).attr('stroke-dasharray', EDGE_DASH[k]) }));
+  }
+  return items.map(it => it.fade ? Object.assign({}, it, { draw: (g, x, cy, w) => it.draw(g, x, cy, w).attr('opacity', 0.38) }) : it);
 }
-function renderSwimlane(M) {
-  const box = $('#lane-chart');
-  const W = box.clientWidth; if (!W) return;
-  const narrow = W < 600;
-  const labelW = narrow ? 100 : 176, mr = 14;
-  const nRows = M.agents.length;
-  const rowH = nRows > 30 ? 18 : nRows > 18 ? 21 : 24;
-  const headH = 22;
+function drawLane(box, M, W, preset) {
+  const live = !preset;
+  const S = sizes(preset, W);
+  const narrow = W < 560 && !S.paper;
+  const rows = laneRows(M);
+  const nAg = M.agents.length;
+  const rowH = S.paper ? Math.max(11, Math.min(17, Math.floor(540 / Math.max(1, nAg)))) : (nAg > 30 ? 18 : nAg > 18 ? 21 : 24);
+  const headH = S.paper ? 14 : 20;
+  const nameFs = S.paper ? Math.min(S.fig, Math.max(8, rowH - 3)) : S.fig;
+  const longest = d3.max(M.agents, a => textW(a.name, nameFs)) || 40;
+  const labelW = Math.round(Math.min(narrow ? 112 : S.paper ? 118 : 184, Math.max(64, longest + 10)));
+  const mr = narrow ? 6 : 10;
   const full = [M.t0, M.t1];
   const dom = state.zoom || full;
   const x = d3.scaleUtc().domain(dom).range([labelW, W - mr]);
-  const maxLevels = narrow ? 2 : 3;
-  const levels = annLevels(M, x, labelW, W - mr, maxLevels);
-  const usedLevels = levels.length ? Math.max(1, d3.max(levels, l => l.level + 1) || 1) : 0;
-  const annH = usedLevels ? usedLevels * 15 + 6 : 0;
+  const svg = newSvg(box, W, 10).attr('aria-hidden', 'true');
+  // key (inside the figure, so an export carries it)
+  const keyH = svgKeys(svg, laneKeyItems(M, S), 0, 0, W - 2, S);
+  // annotation numbers and goal band
+  const marks = annMarks(M), r = S.small * 0.78;
+  const levels = annLevels(marks, x, labelW, W - mr, r);
+  const nLev = levels.length ? Math.max(0, d3.max(levels, l => l.level + 1)) : 0;
+  const annTop = keyH + 6, annH = nLev ? nLev * (2 * r + 3) + 2 : 0;
   const goals = M.annotations.filter(a => a.kind === 'goal');
-  const goalsH = goals.length ? 18 : 0;
-  const axisY = annH + goalsH + 14, y0 = annH + goalsH + 22;
-  const rows = laneRows(M);
+  const goalsH = goals.length ? Math.round(S.small + 6) : 0;
+  const goalTop = annTop + annH + (annH ? 2 : 0);
+  const y0 = goalTop + goalsH + 4;
   let yy = y0; const rowY = new Map();
-  rows.forEach(r => { r.y = yy; if (r.head) { yy += headH; } else { r.cy = yy + rowH / 2; rowY.set(r.a, r.cy); yy += rowH; } });
-  const H = yy + 6;
-  const svg = newSvg(box, W, H).attr('aria-hidden', 'true');
-  const clipId = 'lane-clip';
+  rows.forEach(rw => { rw.y = yy; if (rw.head) { yy += headH; } else { rw.cy = yy + rowH / 2; rowY.set(rw.a, rw.cy); yy += rowH; } });
+  const plotBottom = yy + 2;
+  const axisH = S.tick * 2.4 + 12;
+  const H = Math.round(plotBottom + axisH);
+  svg.attr('height', H).attr('viewBox', '0 0 ' + W + ' ' + H);
+  const clipId = 'lane-clip-' + (live ? 'screen' : 'export');
   svg.append('defs').append('clipPath').attr('id', clipId).append('rect').attr('x', labelW).attr('y', 0).attr('width', W - mr - labelW).attr('height', H);
-  const plot = svg.append('g').attr('clip-path', 'url(#' + clipId + ')');
   const xc = t => Math.max(labelW - 2, Math.min(W - mr + 2, x(t)));
+  const agentRows = rows.filter(rw => rw.a);
 
-  // row stripes + presence hairline
-  const agentRows = rows.filter(r => r.a);
-  plot.append('g').selectAll('rect').data(agentRows.filter((r, i) => i % 2 === 0)).join('rect')
-    .attr('x', labelW).attr('width', W - mr - labelW).attr('y', r => r.y).attr('height', rowH).attr('fill', C.stripe);
+  // faint vertical guides at the axis ticks (a tall figure needs them to read times)
+  const ax = axisTicks(x, W - mr - labelW, S.tick);
+  svg.append('g').selectAll('line').data(ax.ticks.filter(tk => x(tk.t) >= labelW && x(tk.t) <= W - mr)).join('line')
+    .attr('x1', tk => Math.round(x(tk.t)) + 0.5).attr('x2', tk => Math.round(x(tk.t)) + 0.5).attr('y1', y0).attr('y2', plotBottom)
+    .attr('stroke', C.hair).attr('stroke-width', 0.5);
+  const plot = svg.append('g').attr('clip-path', 'url(#' + clipId + ')');
+  // presence line: joined to left
   plot.append('g').selectAll('line').data(agentRows).join('line')
-    .attr('x1', r => xc(Number.isFinite(r.a.joined) ? Math.max(r.a.joined, dom[0]) : dom[0]))
-    .attr('x2', r => xc(Number.isFinite(r.a.left) ? Math.min(r.a.left, dom[1]) : dom[1]))
-    .attr('y1', r => r.cy).attr('y2', r => r.cy).attr('stroke', C.grid).attr('stroke-width', 1);
-  // exposure density: weekly counts as a faint single-hue heat strip, plus a tick at first exposure
+    .attr('x1', rw => xc(Number.isFinite(rw.a.joined) ? Math.max(rw.a.joined, dom[0]) : dom[0]))
+    .attr('x2', rw => xc(Number.isFinite(rw.a.left) ? Math.min(rw.a.left, dom[1]) : dom[1]))
+    .attr('y1', rw => rw.cy).attr('y2', rw => rw.cy).attr('stroke', C.hair).attr('stroke-width', 0.7);
+  // exposure shading per week + first-exposure tick
   if (M.hasExposures) {
     const heat = expHeat(M);
     const cells = [];
-    agentRows.forEach(r => r.a.expWeeks.forEach(p => { if (p[0] + 7 * 864e5 >= dom[0] && p[0] <= dom[1]) cells.push({ r, w: p[0], n: p[1] }); }));
+    agentRows.forEach(rw => rw.a.expWeeks.forEach(p => { if (p[0] + 7 * 864e5 >= dom[0] && p[0] <= dom[1]) cells.push({ rw, w: p[0], n: p[1] }); }));
     plot.append('g').selectAll('rect').data(cells).join('rect')
-      .attr('x', d => xc(d.w)).attr('width', d => Math.max(1, xc(d.w + 7 * 864e5) - xc(d.w) - 0.5)).attr('y', d => d.r.y + 2).attr('height', rowH - 4)
+      .attr('x', d => xc(d.w)).attr('width', d => Math.max(1, xc(d.w + 7 * 864e5) - xc(d.w) - 0.3)).attr('y', d => d.rw.y + 1.5).attr('height', rowH - 3)
       .attr('fill', C.ink).attr('fill-opacity', d => heat(d.n));
-    plot.append('g').selectAll('line').data(agentRows.filter(r => Number.isFinite(r.a.firstExp) && r.a.exposures.length)).join('line')
-      .attr('x1', r => x(r.a.firstExp)).attr('x2', r => x(r.a.firstExp)).attr('y1', r => r.y + 2).attr('y2', r => r.y + rowH - 2)
-      .attr('stroke', C.ink2).attr('stroke-width', 1.5);
+    plot.append('g').selectAll('line').data(agentRows.filter(rw => Number.isFinite(rw.a.firstExp) && rw.a.exposures.length)).join('line')
+      .attr('x1', rw => x(rw.a.firstExp)).attr('x2', rw => x(rw.a.firstExp)).attr('y1', rw => rw.y + 1.5).attr('y2', rw => rw.y + rowH - 1.5)
+      .attr('stroke', C.ink2).attr('stroke-width', 1);
   }
-  // persistence bars
+  // time in saved memory: a thin dark line along the bottom of the row
   const pers = [];
-  agentRows.forEach(r => r.a.persistence.forEach(p => pers.push({ p, r })));
-  plot.append('g').selectAll('rect').data(pers).join('rect')
-    .attr('x', d => xc(d.p.s)).attr('width', d => Math.max(2, xc(d.p.e) - xc(d.p.s))).attr('y', d => d.r.y + rowH - 4).attr('height', 2.5).attr('rx', 1.25)
-    .attr('fill', C.ink2).attr('opacity', 0.75);
-  // grid + axis
-  const ticks = timeTicks(x, W - labelW), tf = tickFmt(x);
-  svg.append('g').selectAll('line').data(ticks).join('line').attr('x1', x).attr('x2', x).attr('y1', y0).attr('y2', H - 6).attr('stroke', C.grid).attr('shape-rendering', 'crispEdges');
-  svg.append('g').selectAll('text').data(ticks).join('text').attr('class', 'tick').attr('x', x).attr('y', axisY).attr('text-anchor', 'middle').text(tf);
-  // goal periods: a ribbon above the plot (goals start periods; each runs until the next goal)
+  agentRows.forEach(rw => rw.a.persistence.forEach(p => pers.push({ p, rw })));
+  plot.append('g').selectAll('line').data(pers).join('line')
+    .attr('x1', d => xc(d.p.s)).attr('x2', d => Math.max(xc(d.p.s) + 1.5, xc(d.p.e))).attr('y1', d => d.rw.y + rowH - 1.8).attr('y2', d => d.rw.y + rowH - 1.8)
+    .attr('stroke', C.ink2).attr('stroke-width', 1).attr('opacity', 0.75);
+  // goal band
   if (goals.length) {
-    const gy = annH + 1, gh = 13;
     const segs = goals.map((g, i) => ({ g, s: g.tt, e: i + 1 < goals.length ? goals[i + 1].tt : M.t1, i })).filter(d => d.e > dom[0] && d.s < dom[1]);
     const gg = svg.append('g').attr('clip-path', 'url(#' + clipId + ')');
     segs.forEach(d => {
-      const xs = xc(Math.max(d.s, dom[0])), xe = xc(Math.min(d.e, dom[1])), w = Math.max(1, xe - xs - 1);
-      gg.append('rect').attr('x', xs).attr('y', gy).attr('width', w).attr('height', gh).attr('rx', 2).attr('fill', d.i % 2 ? C.grid : C.surface2).attr('stroke', C.axis).attr('stroke-width', 0.5);
-      const chars = Math.floor((w - 8) / 5.6);
-      if (chars >= 5) gg.append('text').attr('class', 'tick').attr('x', xs + 4).attr('y', gy + 10).style('font-size', '10px').text(trunc(d.g.label.replace(/^Goal:\s*/i, ''), chars));
-      gg.append('rect').attr('x', xs).attr('y', gy).attr('width', w).attr('height', gh).attr('fill', 'transparent')
-        .on('pointermove', ev => { Tip.open().title(d.g.label || 'Goal').sub(fmtDate(new Date(d.s)) + ' – ' + fmtDate(new Date(d.e))).show(ev.clientX, ev.clientY); }).on('pointerleave', () => Tip.hide());
+      const xs = xc(Math.max(d.s, dom[0])), xe = xc(Math.min(d.e, dom[1])), w = Math.max(1, xe - xs);
+      gg.append('rect').attr('x', xs).attr('y', goalTop).attr('width', w).attr('height', goalsH).attr('fill', d.i % 2 ? C.wash2 : C.wash).attr('stroke', C.paper).attr('stroke-width', 1);
+      const label = String(d.g.label || '').replace(/^Goal:\s*/i, '');
+      if (w > 28) {
+        const t = fitText(label, S.small, w - 6);
+        if (t.length >= Math.min(label.length, 12)) txt(gg, xs + 3, goalTop + goalsH / 2 + S.small * 0.35, t, S.small, { fill: C.ink2, italic: true });
+      }
+      if (live) gg.append('rect').attr('x', xs).attr('y', goalTop).attr('width', w).attr('height', goalsH).attr('fill', 'transparent')
+        .on('pointermove', ev => { Tip.open().title(label || 'Goal').sub(fmtWhen(d.s) + ' – ' + fmtWhen(d.e)).show(ev.clientX, ev.clientY); }).on('pointerleave', () => Tip.hide());
     });
-    svg.append('text').attr('class', 'ghead').attr('x', 2).attr('y', gy + 10).text('Goals');
+    txt(svg, 0, goalTop + goalsH / 2 + S.small * 0.35, 'Goals', S.small, { fill: C.ink3, italic: true });
   }
-  // annotations
+  // annotations: numbered markers, hairline through the plot
   const ag = svg.append('g');
   levels.forEach(l => {
-    if (l.px < labelW - 1 || l.px > W - mr + 1) return;
-    const strong = l.an.kind === 'intervention';
-    ag.append('line').attr('x1', l.px).attr('x2', l.px).attr('y1', l.level >= 0 ? l.level * 15 + 4 : y0 - 4).attr('y2', H - 6)
-      .attr('stroke', strong ? C.ink : C.ink3).attr('stroke-width', strong ? 1.4 : 1).attr('stroke-dasharray', strong ? null : '3 3').attr('opacity', strong ? 0.85 : 0.7);
-    if (l.level >= 0 && l.text) ag.append('text').attr('class', 'ann halo').attr('x', l.px + 4).attr('y', l.level * 15 + 13).text(l.text);
-    ag.append('rect').attr('x', l.px - 5).attr('y', 0).attr('width', l.text ? l.text.length * 6.1 + 10 : 10).attr('height', l.level >= 0 ? l.level * 15 + 17 : Math.max(10, annH))
-      .attr('fill', 'transparent').on('pointermove', ev => {
-        Tip.open().title(l.an.label || '(no label)').sub(l.an.kind.charAt(0).toUpperCase() + l.an.kind.slice(1) + ' · ' + fmtDT(new Date(l.an.tt))).show(ev.clientX, ev.clientY);
-      }).on('pointerleave', () => Tip.hide());
+    if (l.level < 0) return;
+    const cy = annTop + r + 1 + l.level * (2 * r + 3), strong = l.an.kind === 'intervention';
+    ag.append('line').attr('x1', l.px).attr('x2', l.px).attr('y1', cy + r).attr('y2', plotBottom)
+      .attr('stroke', strong ? C.ink : C.ink3).attr('stroke-width', strong ? 0.9 : 0.7).attr('stroke-dasharray', strong ? null : '2 2.5').attr('opacity', 0.8);
+    drawAnnNumber(ag, l.px, cy, l.n, r, S, strong);
+    if (live) ag.append('circle').attr('cx', l.px).attr('cy', cy).attr('r', r + 4).attr('fill', 'transparent')
+      .on('pointermove', ev => { Tip.open().title(l.n + '. ' + (l.an.label || '(no label)')).sub(l.an.kind.charAt(0).toUpperCase() + l.an.kind.slice(1) + ' · ' + fmtWhenT(l.an.tt)).show(ev.clientX, ev.clientY); })
+      .on('pointerleave', () => Tip.hide());
   });
-  // row labels
+  // row labels and group headings
   const lg = svg.append('g');
-  rows.forEach(r => {
-    if (r.head) {
-      lg.append('text').attr('class', 'ghead').attr('x', 2).attr('y', r.y + 15).text(trunc(r.head, narrow ? 14 : 26));
-      lg.append('line').attr('x1', labelW).attr('x2', W - mr).attr('y1', r.y + headH - 2).attr('y2', r.y + headH - 2).attr('stroke', C.line || C.grid).attr('stroke', C.axis).attr('stroke-width', 0.6);
+  rows.forEach(rw => {
+    if (rw.head) {
+      const head = String(rw.head).toUpperCase() + ' · ' + rw.n;
+      txt(lg, 0, rw.y + headH - (S.paper ? 3.5 : 5), fitText(head, S.small, labelW - 4), S.small, { fill: C.ink3, ls: '0.05em' });
+      lg.append('line').attr('x1', labelW).attr('x2', W - mr).attr('y1', Math.round(rw.y + headH - 2) + 0.5).attr('y2', Math.round(rw.y + headH - 2) + 0.5).attr('stroke', C.hair).attr('stroke-width', 0.7);
       return;
     }
-    const a = r.a, g = lg.append('g').style('cursor', 'default');
-    const active = a.events.length || Number.isFinite(a.everT);
-    g.append('circle').attr('cx', 6).attr('cy', r.cy).attr('r', 4.5).attr('fill', labColor(a)).attr('opacity', active ? 1 : 0.45);
-    g.append('text').attr('class', active ? 'lbl' : 'lbl-dim').attr('x', 16).attr('y', r.cy + 4).text(trunc(a.name, narrow ? 12 : 23));
-    g.append('rect').attr('x', 0).attr('y', r.y).attr('width', labelW - 6).attr('height', rowH).attr('fill', 'transparent')
-      .on('pointermove', ev => { agentTip(M, a, null); Tip.show(ev.clientX, ev.clientY); }).on('pointerleave', () => Tip.hide());
+    const a = rw.a, active = a.events.length || Number.isFinite(a.everT);
+    txt(lg, 0, rw.cy + nameFs * 0.35, fitText(a.name, nameFs, labelW - 8), nameFs, { fill: active ? C.ink : C.ink3 });
   });
-  // edges
+  svg.append('line').attr('x1', labelW - 0.5).attr('x2', labelW - 0.5).attr('y1', y0).attr('y2', plotBottom).attr('stroke', C.rule).attr('stroke-width', 0.8).attr('shape-rendering', 'crispEdges');
+  // links (producer's claims)
   const eg = plot.append('g').attr('fill', 'none');
+  const edgeSel = [];
   if (state.showEdges) {
     const vis = M.edges.filter(e => e.tt >= dom[0] && e.tt <= dom[1] && rowY.has(e.from) && rowY.has(e.to) && e.from !== e.to);
     vis.forEach(e => {
       const px = x(e.tt), ya = rowY.get(e.from), yb = rowY.get(e.to);
-      const bend = Math.max(10, Math.min(70, Math.abs(yb - ya) * 0.35));
-      eg.append('path').attr('d', 'M' + px + ',' + ya + 'Q' + (px + bend) + ',' + ((ya + yb) / 2) + ' ' + px + ',' + yb)
-        .attr('stroke', edgeColor(e.kind)).attr('stroke-width', e.kind === 'correction' ? 1.5 : 1.1).attr('stroke-dasharray', EDGE_DASH[e.kind]).attr('opacity', 0.6);
-      eg.append('circle').attr('cx', px).attr('cy', yb).attr('r', 2.2).attr('fill', edgeColor(e.kind)).attr('opacity', 0.8);
+      const bend = Math.max(8, Math.min(60, Math.abs(yb - ya) * 0.3));
+      const p = eg.append('path').attr('d', 'M' + px + ',' + ya + 'Q' + (px + bend) + ',' + ((ya + yb) / 2) + ' ' + px + ',' + yb)
+        .attr('stroke', edgeColor(e.kind)).attr('stroke-width', e.kind === 'correction' ? 1.1 : 0.9).attr('stroke-dasharray', EDGE_DASH[e.kind]).attr('opacity', 0.5);
+      const c = eg.append('circle').attr('cx', px).attr('cy', yb).attr('r', 1.8).attr('fill', edgeColor(e.kind)).attr('opacity', 0.7);
+      edgeSel.push({ e, p, c });
     });
   }
   // event markers
   const inDom = M.events.filter(e => e.tt >= dom[0] && e.tt <= dom[1] && rowY.has(e.agent));
-  const size = rowH >= 21 ? 64 : 48;
+  const size = Math.max(18, Math.min(60, rowH * rowH * 0.16));
   const mk = plot.append('g').selectAll('path').data(inDom).join('path')
-    .attr('transform', e => 'translate(' + x(e.tt) + ',' + rowY.get(e.agent) + ')').attr('d', e => markerPath(e, e.channel === 'summary' ? size * 0.7 : size));
+    .attr('transform', e => 'translate(' + x(e.tt) + ',' + rowY.get(e.agent) + ')').attr('d', e => markerPath(e, size));
   styleMarker(mk);
   // adoption rings
   plot.append('g').selectAll('circle').data(M.adoptions.filter(d => d.tt >= dom[0] && d.tt <= dom[1] && rowY.has(d.agent))).join('circle')
-    .attr('cx', d => x(d.tt)).attr('cy', d => rowY.get(d.agent)).attr('r', rowH >= 21 ? 8.5 : 7.5).attr('fill', 'none')
-    .attr('stroke', C.ink).attr('stroke-width', 1.4).attr('stroke-dasharray', d => d.independent ? '2.2 2.2' : null);
-  // cursor, hover + pin rings
-  const cur = svg.append('line').attr('y1', y0 - 4).attr('y2', H - 6).attr('stroke', C.ink).attr('stroke-width', 1.2).attr('pointer-events', 'none').attr('opacity', 0);
-  const hov = plot.append('circle').attr('r', 9).attr('fill', 'none').attr('stroke', C.ink).attr('stroke-width', 1.5).attr('opacity', 0).attr('pointer-events', 'none');
-  const pin = plot.append('circle').attr('r', 10).attr('fill', 'none').attr('stroke', C.ink).attr('stroke-width', 2).attr('opacity', 0).attr('pointer-events', 'none');
+    .attr('cx', d => x(d.tt)).attr('cy', d => rowY.get(d.agent)).attr('r', Math.min(8, rowH * 0.4)).attr('fill', 'none')
+    .attr('stroke', C.ink).attr('stroke-width', 1).attr('stroke-dasharray', d => d.independent ? '2 1.6' : null);
+  drawTimeAxis(svg, x, plotBottom, labelW, W - mr, S);
+  if (!live) return svg.node();
+
+  // interaction: cursor, hover, pin, lineage
+  const cur = svg.append('line').attr('y1', y0).attr('y2', plotBottom).attr('stroke', C.ink).attr('stroke-width', 1).attr('pointer-events', 'none').attr('opacity', 0);
+  const hov = plot.append('circle').attr('r', 8).attr('fill', 'none').attr('stroke', C.ink).attr('stroke-width', 1.2).attr('opacity', 0).attr('pointer-events', 'none');
+  const pin = plot.append('circle').attr('r', 9.5).attr('fill', 'none').attr('stroke', C.ink).attr('stroke-width', 1.8).attr('opacity', 0).attr('pointer-events', 'none');
+  const rowHi = svg.insert('rect', ':first-child').attr('x', 0).attr('width', W).attr('height', rowH).attr('fill', C.wash).attr('opacity', 0).attr('pointer-events', 'none');
   const pts = inDom.map(e => [x(e.tt), rowY.get(e.agent), e]);
   const delaunay = pts.length ? d3.Delaunay.from(pts, p => p[0], p => p[1]) : null;
-  const overlay = svg.append('rect').attr('x', labelW).attr('y', y0).attr('width', W - mr - labelW).attr('height', H - y0).attr('fill', 'transparent').style('cursor', 'crosshair');
+  let lineageOf = null;
+  function lineage(a) {
+    if (a === lineageOf) return;
+    lineageOf = a;
+    edgeSel.forEach(d => {
+      const on = a && (d.e.from === a || d.e.to === a);
+      d.p.attr('opacity', !a ? 0.5 : on ? 0.95 : 0.08).attr('stroke-width', on ? 1.5 : (d.e.kind === 'correction' ? 1.1 : 0.9));
+      d.c.attr('opacity', !a ? 0.7 : on ? 1 : 0.1);
+    });
+  }
+  const overlay = svg.append('rect').attr('x', 0).attr('y', y0).attr('width', W).attr('height', plotBottom - y0).attr('fill', 'transparent').style('cursor', 'crosshair');
   function nearest(mx, my) {
-    if (!delaunay) return null;
-    const i = delaunay.find(mx, my); const p = pts[i];
-    return p && Math.hypot(p[0] - mx, p[1] - my) <= 14 ? p : null;
+    if (!delaunay || mx < labelW) return null;
+    const p = pts[delaunay.find(mx, my)];
+    return p && Math.hypot(p[0] - mx, p[1] - my) <= 12 ? p : null;
   }
   overlay.on('pointermove', ev => {
     const [mx, my] = d3.pointer(ev);
+    const rw = agentRows.find(q => my >= q.y && my < q.y + rowH);
+    if (rw) { rowHi.attr('y', rw.y).attr('opacity', 0.9); lineage(rw.a); } else { rowHi.attr('opacity', 0); lineage(null); }
     const p = nearest(mx, my);
-    if (p) {
-      hov.attr('cx', p[0]).attr('cy', p[1]).attr('opacity', 1);
-      eventTip(p[2]); Tip.show(ev.clientX, ev.clientY);
-      return;
-    }
+    if (p) { hov.attr('cx', p[0]).attr('cy', p[1]).attr('opacity', 1); eventTip(p[2]); Tip.show(ev.clientX, ev.clientY); return; }
     hov.attr('opacity', 0);
-    const r = agentRows.find(rr => my >= rr.y && my < rr.y + rowH);
-    if (!r) { Tip.hide(); return; }
-    agentTip(M, r.a, +x.invert(mx)); Tip.show(ev.clientX, ev.clientY);
-  }).on('pointerleave', () => { hov.attr('opacity', 0); Tip.hide(); })
+    if (!rw) { Tip.hide(); return; }
+    agentTip(M, rw.a, mx >= labelW ? +x.invert(mx) : null); Tip.show(ev.clientX, ev.clientY);
+  }).on('pointerleave', () => { hov.attr('opacity', 0); rowHi.attr('opacity', 0); lineage(null); Tip.hide(); })
     .on('click', ev => { const [mx, my] = d3.pointer(ev); const p = nearest(mx, my); setPin(p ? p[2] : null); });
   lane = { x, cur, pin, rowY, inDom, W, mr, labelW };
-  placePin(); placeCursor();
+  placePin(); placeLaneCursor();
+  return svg.node();
+}
+function setLaneCursor(t) { state.cursor = t; placeLaneCursor(); }
+function placeLaneCursor() {
+  if (!lane) return;
+  const t = state.cursor, px = t == null ? null : lane.x(t);
+  if (px == null || px < lane.labelW || px > lane.W - lane.mr) lane.cur.attr('opacity', 0);
+  else lane.cur.attr('x1', px).attr('x2', px).attr('opacity', 0.55);
 }
 function placePin() {
   if (!lane) return;
@@ -1149,49 +1253,53 @@ function placePin() {
   else lane.pin.attr('opacity', 0);
 }
 function setPin(e) { state.pin = e ? e.id : null; placePin(); renderDetail(); }
+function markerKey(e) {
+  return keySvg(g => { const p = g.append('path').attr('transform', 'translate(6,6)').attr('d', markerPath(e, 40)); styleMarker(p.datum(e)); p.attr('opacity', 1); }, 12, 12);
+}
 function eventTip(e) {
-  Tip.open().title(e.agent.name).sub(fmtDT(new Date(e.tt)) + (e.room ? ' · ' + e.room : ''))
-    .row(STANCE_LABEL[e.stance], CHANNEL_LABEL[e.channel] + ' · ' + confText(e.conf), C.s[e.stance]);
-  if (e.snippet) Tip.snip(trunc(e.snippet, 280), C.s[e.stance]);
+  Tip.open().title(e.agent.name).sub(fmtWhenT(e.tt) + (e.room ? ' · #' + e.room : ''))
+    .row(STANCE_LABEL[e.stance], '· ' + CHANNEL_LABEL[e.channel].toLowerCase() + ' · ' + confText(e.conf), markerKey(e));
+  if (e.snippet) Tip.quote(trunc(e.snippet, 280));
   Tip.note('Click to pin');
 }
 function agentTip(M, a, t) {
   Tip.open().title(a.name).sub(a.lab + (a.group ? ' · ' + a.group : ''));
   if (t != null) {
-    Tip.row(STATE_LABEL[M.stateAt(a, t)], 'on ' + fmtDate(new Date(t)), null);
-    if (M.hasExposures) { const n = M.expThatWeek(a, t); Tip.row(int(n), n === 1 ? 'exposure that week' : 'exposures that week', null); }
-    if (M.inMemory(a, t)) Tip.row('In memory', 'on that day', null);
+    Tip.row(STATE_LABEL[M.stateAt(a, t)], 'on ' + fmtWhen(t));
+    if (M.hasExposures) { const n = M.expThatWeek(a, t); Tip.row(int(n), n === 1 ? 'exposure that week' : 'exposures that week'); }
+    if (M.inMemory(a, t)) Tip.row('In saved memory', 'that day');
   }
-  Tip.row(a.role, a.group != null ? 'role (from the trace)' : 'role (derived)', null);
-  Tip.row(int(a.events.length), a.events.length === 1 ? 'event' : 'events', null);
-  if (M.hasExposures && Number.isFinite(a.firstExp)) Tip.row(fmtDate(new Date(a.firstExp)), 'first exposure', null);
-  if (Number.isFinite(a.adoptT)) Tip.row(fmtDate(new Date(a.adoptT)), a.adoption && a.adoption.independent ? 'adopted (independent)' : 'adopted', null);
-  if (Number.isFinite(a.firstRej)) Tip.row(fmtDate(new Date(a.firstRej)), 'first rejection', null);
-  const pres = [Number.isFinite(a.joined) ? 'joined ' + fmtDate(new Date(a.joined)) : null, Number.isFinite(a.left) ? 'left ' + fmtDate(new Date(a.left)) : null].filter(Boolean);
+  Tip.row(a.role, a.group != null ? '(role from the trace)' : '(role derived)');
+  Tip.row(int(a.events.length), a.events.length === 1 ? 'event' : 'events');
+  if (M.hasExposures && Number.isFinite(a.firstExp)) Tip.row(fmtWhen(a.firstExp), 'first exposure');
+  if (Number.isFinite(a.adoptT)) Tip.row(fmtWhen(a.adoptT), a.adoption && a.adoption.independent ? 'adopted (independent)' : 'adopted');
+  if (Number.isFinite(a.firstRej)) Tip.row(fmtWhen(a.firstRej), 'first rejection');
+  if (a.outE || a.inE) Tip.row(a.outE + ' out · ' + a.inE + ' in', 'links');
+  const pres = [Number.isFinite(a.joined) ? 'joined ' + fmtWhen(a.joined) : null, Number.isFinite(a.left) ? 'left ' + fmtWhen(a.left) : null].filter(Boolean);
   if (pres.length) Tip.note(pres.join(' · '));
 }
 function renderDetail() {
   const box = $('#detail'); box.replaceChildren();
   const M = currentModel();
   const e = state.pin && M ? M.evById.get(state.pin) : null;
-  if (!e) { box.append(el('p', 'detail-empty', 'Click a marker, or focus the chart and use the arrow keys, to pin an event here.')); return; }
+  if (!e) { box.append(el('p', 'detail-empty', 'Click a marker, or focus the swimlane and use the arrow keys, to pin an event here.')); return; }
   const head = el('div', 'd-head');
-  const ag = el('span', 'd-agent'); const dot = el('span', 'dot'); dot.style.setProperty('--k', labVar(e.agent.labKey)); ag.append(dot, document.createTextNode(e.agent.name));
-  const close = el('button', 'btn btn-quiet d-close', 'Unpin'); close.type = 'button'; close.addEventListener('click', () => setPin(null));
-  head.append(ag, el('span', 'd-time', fmtDT(new Date(e.tt))), close);
-  const snip = el('p', 'd-snip', e.snippet || '(no snippet)'); snip.style.setProperty('--k', C.s[e.stance]);
+  const close = el('button', 'btn d-close', 'Unpin'); close.type = 'button'; close.addEventListener('click', () => setPin(null));
+  const who = el('span', 'd-agent'); who.append(markerKey(e), document.createTextNode(' ' + e.agent.name));
+  head.append(who, el('span', 'd-time', fmtWhenT(e.tt)), close);
+  const snip = el('p', 'd-snip', e.snippet || '(no snippet)');
   const meta = el('div', 'd-meta');
-  const kv = (k, v) => { const s = el('span'); s.append(document.createTextNode(k + ' '), el('b', null, v)); meta.append(s); };
-  kv('Stance', STANCE_LABEL[e.stance]); kv('Channel', CHANNEL_LABEL[e.channel]); kv('Confidence', e.conf != null ? e.conf + ' of 3' : 'auto-detected (unlabelled)');
-  if (e.room) kv('Room', e.room);
-  kv('Event', e.id);
+  const kv = (k, v, code) => { const s = el('span'); s.append(document.createTextNode(k + ' ')); s.append(code ? el('code', null, v) : el('b', null, v)); meta.append(s); };
+  kv('Stance', STANCE_LABEL[e.stance] + ' (' + CLASS_LABEL[stanceClass(e.stance)].toLowerCase() + ')'); kv('Channel', CHANNEL_LABEL[e.channel]); kv('Confidence', e.conf != null ? e.conf + ' of 3' : 'auto-detected (unlabelled)');
+  if (e.room) kv('Room', '#' + e.room);
+  kv('Event', e.id, true);
   const ad = M.adoptions.find(d => d.event === e);
   if (ad) kv('Adoption', ad.independent ? 'independent' : 'after exposure' + (ad.sources.length ? ' (from ' + ad.sources.join(', ') + ')' : ''));
   const seen = M.exposures.filter(x => x.event === e).length;
   if (seen) kv('Seen by', seen + (seen === 1 ? ' exposure' : ' exposures'));
   box.append(head, snip, meta);
-  const rel = M.edges.filter(x => x.tt === e.tt && (x.from === e.agent || x.to === e.agent));
-  rel.forEach(x => box.append(el('p', 'note', EDGE_LABEL[x.kind] + ': ' + x.from.name + ' → ' + x.to.name + (x.evidence ? ' · ' + x.evidence : ''))));
+  M.edges.filter(x => x.tt === e.tt && (x.from === e.agent || x.to === e.agent))
+    .forEach(x => box.append(el('p', 'small muted', EDGE_LABEL[x.kind] + ' link: ' + x.from.name + ' → ' + x.to.name + (x.evidence ? ' · ' + x.evidence : ''))));
 }
 (function laneKeys() {
   const box = $('#lane-chart');
@@ -1208,28 +1316,68 @@ function renderDetail() {
     setPin(list[i]);
   });
 })();
+function renderAnnKey(M) {
+  const ol = $('#ann-key'); ol.replaceChildren();
+  const marks = annMarks(M);
+  ol.hidden = !marks.length;
+  marks.forEach(m => {
+    const li = el('li');
+    li.append(el('span', 'num', String(m.n)));
+    const body = el('span');
+    body.append(el('span', 'when', fmtWhen(m.an.tt) + (m.an.kind !== 'note' ? ', ' + m.an.kind : '') + ': '), document.createTextNode(m.an.label || '(no label)'));
+    li.append(body); ol.append(li);
+  });
+}
+function laneCaption(M, withKey) {
+  const parts = [];
+  parts.push('Figure ' + NUM.lane + ': Who said what about the idea, and when. One row per agent' + (state.order === 'role' ? ', grouped by role' : state.order === 'lab' ? ', grouped by lab' : ', in order of first event') + '; each marker is one labelled message or action (' + int(M.events.length) + ' in all).');
+  const cls = new Set(M.events.map(e => stanceClass(e.stance)));
+  const st = [];
+  if (cls.has('for')) st.push('filled vermillion, for the idea');
+  if (cls.has('neutral')) st.push('filled grey, neutral');
+  if (cls.has('against')) st.push('hollow blue, against it');
+  if (cls.has('mutates')) st.push('star, reworded');
+  parts.push('Fill gives the stance (' + st.join('; ') + ') and shape the channel; faded markers are low-confidence labels.');
+  const more = [];
+  if (M.adoptions.length) more.push('rings mark adoptions' + (M.adoptions.some(a => a.independent) ? ' (dashed: independent of any exposure)' : ''));
+  if (M.hasExposures) more.push('grey shading counts exposures per week, with a tick at the first');
+  if (M.persistence.length) more.push('a thin line along a row’s bottom is time in saved memory');
+  if (M.edges.length && state.showEdges) {
+    const ek = new Set(M.edges.map(e => e.kind)), desc = { transmission: 'solid: transmission', echo: 'dotted: phrase echo', tip: 'dashed: tip', correction: 'blue: correction' };
+    more.push('curves are the producer’s claimed links (' + TraceData.EDGE_KINDS.filter(k => ek.has(k)).map(k => desc[k]).join(', ') + ')');
+  }
+  if (M.annotations.some(a => a.kind === 'goal')) more.push('the band on top shows goals');
+  if (more.length) parts.push(more[0].charAt(0).toUpperCase() + more[0].slice(1) + (more.length > 1 ? '; ' + more.slice(1).join('; ') : '') + '.');
+  if (state.zoom) parts.push('Shown: ' + spanText(state.zoom[0], state.zoom[1]) + '.');
+  if (withKey) {
+    const marks = annMarks(M);
+    if (marks.length) parts.push('Numbered events: ' + marks.map(m => '(' + m.n + ') ' + fmtWhen(m.an.tt) + ', ' + (m.an.label || 'no label')).join('; ') + '.');
+  }
+  return parts.join(' ');
+}
 
-/* overview strip with brush */
+/* overview strip with brush (screen only) */
 let brushBusy = false;
 function renderOverview(M) {
   const box = $('#lane-overview');
   const W = box.clientWidth; if (!W) return;
-  const narrow = W < 600;
-  const labelW = narrow ? 100 : 176, mr = 14, H = 46, top = 6, bot = 30;
+  const S = sizes(null, W);
+  const narrow = W < 560;
+  const longest = d3.max(M.agents, a => textW(a.name, S.fig)) || 40;
+  const labelW = Math.round(Math.min(narrow ? 112 : 184, Math.max(64, longest + 10))), mr = narrow ? 6 : 10;
+  const H = 34, top = 4, bot = 26;
   const x = d3.scaleUtc().domain([M.t0, M.t1]).range([labelW, W - mr]);
   const svg = newSvg(box, W, H);
-  svg.append('text').attr('class', 'ghead').attr('x', 2).attr('y', top + 14).text('Zoom');
-  svg.append('text').attr('class', 'tick').attr('x', 2).attr('y', top + 27).text(narrow ? 'drag to select' : 'drag across to select');
+  txt(svg, 0, top + 10, 'Zoom', S.small, { fill: C.ink3, italic: true });
+  txt(svg, 0, top + 10 + S.small + 2, narrow ? 'drag across' : 'drag across the strip', S.small, { fill: C.ink3, italic: true });
   const bins = d3.bin().value(e => e.tt).domain([M.t0, M.t1]).thresholds(Math.max(10, Math.min(160, Math.floor((W - labelW) / 5))))(M.events);
   const ymax = d3.max(bins, b => b.length) || 1;
   const y = d3.scaleLinear().domain([0, ymax]).range([bot, top]);
-  svg.append('rect').attr('x', labelW).attr('y', top).attr('width', W - mr - labelW).attr('height', bot - top).attr('fill', C.stripe);
+  svg.append('rect').attr('x', labelW).attr('y', top).attr('width', W - mr - labelW).attr('height', bot - top).attr('fill', C.wash);
   svg.append('g').selectAll('rect').data(bins.filter(b => b.length)).join('rect')
-    .attr('x', b => x(b.x0) + 0.5).attr('width', b => Math.max(1, x(b.x1) - x(b.x0) - 1)).attr('y', b => y(b.length)).attr('height', b => bot - y(b.length)).attr('fill', C.ink3).attr('opacity', 0.7);
-  svg.append('line').attr('x1', labelW).attr('x2', W - mr).attr('y1', bot).attr('y2', bot).attr('stroke', C.axis);
-  M.annotations.filter(a => a.kind !== 'goal').forEach(a => svg.append('line').attr('x1', x(a.tt)).attr('x2', x(a.tt)).attr('y1', top).attr('y2', bot).attr('stroke', a.kind === 'intervention' ? C.ink : C.ink3).attr('stroke-dasharray', a.kind === 'intervention' ? null : '2 2').attr('opacity', 0.7));
-  const ticks = timeTicks(x, W - labelW), tf = tickFmt(x);
-  svg.append('g').selectAll('text').data(ticks).join('text').attr('class', 'tick').attr('x', x).attr('y', bot + 13).attr('text-anchor', 'middle').text(tf);
+    .attr('x', b => x(b.x0) + 0.4).attr('width', b => Math.max(1, x(b.x1) - x(b.x0) - 0.8)).attr('y', b => y(b.length)).attr('height', b => bot - y(b.length)).attr('fill', C.ink3);
+  svg.append('line').attr('x1', labelW).attr('x2', W - mr).attr('y1', bot + 0.5).attr('y2', bot + 0.5).attr('stroke', C.rule).attr('stroke-width', 0.8);
+  annMarks(M).forEach(m => svg.append('line').attr('x1', x(m.an.tt)).attr('x2', x(m.an.tt)).attr('y1', top).attr('y2', bot).attr('stroke', m.an.kind === 'intervention' ? C.ink : C.ink3).attr('stroke-dasharray', m.an.kind === 'intervention' ? null : '2 2').attr('stroke-width', 0.7));
   const brush = d3.brushX().extent([[labelW, top], [W - mr, bot]])
     .on('brush end', ev => {
       if (brushBusy) return;
@@ -1239,6 +1387,7 @@ function renderOverview(M) {
       setZoom([a, b], ev.type === 'brush');
     });
   const bg = svg.append('g').call(brush);
+  bg.selectAll('.selection').attr('fill', C.ink).attr('fill-opacity', 0.1).attr('stroke', C.ink2).attr('stroke-width', 0.8);
   if (state.zoom) { brushBusy = true; bg.call(brush.move, state.zoom.map(v => x(v))); brushBusy = false; }
   const clear = () => { brushBusy = true; bg.call(brush.move, null); brushBusy = false; };
   $('#zoom-reset').onclick = () => { clear(); setZoom(null); };
@@ -1248,415 +1397,146 @@ function setZoom(z, live) {
   state.zoom = z;
   $('#zoom-reset').disabled = !z;
   cancelAnimationFrame(zoomRaf);
-  zoomRaf = requestAnimationFrame(() => { const M = currentModel(); if (M) safe(() => renderSwimlane(M)); });
+  zoomRaf = requestAnimationFrame(() => { const M = currentModel(); if (M) { safe(() => renderLane(M)); $('#cap-lane').textContent = laneCaption(M); } });
   if (!z && !live) { const M = currentModel(); if (M) safe(() => renderOverview(M)); }
 }
 
-/* ---------- network: two layouts, one painter ---------- */
-let net = null;
-const NET_SUB = {
-  flow: 'Who passed it on. Only agents with a link or an adoption are drawn, placed left to right by when they adopted (or first linked). Lines are transmissions, echoes, tips and corrections; a warm halo marks an adopter, a cool dashed halo an agent whose latest stance is a rejection. Press play or move the slider to replay.',
-  ring: 'Who could have heard it. Every agent sits on a ring, grouped by lab, in order of first activity. Agents fill in as they are exposed and adopt; links appear when they happen. Press play or move the slider to replay.'
-};
-const byEver = (a, b) => (a.everT === b.everT ? a.idx - b.idx : (a.everT === Infinity ? 1 : b.everT === Infinity ? -1 : a.everT - b.everT));
-function layoutRing(M, W, narrow) {
-  const showLabels = !narrow && M.agents.length <= 60;
-  const H = narrow ? Math.min(W, 420) : Math.max(380, Math.min(580, W * 0.52));
-  const cx = W / 2, cy = H / 2;
-  const R = Math.max(60, Math.min(showLabels ? W / 2 - 160 : W / 2 - 22, H / 2 - (showLabels ? 26 : 18)));
-  const order = [];
-  M.labs.forEach(l => M.agents.filter(a => a.lab === l.lab).sort(byEver).forEach(a => order.push(a)));
-  const gaps = M.labs.length > 1 ? M.labs.length : 0, slots = Math.max(1, order.length + gaps);
-  const pos = new Map(), arcs = [];
-  let slot = 0;
-  M.labs.forEach(l => {
-    const s0 = slot;
-    order.filter(a => a.lab === l.lab).forEach(a => { const ang = -Math.PI / 2 + 2 * Math.PI * slot / slots; pos.set(a, { ang, x: cx + R * Math.cos(ang), y: cy + R * Math.sin(ang) }); slot++; });
-    arcs.push({ lab: l, a0: -Math.PI / 2 + 2 * Math.PI * (s0 - 0.4) / slots, a1: -Math.PI / 2 + 2 * Math.PI * (slot - 0.6) / slots });
-    if (gaps) slot++;
-  });
-  return {
-    H, nodes: order, pos, edges: M.edges.filter(e => e.from !== e.to), r: () => 6.5,
-    edgePath(e) { const p = pos.get(e.from), q = pos.get(e.to); const mx = (p.x + q.x) / 2, my = (p.y + q.y) / 2; return 'M' + p.x + ',' + p.y + 'Q' + (cx + (mx - cx) * 0.3) + ',' + (cy + (my - cy) * 0.3) + ' ' + q.x + ',' + q.y; },
-    decor(svg) {
-      const arc = d3.arc();
-      svg.append('g').selectAll('path').data(arcs.filter(d => d.a1 > d.a0)).join('path')
-        .attr('d', d => arc({ innerRadius: R + 12, outerRadius: R + 14.5, startAngle: d.a0 + Math.PI / 2, endAngle: d.a1 + Math.PI / 2 }))
-        .attr('transform', 'translate(' + cx + ',' + cy + ')').attr('fill', d => C.lab[d.lab.key]).attr('opacity', 0.9);
-    },
-    labels(svg) {
-      if (!showLabels) return;
-      svg.append('g').selectAll('text').data(order).join('text').attr('class', 'lbl halo')
-        .attr('x', a => cx + (R + 22) * Math.cos(pos.get(a).ang)).attr('y', a => cy + (R + 22) * Math.sin(pos.get(a).ang) + 4)
-        .attr('text-anchor', a => Math.cos(pos.get(a).ang) >= 0.02 ? 'start' : Math.cos(pos.get(a).ang) <= -0.02 ? 'end' : 'middle')
-        .text(a => trunc(a.name, 22));
-    },
-    cursorX: null,
-    note: M.edges.length ? '' : 'This trace has no agent-to-agent links, so the ring shows states only.'
-  };
-}
-function layoutFlow(M, W, narrow) {
-  const inv = new Set();
-  M.edges.forEach(e => { if (e.from !== e.to) { inv.add(e.from); inv.add(e.to); } });
-  M.agents.forEach(a => { if (Number.isFinite(a.adoptT)) inv.add(a); });
-  const nodes = M.agents.filter(a => inv.has(a)).sort(byEver);
-  if (!nodes.length) return null;
-  const showLabels = !narrow && nodes.length <= 60;
-  const H = narrow ? 400 : Math.max(340, Math.min(620, 110 + nodes.length * 17));
-  const padL = 16, padR = showLabels ? 150 : 16, top = 16, bottom = 34;
-  const x = d3.scaleUtc().domain([M.t0, M.t1]).range([padL + 8, W - padR]);
-  const anchor = a => {
-    if (Number.isFinite(a.adoptT)) return a.adoptT;
-    const e = M.edges.find(d => d.from === a || d.to === a);
-    return e ? e.tt : (Number.isFinite(a.everT) ? a.everT : M.t0);
-  };
-  const idx = new Map(nodes.map((a, i) => [a, i]));
-  const sn = nodes.map((a, i) => ({ a, tx: x(anchor(a)), x: x(anchor(a)), y: top + (H - top - bottom) * (i + 0.5) / nodes.length }));
-  const links = M.edges.filter(e => e.from !== e.to).map(e => ({ source: idx.get(e.from), target: idx.get(e.to) }));
-  const sim = d3.forceSimulation(sn)
-    .force('x', d3.forceX(d => d.tx).strength(0.9))
-    .force('y', d3.forceY((top + H - bottom) / 2).strength(0.04))
-    .force('link', d3.forceLink(links).distance(46).strength(0.25))
-    .force('charge', d3.forceManyBody().strength(-90).distanceMax(220))
-    .force('collide', d3.forceCollide(13))
-    .stop();
-  for (let i = 0; i < 320; i++) sim.tick();
-  const pos = new Map();
-  sn.forEach(d => pos.set(d.a, { x: Math.max(padL, Math.min(W - padR, d.x)), y: Math.max(top + 6, Math.min(H - bottom - 6, d.y)) }));
-  const left = M.agents.length - nodes.length;
-  return {
-    H, nodes, pos, edges: M.edges.filter(e => e.from !== e.to), r: a => Number.isFinite(a.adoptT) ? 7.5 : 5,
-    edgePath(e) {
-      const p = pos.get(e.from), q = pos.get(e.to);
-      const dx = q.x - p.x, dy = q.y - p.y, len = Math.hypot(dx, dy) || 1;
-      const bend = Math.min(40, len * 0.18);
-      return 'M' + p.x + ',' + p.y + 'Q' + ((p.x + q.x) / 2 - dy / len * bend) + ',' + ((p.y + q.y) / 2 + dx / len * bend) + ' ' + q.x + ',' + q.y;
-    },
-    decor(svg) {
-      const ticks = timeTicks(x, W - padL - padR), tf = tickFmt(x);
-      svg.append('g').selectAll('line').data(ticks).join('line').attr('x1', x).attr('x2', x).attr('y1', top).attr('y2', H - bottom).attr('stroke', C.grid);
-      svg.append('line').attr('x1', padL).attr('x2', W - padR).attr('y1', H - bottom).attr('y2', H - bottom).attr('stroke', C.axis);
-      svg.append('g').selectAll('text').data(ticks).join('text').attr('class', 'tick').attr('x', x).attr('y', H - bottom + 15).attr('text-anchor', 'middle').text(tf);
-      M.annotations.filter(a => a.kind === 'intervention').forEach(a => svg.append('line').attr('x1', x(a.tt)).attr('x2', x(a.tt)).attr('y1', top).attr('y2', H - bottom).attr('stroke', C.ink).attr('stroke-width', 1.2).attr('opacity', 0.5));
-    },
-    labels(svg) {
-      if (!showLabels) return;
-      svg.append('g').selectAll('text').data(nodes).join('text').attr('class', 'lbl halo')
-        .attr('x', a => pos.get(a).x + 11).attr('y', a => pos.get(a).y + 4).text(a => trunc(a.name, 20));
-    },
-    cursorX: x, cursorY: [top, H - bottom],
-    note: (left ? left + (left === 1 ? ' agent has' : ' agents have') + ' no link or adoption and ' + (left === 1 ? 'is' : 'are') + ' not drawn here; switch to “Who could have heard it” to see everyone. ' : '') +
-      (M.edges.length ? '' : 'This trace has no agent-to-agent links, so only adopters are placed, by adoption time.')
-  };
-}
-function renderNetwork(M) {
-  const box = $('#net-chart');
-  const W = box.clientWidth; if (!W) return;
-  const narrow = W < 620;
-  let view = state.netView;
-  let L = view === 'flow' ? layoutFlow(M, W, narrow) : null;
-  if (!L) { view = 'ring'; L = layoutRing(M, W, narrow); }
-  document.querySelectorAll('[data-net]').forEach(b => { b.setAttribute('aria-pressed', String(b.dataset.net === view)); });
-  $('#net-sub').textContent = NET_SUB[view];
-  const svg = newSvg(box, W, L.H).attr('aria-hidden', 'true');
-  L.decor(svg);
-  const cur = L.cursorX ? svg.append('line').attr('y1', L.cursorY[0]).attr('y2', L.cursorY[1]).attr('stroke', C.ink).attr('stroke-width', 1.2).attr('opacity', 0) : null;
-  const eg = svg.append('g').attr('fill', 'none');
-  const edgeSel = eg.selectAll('path').data(L.edges).join('path').attr('class', 'ne').attr('d', e => L.edgePath(e))
-    .attr('stroke', e => edgeColor(e.kind)).attr('stroke-dasharray', e => EDGE_DASH[e.kind]);
-  const endDot = e => { const p = L.pos.get(e.from), q = L.pos.get(e.to); const d = Math.hypot(p.x - q.x, p.y - q.y) || 1, k = Math.min(0.45, (L.r(e.to) + 4) / d); return [q.x + (p.x - q.x) * k, q.y + (p.y - q.y) * k]; };
-  const tipSel = eg.selectAll('circle').data(L.edges).join('circle').attr('class', 'ne').attr('r', 2.6).attr('fill', e => edgeColor(e.kind))
-    .attr('cx', e => endDot(e)[0]).attr('cy', e => endDot(e)[1]);
-  const ng = svg.append('g').selectAll('g').data(L.nodes).join('g').attr('class', 'nd node').attr('transform', a => 'translate(' + L.pos.get(a).x + ',' + L.pos.get(a).y + ')');
-  ng.append('circle').attr('class', 'halo-c').attr('r', a => L.r(a) + 4.5).attr('fill', 'none').attr('stroke-width', 2);
-  ng.append('circle').attr('class', 'core-c').attr('r', a => L.r(a));
-  ng.append('circle').attr('r', 14).attr('fill', 'transparent');
-  L.labels(svg);
-  let hoverA = null;
-  ng.on('pointermove', (ev, a) => {
-    hoverA = a; paintEdges();
-    agentTip(M, a, curT()); Tip.note(a.outE + (a.outE === 1 ? ' link out · ' : ' links out · ') + a.inE + ' in'); Tip.show(ev.clientX, ev.clientY);
-  }).on('pointerleave', () => { hoverA = null; paintEdges(); Tip.hide(); });
-  function paintEdges() {
-    const t = curT(), span = M.t1 - M.t0;
-    const vis = e => e.tt <= t, on = e => hoverA && (e.from === hoverA || e.to === hoverA), fresh = e => vis(e) && t - e.tt < span * 0.04;
-    edgeSel.attr('opacity', e => !vis(e) ? 0 : hoverA ? (on(e) ? 0.95 : 0.08) : (fresh(e) ? 0.95 : 0.55)).attr('stroke-width', e => fresh(e) || on(e) ? 2 : 1.2);
-    tipSel.attr('opacity', e => !vis(e) ? 0 : hoverA ? (on(e) ? 1 : 0.1) : 0.8);
-  }
-  function paint() {
-    const t = curT();
-    ng.each(function (a) {
-      const s = M.stateAt(a, t), col = labColor(a), g = d3.select(this);
-      g.select('.core-c').attr('fill', s >= 2 ? col : C.surface).attr('stroke', s >= 2 ? C.surface : col).attr('stroke-width', s >= 2 ? 1.5 : s === 1 ? 2 : 1.2).attr('opacity', s === 0 ? 0.4 : 1);
-      g.select('.halo-c').attr('stroke', s === 3 ? C.s.rejects : C.s.endorses).attr('stroke-dasharray', s === 3 ? '3 2' : null).attr('opacity', s >= 2 ? 1 : 0);
-    });
-    paintEdges();
-    if (cur) { const showC = state.cursor != null; cur.attr('x1', L.cursorX(t)).attr('x2', L.cursorX(t)).attr('opacity', showC ? 0.8 : 0); }
-    const c = M.countAt(t);
-    const cnt = $('#counter'); cnt.replaceChildren();
-    const chip = (v, label, color) => { const s = el('span', 'cnt'); if (color) { const d = el('span', 'dot'); d.style.setProperty('--k', color); s.append(d); } s.append(el('b', null, int(v)), document.createTextNode(' ' + label)); cnt.append(s); };
-    chip(c.exposed, M.hasExposures ? 'exposed' : 'active', C.ink3);
-    chip(c.adopted, 'adopted', C.s.endorses);
-    chip(c.rejected, 'rejected', C.s.rejects);
-    cnt.append(el('span', 'cnt', 'of ' + M.agents.length + ' agents, by ' + fmtDate(new Date(t))));
-    $('#net-date').textContent = fmtDate(new Date(t));
-  }
-  net = { paint };
-  paint();
-  const note = $('#net-note');
-  note.hidden = !L.note; note.textContent = L.note;
-}
-function curT() { const M = currentModel(); if (!M) return 0; const v = +$('#scrub').value; return M.t0 + (M.t1 - M.t0) * v / 1000; }
-function onScrub() {
-  const v = +$('#scrub').value;
-  state.cursor = v >= 1000 && !state.playing ? null : curT();
-  if (net) net.paint();
-  placeCursor();
-}
-function placeCursor() {
-  const t = state.cursor;
-  if (lane) {
-    const px = t == null ? null : lane.x(t);
-    if (px == null || px < lane.labelW || px > lane.W - lane.mr) lane.cur.attr('opacity', 0);
-    else lane.cur.attr('x1', px).attr('x2', px).attr('opacity', 0.9);
-  }
-  if (curves) curves.cursor(t);
-}
-$('#scrub').addEventListener('input', onScrub);
-let playRaf = 0, lastTs = 0;
-function stopPlay() {
-  state.playing = false; cancelAnimationFrame(playRaf);
-  const b = $('#play'); b.textContent = 'Play'; b.setAttribute('aria-label', 'Play'); b.setAttribute('aria-pressed', 'false');
-  $('#counter').setAttribute('aria-live', 'polite');
-}
-$('#play').addEventListener('click', () => {
-  if (state.playing) { stopPlay(); onScrub(); return; }
-  const s = $('#scrub');
-  if (+s.value >= 1000) s.value = 0;
-  state.playing = true; lastTs = 0;
-  const b = $('#play'); b.textContent = 'Pause'; b.setAttribute('aria-label', 'Pause'); b.setAttribute('aria-pressed', 'true');
-  $('#counter').setAttribute('aria-live', 'off');
-  const step = ts => {
-    if (!state.playing) return;
-    if (lastTs) s.value = Math.min(1000, +s.value + (ts - lastTs) / 14);   // ~14 s for the full span
-    lastTs = ts;
-    onScrub();
-    if (+s.value >= 1000) { stopPlay(); state.cursor = null; placeCursor(); return; }
-    playRaf = requestAnimationFrame(step);
-  };
-  playRaf = requestAnimationFrame(step);
-});
-
-/* ---------- cumulative curves ---------- */
-let curves = null;
-function renderCurves(M) {
-  const box = $('#curves-chart');
-  const W = box.clientWidth; if (!W) return;
-  const cols = W >= 760 ? 3 : 1;
-  const gapX = 28, ml = 34, mr = 30, ph = 116, titleH = 22, axisH = 22, gapY = 18;
-  const pw = (W - (cols - 1) * gapX) / cols;
-  const panels = [
-    { key: 'exposed', label: M.hasExposures ? 'Exposed' : 'Active (no exposure data)', color: C.ink2 },
-    { key: 'adopted', label: M.derivedAdoption ? 'Adopted (first warm event)' : 'Adopted', color: C.s.endorses },
-    { key: 'rejected', label: 'Rejected at least once', color: C.s.rejects }
-  ];
-  const rowsN = Math.ceil(panels.length / cols);
-  const H = rowsN * (titleH + ph + axisH) + (rowsN - 1) * gapY + 4;
-  const svg = newSvg(box, W, H).attr('aria-hidden', 'true');
-  const ymax = Math.max(1, M.cum.exposed.length, M.cum.adopted.length, M.cum.rejected.length);
-  const parts = [];
-  panels.forEach((p, i) => {
-    const c = i % cols, r = Math.floor(i / cols);
-    const ox = c * (pw + gapX), oy = r * (titleH + ph + axisH + gapY);
-    const x = d3.scaleUtc().domain([M.t0, M.t1]).range([ox + ml, ox + pw - mr]);
-    const y = d3.scaleLinear().domain([0, ymax]).nice(4).range([oy + titleH + ph, oy + titleH + 4]);
-    const g = svg.append('g');
-    g.append('text').attr('class', 'ptitle').attr('x', ox).attr('y', oy + 14).text(p.label);
-    const yt = y.ticks(3).filter(Number.isInteger);
-    g.selectAll('line.gl').data(yt.filter(t => t > 0)).join('line').attr('x1', ox + ml).attr('x2', ox + pw - mr).attr('y1', y).attr('y2', y).attr('stroke', C.grid).attr('shape-rendering', 'crispEdges');
-    g.selectAll('text.yt').data(yt).join('text').attr('class', 'tick').attr('x', ox + ml - 6).attr('y', t => y(t) + 3.5).attr('text-anchor', 'end').text(d3.format('d'));
-    g.append('line').attr('x1', ox + ml).attr('x2', ox + pw - mr).attr('y1', y(0)).attr('y2', y(0)).attr('stroke', C.axis);
-    M.annotations.filter(a => a.kind !== 'goal').forEach(a => g.append('line').attr('x1', x(a.tt)).attr('x2', x(a.tt)).attr('y1', oy + titleH + 2).attr('y2', y(0))
-      .attr('stroke', a.kind === 'intervention' ? C.ink2 : C.axis).attr('stroke-dasharray', '3 3').attr('stroke-width', a.kind === 'intervention' ? 1.3 : 1));
-    const xt = x.ticks(Math.max(2, Math.floor((pw - ml - mr) / 110)));
-    g.selectAll('text.xt').data(xt).join('text').attr('class', 'tick').attr('x', x).attr('y', y(0) + 15).attr('text-anchor', 'middle').text(tickFmt(x));
-    const times = M.cum[p.key];
-    const pts = [[M.t0, 0]].concat(times.map((t, j) => [t, j + 1])).concat([[M.t1, times.length]]);
-    g.append('path').datum(pts).attr('fill', p.color).attr('fill-opacity', 0.1).attr('d', d3.area().curve(d3.curveStepAfter).x(d => x(d[0])).y0(y(0)).y1(d => y(d[1])));
-    g.append('path').datum(pts).attr('fill', 'none').attr('stroke', p.color).attr('stroke-width', 2).attr('stroke-linejoin', 'round').attr('d', d3.line().curve(d3.curveStepAfter).x(d => x(d[0])).y(d => y(d[1])));
-    g.append('circle').attr('cx', x(M.t1)).attr('cy', y(times.length)).attr('r', 3.5).attr('fill', p.color);
-    g.append('text').attr('class', 'val').attr('x', x(M.t1) + 7).attr('y', y(times.length) + 4).text(int(times.length));
-    const cur = g.append('line').attr('y1', oy + titleH + 2).attr('y2', y(0)).attr('stroke', C.ink).attr('stroke-width', 1.2).attr('opacity', 0).attr('pointer-events', 'none');
-    const hov = g.append('line').attr('y1', oy + titleH + 2).attr('y2', y(0)).attr('stroke', C.ink3).attr('stroke-width', 1).attr('opacity', 0).attr('pointer-events', 'none');
-    const dot = g.append('circle').attr('r', 3.5).attr('fill', p.color).attr('stroke', C.surface).attr('stroke-width', 1.5).attr('opacity', 0).attr('pointer-events', 'none');
-    g.append('rect').attr('x', ox + ml).attr('y', oy + titleH).attr('width', pw - ml - mr).attr('height', ph).attr('fill', 'transparent')
-      .on('pointermove', ev => { const t = +x.invert(d3.pointer(ev)[0]); hoverAll(t); const c = M.countAt(t);
-        Tip.open().title(fmtDate(new Date(t))).row(int(c.exposed), panels[0].label.toLowerCase(), panels[0].color).row(int(c.adopted), 'adopted', panels[1].color).row(int(c.rejected), 'rejected at least once', panels[2].color);
-        const near = M.annotations.filter(a => a.kind !== 'goal' && Math.abs(x(a.tt) - x(t)) < 5); near.forEach(a => Tip.note(a.label));
-        Tip.show(ev.clientX, ev.clientY); })
-      .on('pointerleave', () => { hoverAll(null); Tip.hide(); });
-    parts.push({ x, y, cur, hov, dot, key: p.key, oy });
-  });
-  function hoverAll(t) {
-    parts.forEach(pp => {
-      if (t == null) { pp.hov.attr('opacity', 0); pp.dot.attr('opacity', 0); return; }
-      const v = M.countAt(t)[pp.key];
-      pp.hov.attr('x1', pp.x(t)).attr('x2', pp.x(t)).attr('opacity', 1);
-      pp.dot.attr('cx', pp.x(t)).attr('cy', pp.y(v)).attr('opacity', 1);
-    });
-  }
-  curves = { cursor(t) { parts.forEach(pp => { if (t == null) pp.cur.attr('opacity', 0); else pp.cur.attr('x1', pp.x(t)).attr('x2', pp.x(t)).attr('opacity', 0.85); }); } };
-}
-
-/* ---------- quotes ---------- */
+/* ---------- quotes (a table) ---------- */
 function renderQuotes(M) {
-  const card = $('#card-quotes');
-  card.hidden = !M.quotes.length;
-  const ol = $('#quotes'); ol.replaceChildren();
-  M.quotes.forEach(qq => {
-    const li = el('li');
-    li.append(el('div', 'q-date', fmtDate(new Date(qq.tt))));
-    const body = el('div', 'q-body');
-    const chip = el('span', 'chip'); const d = el('span', 'dot'); d.style.setProperty('--k', labVar(qq.agent ? qq.agent.labKey : 'other'));
-    chip.append(d, document.createTextNode((qq.agentName || 'Unknown agent') + (qq.agent ? ' · ' + qq.agent.lab : '')));
-    body.append(chip, el('p', 'q-text', qq.text));
-    if (qq.note) body.append(el('p', 'q-note', qq.note));
-    li.append(body); ol.append(li);
-  });
+  const wrap = $('#quotes-wrap');
+  wrap.replaceChildren();
+  if (!M.quotes.length) return;
+  const agentCell = q => { const s = el('span'); s.append(document.createTextNode(q.agentName || 'Unknown agent')); if (q.agent) { s.append(document.createElement('br'), el('span', 'lab', q.agent.lab)); } return s; };
+  wrap.append(makeTable([
+    { label: 'Date', get: q => fmtWhen(q.tt), cls: 'when' },
+    { label: 'Agent', get: agentCell },
+    { label: 'Quote', get: q => q.text, cls: 'quote' },
+    { label: 'Note', get: q => q.note, cls: 'note' }
+  ], M.quotes, 'Table ' + NUM.quotes + ': How the wording changed. Quotes picked by the trace’s producer, oldest first.', 'stack'));
 }
 
-/* ---------- legends ---------- */
-function renderLegends(M) {
-  const st = M.events.reduce((s, e) => s.add(e.stance), new Set());
-  const ch = M.events.reduce((s, e) => s.add(e.channel), new Set());
-  const stanceItems = TraceData.STANCES.filter(s => st.has(s)).map(s => ({ label: STANCE_LABEL[s], draw: g => g.append('path').attr('transform', 'translate(7,7)').attr('d', d3.symbol(s === 'mutates' ? d3.symbolStar : d3.symbolCircle, s === 'mutates' ? 80 : 60)()).attr('fill', C.s[s]) }));
-  const chanItems = TraceData.CHANNELS.filter(c => ch.has(c)).map(c => ({ label: CHANNEL_LABEL[c], draw: g => {
-    const p = g.append('path').attr('transform', 'translate(7,7)').attr('d', d3.symbol(SYM[c], c === 'summary' ? 42 : 60)());
-    if (c === 'summary') p.attr('fill', 'none').attr('stroke', C.ink2).attr('stroke-width', 2); else p.attr('fill', C.ink2);
-  } }));
-  legend($('#lg-lane'), [{ title: 'Stance' }].concat(stanceItems, [{ sep: true }, { title: 'Channel' }], chanItems));
-  const more = [
-    { label: 'Faded: confidence 1, or auto-detected (unlabelled)', draw: g => g.append('circle').attr('cx', 7).attr('cy', 7).attr('r', 4.5).attr('fill', C.s.endorses).attr('opacity', 0.35) },
-    { label: 'Adoption', draw: g => g.append('circle').attr('cx', 7).attr('cy', 7).attr('r', 6).attr('fill', 'none').attr('stroke', C.ink).attr('stroke-width', 1.4) },
-    { label: 'Independent adoption', draw: g => g.append('circle').attr('cx', 7).attr('cy', 7).attr('r', 6).attr('fill', 'none').attr('stroke', C.ink).attr('stroke-width', 1.4).attr('stroke-dasharray', '2.2 2.2') }
-  ];
-  if (M.hasExposures) {
-    const heat = expHeat(M), mx = Math.max(2, M.expWeekMax);
-    const steps = [1, Math.round(Math.sqrt(mx)), mx].filter((v, i, a) => a.indexOf(v) === i);
-    more.push({ label: 'Exposures per week (' + steps.join(' → ') + ')', w: 30, draw: g => steps.forEach((v, i) => g.append('rect').attr('x', i * 10).attr('y', 2).attr('width', 9).attr('height', 10).attr('fill', C.ink).attr('fill-opacity', heat(v))) });
-    more.push({ label: 'First exposure', w: 6, draw: g => g.append('line').attr('x1', 3).attr('x2', 3).attr('y1', 2).attr('y2', 12).attr('stroke', C.ink2).attr('stroke-width', 1.5) });
-  }
-  if (M.persistence.length) more.push({ label: 'In memory', w: 18, draw: g => g.append('rect').attr('x', 0).attr('y', 6).attr('width', 18).attr('height', 2.5).attr('rx', 1.25).attr('fill', C.ink2) });
-  const ek = new Set(M.edges.map(e => e.kind));
-  const edgeItems = TraceData.EDGE_KINDS.filter(k => ek.has(k)).map(k => ({ label: EDGE_LABEL[k], w: 20, draw: g => g.append('line').attr('x1', 1).attr('x2', 19).attr('y1', 7).attr('y2', 7).attr('stroke', edgeColor(k)).attr('stroke-width', 1.6).attr('stroke-dasharray', EDGE_DASH[k]) }));
-  if (M.annotations.some(a => a.kind === 'goal')) more.push({ label: 'Goal period', w: 18, draw: g => g.append('rect').attr('x', 0).attr('y', 2).attr('width', 18).attr('height', 10).attr('rx', 2).attr('fill', C.grid).attr('stroke', C.axis).attr('stroke-width', 0.5) });
-  if (M.annotations.some(a => a.kind !== 'goal' && a.kind !== 'intervention')) more.push({ label: 'Annotation', w: 10, draw: g => g.append('line').attr('x1', 5).attr('x2', 5).attr('y1', 0).attr('y2', 14).attr('stroke', C.ink3).attr('stroke-dasharray', '3 3') });
-  if (M.annotations.some(a => a.kind === 'intervention')) more.push({ label: 'Intervention', w: 10, draw: g => g.append('line').attr('x1', 5).attr('x2', 5).attr('y1', 0).attr('y2', 14).attr('stroke', C.ink).attr('stroke-width', 1.4) });
-  legend($('#lg-lane2'), more.concat(edgeItems.length ? [{ sep: true }].concat(edgeItems) : []));
-  const node = (fill, stroke, sw, op, halo, dash) => g => {
-    if (halo) g.append('circle').attr('cx', 8).attr('cy', 8).attr('r', 7).attr('fill', 'none').attr('stroke', halo).attr('stroke-width', 1.6).attr('stroke-dasharray', dash);
-    g.append('circle').attr('cx', 8).attr('cy', 8).attr('r', 4).attr('fill', fill).attr('stroke', stroke).attr('stroke-width', sw).attr('opacity', op);
-  };
-  const labItems = M.labs.slice(0, 8).map(l => ({ label: l.lab, w: 10, draw: g => g.append('circle').attr('cx', 5).attr('cy', 7).attr('r', 4.5).attr('fill', C.lab[l.key]) }));
-  legend($('#lg-net'), [{ title: 'State' },
-    { label: 'Not yet exposed', w: 16, h: 16, draw: node(C.surface, C.ink3, 1.2, 0.4) },
-    { label: M.hasExposures ? 'Exposed' : 'Active', w: 16, h: 16, draw: node(C.surface, C.ink3, 2, 1) },
-    { label: 'Adopted', w: 16, h: 16, draw: node(C.ink3, C.surface, 1.5, 1, C.s.endorses) },
-    { label: 'Rejecting', w: 16, h: 16, draw: node(C.ink3, C.surface, 1.5, 1, C.s.rejects, '3 2') },
-    { sep: true }, { title: 'Lab' }].concat(labItems, M.labs.length > 8 ? [{ label: '+' + (M.labs.length - 8) + ' more', w: 1, draw: () => {} }] : []));
-}
-
-/* ---------- tables ---------- */
-const dt = t => Number.isFinite(t) ? fmtDT(new Date(t)) : null;
-const dd = t => Number.isFinite(t) ? fmtDate(new Date(t)) : null;
-tables['tbl-lane'] = M => [makeTable(el('div'), [
-  { label: 'Time', get: e => dt(e.tt), cls: 'code' }, { label: 'Agent', get: e => e.agent.name }, { label: 'Lab', get: e => e.agent.lab },
-  { label: 'Channel', get: e => CHANNEL_LABEL[e.channel] }, { label: 'Stance', get: e => STANCE_LABEL[e.stance] }, { label: 'Conf', get: e => e.conf, num: true },
-  { label: 'Room', get: e => e.room }, { label: 'Snippet', get: e => e.snippet, cls: 'wrap' }
-], M.events, int(M.events.length) + ' events, oldest first')];
-tables['tbl-net'] = M => {
-  const out = [makeTable(el('div'), [
-    { label: 'Agent', get: a => a.name }, { label: 'Lab', get: a => a.lab }, { label: 'Group', get: a => a.group },
-    { label: M.hasExposures ? 'First exposure' : 'First event', get: a => dd(a.everT), cls: 'code' },
-    { label: 'Adopted', get: a => dd(a.adoptT), cls: 'code' }, { label: 'Independent', get: a => a.adoption ? (a.adoption.independent ? 'yes' : 'no') : null },
-    { label: 'First rejection', get: a => dd(a.firstRej), cls: 'code' }, { label: 'Events', get: a => a.events.length, num: true },
+/* ---------- data tables ---------- */
+const dt = t => Number.isFinite(t) ? fmtWhenT(t) : null;
+const dd = t => Number.isFinite(t) ? fmtWhen(t) : null;
+tables['tbl-lane'] = M => {
+  const out = [makeTable([
+    { label: 'Time', get: e => dt(e.tt) }, { label: 'Agent', get: e => e.agent.name }, { label: 'Lab', get: e => e.agent.lab },
+    { label: 'Channel', get: e => CHANNEL_LABEL[e.channel] }, { label: 'Stance', get: e => STANCE_LABEL[e.stance] }, { label: 'Conf', get: e => e.conf, num: true },
+    { label: 'Room', get: e => e.room }, { label: 'Event', get: e => e.id, cls: 'code' }, { label: 'Snippet', get: e => e.snippet, cls: 'wrap' }
+  ], M.events, 'Data for Figure ' + NUM.lane + ': ' + int(M.events.length) + ' events, oldest first.')];
+  out.push(makeTable([
+    { label: 'Agent', get: a => a.name }, { label: 'Lab', get: a => a.lab }, { label: 'Role', get: a => a.role },
+    { label: M.hasExposures ? 'First exposure' : 'First event', get: a => dd(a.everT) },
+    { label: 'Adopted', get: a => dd(a.adoptT) }, { label: 'Independent', get: a => a.adoption ? (a.adoption.independent ? 'yes' : 'no') : null },
+    { label: 'First rejection', get: a => dd(a.firstRej) }, { label: 'Events', get: a => a.events.length, num: true },
     { label: 'Links out', get: a => a.outE, num: true }, { label: 'Links in', get: a => a.inE, num: true }
-  ], M.agents.slice().sort((a, b) => (a.everT === b.everT ? a.idx - b.idx : (a.everT === Infinity ? 1 : b.everT === Infinity ? -1 : a.everT - b.everT))), 'Agents')];
-  const wrap2 = el('div');
-  if (M.edges.length) out.push(makeTable(wrap2, [
-    { label: 'Time', get: e => dt(e.tt), cls: 'code' }, { label: 'From', get: e => e.from.name }, { label: 'To', get: e => e.to.name },
+  ], M.agents.slice().sort((a, b) => (a.everT === b.everT ? a.idx - b.idx : (a.everT === Infinity ? 1 : b.everT === Infinity ? -1 : a.everT - b.everT))), 'Agents in Figure ' + NUM.lane + '.'));
+  if (M.edges.length) out.push(makeTable([
+    { label: 'Time', get: e => dt(e.tt) }, { label: 'From', get: e => e.from.name }, { label: 'To', get: e => e.to.name },
     { label: 'Kind', get: e => EDGE_LABEL[e.kind] }, { label: 'Evidence', get: e => e.evidence, cls: 'wrap' }
-  ], M.edges, 'Links'));
+  ], M.edges, 'Links claimed by the producer.'));
   return out;
 };
 tables['tbl-curves'] = M => {
   const ts = Array.from(new Set(M.cum.exposed.concat(M.cum.adopted, M.cum.rejected))).sort((a, b) => a - b);
-  return [makeTable(el('div'), [
-    { label: 'Date', get: t => dt(t), cls: 'code' }, { label: M.hasExposures ? 'Exposed' : 'Active', get: t => M.countAt(t).exposed, num: true },
+  return [makeTable([
+    { label: 'Date', get: t => dt(t) }, { label: M.hasExposures ? 'Exposed' : 'Active', get: t => M.countAt(t).exposed, num: true },
     { label: 'Adopted', get: t => M.countAt(t).adopted, num: true }, { label: 'Rejected at least once', get: t => M.countAt(t).rejected, num: true }
-  ], ts, 'Running totals at each change')];
+  ], ts, 'Data for Figure ' + NUM.curves + ': running totals at each change.')];
 };
 
 /* ---------- format section: schema ---------- */
 (function setupSchema() {
   const s = PAYLOAD.schema;
-  if (!s) { $('#schema-line').textContent = 'A JSON Schema for this format is planned at village_tools/swarmtrace/trace.schema.json; until it lands, the table below and the viewer’s own checks are the reference.'; return; }
-  const txt = JSON.stringify(s, null, 2);
+  if (!s) { $('#schema-line').textContent = 'A JSON Schema for this format lives at village_tools/swarmtrace/trace.schema.json; this page was built without it, so the table below and the viewer’s own checks are the reference.'; return; }
+  const txtS = JSON.stringify(s, null, 2);
   $('#schema-line').replaceChildren(document.createTextNode('The full rules are in the JSON Schema at '), el('code', null, PAYLOAD.schemaPath || 'village_tools/swarmtrace/trace.schema.json'), document.createTextNode('; the copy bundled with this page is below.'));
   $('#schema-controls').hidden = false;
-  const pre = $('#schema-pre'); pre.textContent = txt;
+  const pre = $('#schema-pre'); pre.textContent = txtS;
   $('#schema-toggle').addEventListener('click', ev => { pre.hidden = !pre.hidden; ev.target.setAttribute('aria-expanded', String(!pre.hidden)); ev.target.textContent = pre.hidden ? 'Show JSON Schema' : 'Hide JSON Schema'; });
   $('#schema-copy').addEventListener('click', () => {
     const done = m => { $('#schema-copied').textContent = m; };
-    try {
-      navigator.clipboard.writeText(txt).then(() => done('Copied.'), () => { pre.hidden = false; const r = document.createRange(); r.selectNodeContents(pre); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); done('Copy is blocked here; the schema is selected, press Ctrl+C.'); });
-    } catch (e) { done('Copy is blocked here; select the schema text instead.'); }
+    const copy = PK && PK.copyText ? PK.copyText(txtS) : Promise.resolve(false);
+    copy.then(ok => {
+      if (ok) { done('Copied.'); return; }
+      pre.hidden = false; const r = document.createRange(); r.selectNodeContents(pre); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+      done('Copy is blocked here; the schema is selected, press Ctrl+C.');
+    });
   });
 })();
-$('#built').textContent = PAYLOAD.generated || 'from the template (no bundled traces)';
+$('#built').textContent = (PAYLOAD.generated || 'from the template (no bundled traces)') + (DAYS ? '; Village days count from day 1 = ' + fmtDate(new Date(Date.parse(PAYLOAD.days.day_one + 'T12:00:00Z'))) + ' (' + PAYLOAD.days.tz + ')' : '');
 
 /* ---------- controls ---------- */
 document.querySelectorAll('[data-order]').forEach(b => b.addEventListener('click', () => {
   state.order = b.dataset.order;
   document.querySelectorAll('[data-order]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
-  const M = currentModel(); if (M) safe(() => renderSwimlane(M));
+  const M = currentModel(); if (M) { safe(() => renderLane(M)); $('#cap-lane').textContent = laneCaption(M); }
 }));
-document.querySelectorAll('[data-net]').forEach(b => b.addEventListener('click', () => {
-  state.netView = b.dataset.net;
-  const M = currentModel(); if (M) safe(() => renderNetwork(M));
+document.querySelectorAll('[data-axis]').forEach(b => b.addEventListener('click', () => {
+  state.axis = b.dataset.axis;
+  document.querySelectorAll('[data-axis]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  renderAll();
 }));
-$('#show-edges').addEventListener('change', ev => { state.showEdges = ev.target.checked; const M = currentModel(); if (M) safe(() => renderSwimlane(M)); });
+$('#show-edges').addEventListener('change', ev => { state.showEdges = ev.target.checked; const M = currentModel(); if (M) { safe(() => renderLane(M)); $('#cap-lane').textContent = laneCaption(M); } });
+
+/* ---------- exports (paper preset: 5.5 in SVG or 300-dpi PNG) ---------- */
+/* PaperKit lays the figure out again on an offscreen host 528 px wide (5.5 in) and serialises it. */
+function setupExports() {
+  if (!PK || !PK.exportMenu) return;
+  const name = suffix => () => 'idea-spread-' + (state.token || 'trace') + '-' + suffix;
+  PK.exportMenu($('#tools-curves'), {
+    draw: (host, W, preset) => { const M = currentModel(); if (M) drawCurves(host, M, W, preset || 'paper'); },
+    name: name('totals'), caption: () => { const M = currentModel(); return M ? curvesCaption(M) : ''; }, status: $('#status-curves')
+  });
+  PK.exportMenu($('#tools-lane'), {
+    draw: (host, W, preset) => { const M = currentModel(); if (M) drawLane(host, M, W, preset || 'paper'); },
+    name: name('swimlane'), caption: () => { const M = currentModel(); return M ? laneCaption(M, true) : ''; }, status: $('#status-lane')
+  });
+}
 
 /* ---------- render loop ---------- */
 function safe(fn) { try { fn(); } catch (err) { console.error(err); } }
+function renderLane(M) {
+  const box = $('#lane-chart');
+  const W = box.clientWidth; if (!W) return;
+  lane = null;
+  drawLane(box, M, W, null);
+}
+function renderCurves(M) {
+  const box = $('#curves-chart');
+  const W = box.clientWidth; if (!W) return;
+  curves = null;
+  drawCurves(box, M, W, null);
+}
 function renderAll() {
   readColors();
   Tip.hide();
+  $('#axis-controls').hidden = !DAYS;
   const entry = currentEntry();
-  if (!entry) { $('#views').hidden = true; $('#t-title').textContent = 'No trace loaded'; $('#t-eyebrow').textContent = ''; $('#t-source').textContent = 'Open a trace file to start.'; return; }
+  if (!entry) { $('#views').hidden = true; $('#t-title-text').textContent = 'No trace loaded'; $('#t-byline').textContent = ''; $('#t-source').textContent = 'Open a trace file to start.'; return; }
   const M = currentModel();
+  if (M) numberThings(M);
   safe(() => renderHeader(entry, M));
-  lane = null; net = null; curves = null;
+  lane = null; curves = null;
   if (!M) return;
   $('#zoom-reset').disabled = !state.zoom;
-  [() => renderLegends(M), () => renderSwimlane(M), () => renderOverview(M), () => renderNetwork(M), () => renderCurves(M), () => renderQuotes(M), renderDetail, refreshTables].forEach(safe);
-  placeCursor();
+  [() => renderCurves(M), () => renderLane(M), () => renderOverview(M), () => renderAnnKey(M), () => renderQuotes(M), renderDetail, refreshTables,
+    () => { $('#cap-curves').textContent = curvesCaption(M); $('#cap-lane').textContent = laneCaption(M); }].forEach(safe);
 }
 
+readColors();
+setupExports();
 const initial = (location.hash || '').slice(1);
 const firstOk = Store.entries.find(e => !e.check.errors.length) || Store.entries[0];
 state.token = (initial && Store.get(initial)) ? initial : (firstOk ? firstOk.token : null);
 renderPicker();
 renderAll();
 
-let raf = 0;
-const schedule = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(renderAll); };
 const main = $('main');
 let lastW = main.clientWidth, rt = 0;
 const onResize = () => { const w = main.clientWidth; if (w === lastW) return; lastW = w; clearTimeout(rt); rt = setTimeout(renderAll, 150); };
 if (window.ResizeObserver) new ResizeObserver(onResize).observe(main); else window.addEventListener('resize', onResize);
-const mq = window.matchMedia('(prefers-color-scheme: dark)');
-if (mq.addEventListener) mq.addEventListener('change', schedule); else if (mq.addListener) mq.addListener(schedule);
-new MutationObserver(schedule).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 })();
 </script>
+</body>
+</html>

@@ -1,430 +1,229 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AI Village Idea Flow</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>/*__PAPER_CSS__*/</style>
 <style>
-/* Layout: one 1160px analytical column on a cool neutral plane; prose capped at 68ch, every chart in a near-white card with its own table view. */
-:root{
-  --bg:#eef0f0; --surface:#fcfcfb; --surface-2:#f1f2f1;
-  --ink:#111314; --ink-2:#4e5053; --ink-3:#6f7175;
-  --grid:#e4e5e3; --axis:#c3c5c3; --line:rgba(17,19,20,.10); --line-strong:rgba(17,19,20,.24);
-  --c-anthropic:#2a78d6; --c-openai:#eb6834; --c-google:#1baf7a; --c-other:#9a9891; --c-human:#4e5053;
-  --t-collab:#4e5053; --t-comp:#8e9093; --t-indiv:#c9cbc9;
-  --seq-lo:#eceeed; --seq-hi:#2a2c2f; --on-dark:#ffffff; --on-light:#111314;
-  --tip-bg:#ffffff; --shadow:0 8px 28px rgba(17,19,20,.14);
-  --font-display:"Bricolage Grotesque","Hanken Grotesk",system-ui,-apple-system,"Segoe UI",sans-serif;
-  --font-body:"Hanken Grotesk",system-ui,-apple-system,"Segoe UI",sans-serif;
-  --font-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  --radius:10px;
-}
-@media (prefers-color-scheme: dark){
-  :root:not([data-theme="light"]){
-    --bg:#0f1112; --surface:#1a1a19; --surface-2:#232423;
-    --ink:#f3f3f1; --ink-2:#c4c4bd; --ink-3:#97968f;
-    --grid:#2c2c2a; --axis:#41413e; --line:rgba(255,255,255,.10); --line-strong:rgba(255,255,255,.26);
-    --c-anthropic:#3987e5; --c-openai:#d95926; --c-google:#199e70; --c-other:#7d7b75; --c-human:#c4c4bd;
-    --t-collab:#c4c4bd; --t-comp:#86857f; --t-indiv:#4a4a46;
-    --seq-lo:#262725; --seq-hi:#e6e5de; --on-dark:#ffffff; --on-light:#111314;
-    --tip-bg:#242524; --shadow:0 8px 28px rgba(0,0,0,.5);
-    color-scheme:dark;
-  }
-}
-:root[data-theme="dark"]{
-  --bg:#0f1112; --surface:#1a1a19; --surface-2:#232423;
-  --ink:#f3f3f1; --ink-2:#c4c4bd; --ink-3:#97968f;
-  --grid:#2c2c2a; --axis:#41413e; --line:rgba(255,255,255,.10); --line-strong:rgba(255,255,255,.26);
-  --c-anthropic:#3987e5; --c-openai:#d95926; --c-google:#199e70; --c-other:#7d7b75; --c-human:#c4c4bd;
-  --t-collab:#c4c4bd; --t-comp:#86857f; --t-indiv:#4a4a46;
-  --seq-lo:#262725; --seq-hi:#e6e5de; --on-dark:#ffffff; --on-light:#111314;
-  --tip-bg:#242524; --shadow:0 8px 28px rgba(0,0,0,.5);
-  color-scheme:dark;
-}
-*,*::before,*::after{box-sizing:border-box}
-body{background:var(--bg);color:var(--ink);font:400 15px/1.6 var(--font-body);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
-main{max-width:1160px;margin-inline:auto;padding-inline:clamp(16px,3vw,32px);padding-block:44px 80px;display:flex;flex-direction:column;gap:72px}
-a{color:var(--ink);text-decoration-color:var(--axis);text-underline-offset:3px}
-a:hover{text-decoration-color:var(--ink)}
-:focus-visible{outline:2px solid var(--ink);outline-offset:2px;border-radius:4px}
-h1,h2,h3{margin:0;text-wrap:balance}
-h1{font:700 clamp(2.25rem,5.2vw,3.4rem)/1.04 var(--font-display);letter-spacing:-.025em}
-h2{font:650 clamp(1.6rem,3vw,2rem)/1.15 var(--font-display);letter-spacing:-.015em}
-h3{font:600 16.5px/1.35 var(--font-body)}
-p{margin:0}
-code,.mono-t{font-family:var(--font-mono);font-size:.88em}
-.eyebrow{font:500 12px/1.4 var(--font-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--ink-2)}
-.prose{display:flex;flex-direction:column;gap:14px;max-width:68ch}
-.prose p{color:var(--ink)}
-.lede{font-size:17.5px;line-height:1.55;color:var(--ink-2);max-width:68ch}
-
-/* masthead */
-.mast{display:flex;flex-direction:column;gap:22px}
-.tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:6px}
-.tile{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px 18px;display:flex;flex-direction:column;gap:6px;min-width:0}
-.tile-label{font-size:13.5px;line-height:1.35;color:var(--ink-2);font-weight:500}
-.tile-value{font:600 30px/1.1 var(--font-body);letter-spacing:-.01em}
-.tile-sub{font-size:12.5px;line-height:1.45;color:var(--ink-3)}
-.toc{display:flex;flex-wrap:wrap;gap:6px 20px;font-size:14px;padding-top:4px;border-top:1px solid var(--line)}
-.toc a{padding-top:10px}
-@media (max-width:900px){.tiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media (max-width:480px){.tiles{grid-template-columns:1fr}}
-
-/* sections and cards */
-section{display:flex;flex-direction:column;gap:22px;scroll-margin-top:16px}
-.card{margin:0;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:20px 22px 18px;display:flex;flex-direction:column;gap:14px;min-width:0}
-.card-head{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:10px 20px}
-.card-titles{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1 1 420px;max-width:78ch}
-.card-sub{font-size:13.5px;line-height:1.5;color:var(--ink-2)}
-.note{font-size:12.5px;line-height:1.5;color:var(--ink-3);max-width:90ch}
-.chart{position:relative;min-width:0;width:100%;overflow:hidden}
-.chart:focus-visible{outline-offset:4px}
-.controls{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
-.btn,.sel{font:500 13px/1.2 var(--font-body);color:var(--ink);background:var(--surface);border:1px solid var(--line-strong);border-radius:7px;padding:7px 11px;cursor:pointer}
-.btn:hover,.sel:hover{background:var(--surface-2)}
-.btn[aria-pressed="true"]{background:var(--ink);color:var(--surface);border-color:var(--ink)}
-.btn:disabled{opacity:.4;cursor:default;background:var(--surface)}
-.btn-quiet{border-color:var(--line);color:var(--ink-2);font-size:12.5px;padding:6px 10px;white-space:nowrap}
-.sel{max-width:100%;min-width:0;flex:1 1 260px;cursor:pointer}
-.seg{display:inline-flex;gap:0}
-.seg .btn{border-radius:0}
-.seg .btn:first-child{border-radius:7px 0 0 7px}
-.seg .btn:last-child{border-radius:0 7px 7px 0;margin-left:-1px}
-@media (max-width:560px){.card{padding:16px 14px 14px}}
-
-/* legends */
-.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12.5px;color:var(--ink-2);align-items:center}
-.lg-item{display:inline-flex;align-items:center;gap:7px}
-.lg-key{flex:none;display:inline-block}
-.lg-key.dot{width:10px;height:10px;border-radius:50%;background:var(--k)}
-.lg-key.ring{width:10px;height:10px;border-radius:50%;border:2px solid var(--k);background:var(--surface)}
-.lg-key.rect{width:14px;height:10px;border-radius:2px;background:var(--k)}
-.lg-key.hrect{width:14px;height:10px;border-radius:2px;border:1px solid var(--axis);background:var(--surface)}
-.lg-key.diamond{width:8px;height:8px;margin-inline:1px;transform:rotate(45deg);background:var(--k)}
-.lg-key.line{width:16px;height:2px;border-radius:1px;background:var(--k)}
-.lg-sep{width:1px;height:14px;background:var(--line-strong)}
-
-/* svg text */
-.viz{display:block}
-.viz text{font-family:var(--font-body)}
-.viz .tick{fill:var(--ink-3);font-size:11px;font-variant-numeric:tabular-nums}
-.viz .lbl{fill:var(--ink-2);font-size:12px}
-.viz .lbl-ink{fill:var(--ink);font-size:12px}
-.viz .val{fill:var(--ink);font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
-.viz .ptitle{fill:var(--ink);font-size:12.5px;font-weight:600}
-.viz .mono{font-family:var(--font-mono);fill:var(--ink)}
-.viz .halo{paint-order:stroke;stroke:var(--surface);stroke-width:3px;stroke-linejoin:round}
-.viz .rowkey{outline:none}
-.viz .rowkey:focus-visible{stroke:var(--ink);stroke-width:1.5px}
-.viz .node{outline:none}
-.viz .node:focus-visible .dot{stroke:var(--ink);stroke-width:2.5px}
-.viz .hit{outline:none}
-.viz .hit:focus-visible{stroke:var(--ink);stroke-width:1.5px}
-@media (prefers-reduced-motion:no-preference){.viz .node,.viz .edge,.viz .nlabel{transition:opacity .12s}}
-
-/* small multiples grids */
-.mini-grid{display:grid;gap:18px 26px}
-.types-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
-.q-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
-.mini{display:flex;flex-direction:column;justify-content:space-between;gap:8px;min-width:0}
-.mini-title{font-size:13px;line-height:1.35;font-weight:600;color:var(--ink)}
-@media (max-width:900px){.types-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.q-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media (max-width:520px){.types-grid{grid-template-columns:1fr}}
-
-/* network */
-.net-stats{display:flex;flex-direction:column;gap:6px;font-size:13.5px;line-height:1.45}
-.net-goal{color:var(--ink-2)}
-.net-goal q{color:var(--ink)}
-.stat-chips{display:flex;flex-wrap:wrap;gap:6px}
-.stat-chip{background:var(--surface-2);border-radius:6px;padding:3px 8px;font-size:12.5px;color:var(--ink-2)}
-.stat-chip b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}
-
-/* term detail */
-.term-detail{border-top:1px solid var(--line);padding-top:16px;display:flex;flex-direction:column;gap:14px}
-.td-id{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 12px}
-.term-big{font:500 20px/1.2 var(--font-mono);color:var(--ink);overflow-wrap:anywhere}
-.td-kind{font:500 11.5px/1 var(--font-mono);letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
-.td-origin{font-size:14px;color:var(--ink-2);margin-top:4px}
-.td-stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:0}
-.td-stats div{display:flex;flex-direction:column-reverse;gap:2px;min-width:0}
-.td-stats dt{font-size:12px;line-height:1.35;color:var(--ink-3)}
-.td-stats dd{margin:0;font:600 20px/1.15 var(--font-body)}
-.td-label{font-size:12.5px;font-weight:600;color:var(--ink-2)}
-.td-label span{font-weight:400;color:var(--ink-3)}
-@media (max-width:640px){.td-stats{grid-template-columns:repeat(3,minmax(0,1fr))}}
-.chips{display:flex;flex-wrap:wrap;gap:5px 6px}
-.chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;line-height:1.2;padding:3px 8px 3px 6px;border-radius:999px;background:var(--surface-2);color:var(--ink)}
-.chip i{flex:none;width:8px;height:8px;border-radius:50%;background:var(--k)}
-.chip i.nc{background:var(--surface);border:2px solid var(--k)}
-.chip-code{font-family:var(--font-mono);font-size:12.5px;padding:3px 8px;border-radius:6px;background:var(--surface);border:1px solid var(--line);color:var(--ink)}
-.chip-code small{font-family:var(--font-body);color:var(--ink-3);font-size:11.5px;margin-left:4px}
-.human-line{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:14px;color:var(--ink-2)}
-
-/* tables */
-.tablewrap{overflow:auto;max-height:440px;border:1px solid var(--line);border-radius:8px}
-table{border-collapse:collapse;width:100%;font-size:12.5px;line-height:1.4}
-th,td{padding:6px 10px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
-th{position:sticky;top:0;background:var(--surface-2);font-weight:600;color:var(--ink-2);white-space:nowrap;z-index:1}
-td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
-td.wrap{min-width:220px}
-td.code{font-family:var(--font-mono);white-space:nowrap}
-tbody tr:last-child td{border-bottom:none}
-
-/* method */
-.method ul{margin:0;padding-left:1.2em;display:flex;flex-direction:column;gap:10px;max-width:76ch}
-.method li{padding-left:2px}
-.method h3{margin-top:6px}
-pre.cmd{margin:0;overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:12px 14px;font:13px/1.5 var(--font-mono);color:var(--ink)}
-footer{font-size:12.5px;color:var(--ink-3);border-top:1px solid var(--line);padding-top:16px}
-
-/* tooltip */
-#tip{position:fixed;left:0;top:0;z-index:50;pointer-events:none;max-width:min(340px,calc(100vw - 16px));background:var(--tip-bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);padding:10px 12px;font-size:12.5px;line-height:1.4}
-.tt-title{font-weight:600;font-size:13px}
-.tt-title.mono-t{font-size:13px}
-.tt-sub{color:var(--ink-2);margin-top:2px}
-.tt-row{display:flex;align-items:center;gap:8px;margin-top:5px}
-.tt-row strong{font-weight:650;font-variant-numeric:tabular-nums;white-space:nowrap}
-.tt-lab{color:var(--ink-2)}
-.tt-key{flex:none;width:12px;height:2px;border-radius:1px;background:var(--k)}
-.tt-key.dot{width:8px;height:8px;border-radius:50%}
-.tt-key.ring{width:9px;height:9px;border-radius:50%;border:2px solid var(--k);background:transparent}
-.tt-key.none{background:transparent}
-.tt-note{color:var(--ink-3);margin-top:6px}
-.nojs{padding:12px 14px;border:1px solid var(--line);border-radius:8px;color:var(--ink-2);font-size:13.5px}
+/* page-specific additions to paper.css */
+.toc { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 14.5px; margin: 14px 0 0; padding: 8px 0 0; border-top: 1px solid var(--hair); }
+.keynums { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 22px; margin: 18px 0 6px; padding: 10px 0 12px; border-top: 1.5px solid var(--rule); border-bottom: 1.5px solid var(--rule); }
+.keynum { min-width: 0; }
+.keynum .v { font-size: 24px; line-height: 1.15; font-weight: 700; }
+.keynum .l { font-size: 14px; line-height: 1.35; color: var(--ink); margin-top: 2px; }
+.keynum .s { font-size: 13px; line-height: 1.35; color: var(--ink-3); margin-top: 3px; }
+@media (max-width: 860px) { .keynums { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 18px; } }
+.page-controls { border-bottom: 1px solid var(--hair); padding-bottom: 8px; }
+.chart { position: relative; min-width: 0; width: 100%; }
+.chart:focus-visible { outline-offset: 3px; }
+.fig-tools .status { margin-right: auto; }
+.fig-tools .exp { display: inline-flex; align-items: center; gap: 5px; margin-right: 4px; }
+.term-detail { margin: 6px 0 4px; padding-top: 10px; border-top: 1px solid var(--hair); }
+.td-id { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.term-big { font-family: var(--mono); font-size: 18px; overflow-wrap: anywhere; }
+.td-kind { font-size: 13px; color: var(--ink-3); font-style: italic; }
+.td-origin { font-size: 15px; margin: 2px 0 8px; }
+.td-stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px 14px; margin: 0 0 8px; }
+.td-stats div { display: flex; flex-direction: column-reverse; min-width: 0; }
+.td-stats dt { font-size: 13px; line-height: 1.3; color: var(--ink-3); }
+.td-stats dd { margin: 0; font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; }
+@media (max-width: 640px) { .td-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.td-label { font-size: 13.5px; font-style: italic; color: var(--ink-2); margin: 8px 0 2px; }
+.chips { display: flex; flex-wrap: wrap; gap: 3px 12px; font-size: 13.5px; }
+.chip { display: inline-flex; align-items: center; gap: 5px; }
+.chip i { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--ink); }
+.chip i.nc { background: var(--paper); border: 1.5px solid var(--ink); }
+.human-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; font-size: 15px; margin: 6px 0 0; }
+.human-line code { font-size: 13px; }
+.human-line small { color: var(--ink-3); font-size: 12px; margin-left: 3px; }
+.tip .tt-key { flex: none; display: inline-block; width: 12px; height: 2px; background: var(--k, var(--ink)); }
+.tip .tt-key.dot { width: 8px; height: 8px; border-radius: 50%; }
+.tip .tt-key.ring { width: 9px; height: 9px; border-radius: 50%; border: 1.5px solid var(--k, var(--ink)); background: transparent; }
+.tip .tt-key.none { background: transparent; }
+.method ul { margin: 0; padding-left: 1.2em; max-width: 78ch; }
+.method li { margin: 0 0 0.45em; }
+pre.cmd { margin: 4px 0 0; overflow-x: auto; border-top: 1px solid var(--hair); border-bottom: 1px solid var(--hair); padding: 8px 2px; font: 13px/1.5 var(--mono); }
 </style>
-
-<main id="top">
-  <header class="mast">
-    <p class="eyebrow" data-k="eyebrow">AI Village dataset · 46 agents · 51 goals · Mar 2025 – Sep 2026</p>
+</head>
+<body>
+<main class="paper" id="top">
+  <header>
+    <p class="eyebrow" data-k="eyebrow">AI Village dataset · 46 agents · 51 goals · Days 1–535</p>
     <h1>AI Village Idea Flow</h1>
-    <p class="lede">AI Village is AI Digest’s long-running experiment in which frontier-model agents from Anthropic, OpenAI, Google and other labs share one group chat, keep their own saved memories and work through a new goal most weeks. This page follows <span data-k="agentMsgs">173,493</span> agent messages to see who the agents address, how a word one agent coins spreads to the rest, and what the agents keep about each other in memory.</p>
-    <div class="tiles">
-      <div class="tile">
-        <div class="tile-label">Messages that name another agent</div>
-        <div class="tile-value" data-k="mentionRate">46%</div>
-        <div class="tile-sub">of <span data-k="agentMsgs">173,493</span> agent messages, <span data-k="range">Mar 2025 – Sep 2026</span></div>
-      </div>
-      <div class="tile">
-        <div class="tile-label">Mentions going to the most-mentioned agent</div>
-        <div class="tile-value"><span data-k="hubFirst">43%</span> → <span data-k="hubLast">14%</span></div>
-        <div class="tile-sub"><span data-k="hubFirstName">o3</span> in the first goal, <span data-k="hubLastName">Claude Opus 4.8</span> in the latest</div>
-      </div>
-      <div class="tile">
-        <div class="tile-label">Term adoptions by agents who joined later</div>
-        <div class="tile-value" data-k="newcomerShare">40%</div>
-        <div class="tile-sub"><span data-k="newcomerN">6,565</span> of <span data-k="adoptN">16,265</span> adoptions came from agents who arrived after the term was coined</div>
-      </div>
-      <div class="tile">
-        <div class="tile-label">Present agents adopting a new term within 14 days</div>
-        <div class="tile-value"><span data-k="reachFirst">19%</span> → <span data-k="reachLast">4%</span></div>
-        <div class="tile-sub">Terms coined in <span data-k="qFirst">Q2 2025</span> vs <span data-k="qLast">Q3 2026</span>, as agents present grew from <span data-k="presFirst">4</span> to <span data-k="presLast">26</span></div>
-      </div>
+    <p class="byline">Who the agents address, how the words they coin spread, and what they keep about each other in memory.</p>
+    <div class="abstract">
+      <p>AI Village is AI Digest’s long-running experiment in which frontier-model agents from Anthropic, OpenAI, Google and other labs share one group chat, keep their own saved memories and work through a new goal most weeks. This page follows <span data-k="agentMsgs">173,493</span> agent messages from <span data-k="range">Day 1 to Day 535</span>.</p>
+    </div>
+    <div class="keynums" aria-label="Key numbers">
+      <div class="keynum"><div class="v" data-k="mentionRate">46%</div><div class="l">of agent messages name another agent</div><div class="s">of <span data-k="agentMsgs">173,493</span> agent messages</div></div>
+      <div class="keynum"><div class="v"><span data-k="hubFirst">43%</span> → <span data-k="hubLast">14%</span></div><div class="l">of mentions go to the most-mentioned agent</div><div class="s"><span data-k="hubFirstName">o3</span> in the first goal, <span data-k="hubLastName">Claude Opus 4.8</span> in the latest</div></div>
+      <div class="keynum"><div class="v" data-k="newcomerShare">40%</div><div class="l">of term adoptions are by agents who joined later</div><div class="s"><span data-k="newcomerN">6,565</span> of <span data-k="adoptN">16,265</span> adoptions</div></div>
+      <div class="keynum"><div class="v"><span data-k="reachFirst">19%</span> → <span data-k="reachLast">4%</span></div><div class="l">of present agents adopt a new term within 14 days</div><div class="s">terms coined in <span data-k="qFirst">Q2 2025</span> vs <span data-k="qLast">Q3 2026</span>, as agents present grew from <span data-k="presFirst">4</span> to <span data-k="presLast">26</span></div></div>
     </div>
     <nav class="toc" aria-label="Sections">
-      <a href="#talk">Who talks to whom</a>
-      <a href="#ideas">How ideas spread</a>
-      <a href="#memory">What ends up in memory</a>
-      <a href="#method">Method and limits</a>
+      <a href="#talk">1 Who talks to whom</a>
+      <a href="#ideas">2 How ideas spread</a>
+      <a href="#memory">3 What ends up in memory</a>
+      <a href="#method">4 Method and limits</a>
     </nav>
+    <div class="controls page-controls">
+      <span class="ctl"><span class="ctl-label">Time axis</span>
+        <span class="seg" role="group" aria-label="Time axis">
+          <button class="btn" type="button" id="ax-date" aria-pressed="true">Date</button>
+          <button class="btn" type="button" id="ax-day" aria-pressed="false">Village day</button>
+        </span>
+      </span>
+      <span class="muted small">Village day 1 is 2 April 2025 (Pacific time), as the village counts days.</span>
+    </div>
   </header>
 
   <section id="talk" aria-labelledby="h-talk">
-    <h2 id="h-talk">Who talks to whom</h2>
+    <h2 id="h-talk"><span class="secnum">1</span>Who talks to whom</h2>
     <div class="prose">
       <p><span data-k="mentionRate">46%</span> of agent messages name at least one other agent. Under collaborative goals the rate is <span data-k="mrCollab">50%</span>; under individual goals it is <span data-k="mrIndiv">35%</span>. Competitive goals carry <span data-k="compRatio">4.0×</span> the competition language of collaborative ones and a lower share of “we” over “I” (<span data-k="weComp">17%</span> vs <span data-k="weCollab">26%</span>).</p>
       <p>In 2025 one agent sat at the centre. <span data-k="hubFirstName">o3</span> drew <span data-k="hubFirst">43%</span> of all mentions in the first goal and as much as <span data-k="hubMax">66%</span> in one later 2025 goal. As the village grew past 20 agents, attention spread out: in the latest goal the most-mentioned agent drew <span data-k="hubLast">14%</span>. Fewer mention pairs go both ways (<span data-k="recFirst">85%</span> in the first eight weeks, <span data-k="recLast">58%</span> in the last eight). Agents do not favour their own lab. Same-lab mentions run <span data-k="homophily">0.1</span> percentage points above what random addressing among active agents would give.</p>
     </div>
 
-    <figure class="card" id="card-weekly">
-      <div class="card-head">
-        <div class="card-titles">
-          <h3>The hub fades and fewer conversations go both ways</h3>
-          <p class="card-sub">Weekly values for agent messages. The strip on top shows which goal was running. Hover or use the arrow keys for one week’s readings.</p>
-        </div>
-        <button class="btn btn-quiet" type="button" data-table="tbl-weekly" aria-expanded="false" aria-controls="tbl-weekly">Show table</button>
-      </div>
-      <div class="legend" id="lg-ribbon"></div>
-      <div class="chart" id="weekly-chart" tabindex="0" role="group" aria-label="Weekly small multiples: agents speaking, share of messages naming another agent, share of mentions to the most-mentioned agent, and share of mention pairs that go both ways. Use left and right arrow keys to move between weeks."></div>
-      <div class="tablewrap" id="tbl-weekly" hidden></div>
+    <figure class="fig" id="fig-weekly">
+      <div class="fig-tools"><span class="status" aria-live="polite"></span><span class="exp"></span><button class="btn" type="button" data-table="tbl-weekly" aria-expanded="false" aria-controls="tbl-weekly">Table</button></div>
+      <div class="fig-body"><div class="chart" id="weekly-chart" tabindex="0" role="group" aria-label="Weekly small multiples: agents speaking, share of messages naming another agent, share of mentions to the most-mentioned agent, and share of mention pairs that go both ways. Use the left and right arrow keys to move between weeks."></div></div>
+      <figcaption><span class="fig-label">Figure 1:</span> As the village grew, attention spread out and fewer conversations went both ways. Weekly values for agent messages (dots) and trailing 4-week means (lines), <span data-k="weeksN">77</span> weeks. The band on top shows which goal was running, shaded by goal type. Hover or use the arrow keys for one week’s readings.</figcaption>
+      <div class="tablewrap scroll" id="tbl-weekly" hidden></div>
     </figure>
 
-    <figure class="card" id="card-types">
-      <div class="card-head">
-        <div class="card-titles">
-          <h3>Collaborative goals bring more mentions; competitive goals bring competition words</h3>
-          <p class="card-sub">Mean over the goals of each type. Every goal counts once, however long it ran: <span data-k="typeCounts">23 collaborative, 7 competitive, 9 individual and 12 free-choice goals</span>.</p>
-        </div>
-        <button class="btn btn-quiet" type="button" data-table="tbl-types" aria-expanded="false" aria-controls="tbl-types">Show table</button>
-      </div>
-      <div class="mini-grid types-grid" id="types-chart"></div>
-      <p class="note">Phrase counts are the share of agent messages that contain at least one matching phrase, per 100 messages. The “we” share is we-words over we-words plus I-words.</p>
+    <figure class="fig" id="fig-types">
+      <div class="fig-tools"><span class="status" aria-live="polite"></span><span class="exp"></span><button class="btn" type="button" data-table="tbl-types" aria-expanded="false" aria-controls="tbl-types">Table</button></div>
+      <div class="fig-body"><div class="chart" id="types-chart"></div></div>
+      <figcaption><span class="fig-label">Figure 2:</span> Competitive goals bring competition words; collaborative goals bring somewhat more mentions than individual ones, with wide intervals. Each hollow dot is one goal; the black square is the mean over the goals of that type with a 95% t-interval (<span data-k="typeCounts">23 collaborative, 7 competitive, 9 individual and 12 free-choice goals</span>; every goal counts once however long it ran). Phrase rates are the share of agent messages with at least one matching phrase, per 100 messages; the “we” share is we-words over we- plus I-words.</figcaption>
       <div class="tablewrap" id="tbl-types" hidden></div>
     </figure>
-
-    <figure class="card" id="card-network">
-      <div class="card-head">
-        <div class="card-titles">
-          <h3>Who mentions whom, goal by goal</h3>
-          <p class="card-sub">Circle area follows messages sent in the period; line width follows mentions in both directions. Only the strongest links are drawn. Hover a circle to see that agent’s partners.</p>
-        </div>
-        <button class="btn btn-quiet" type="button" data-table="tbl-network" aria-expanded="false" aria-controls="tbl-network">Show table</button>
-      </div>
-      <div class="controls">
-        <label class="mono-t" for="goal-select" style="color:var(--ink-3);font-size:12px">Period</label>
-        <select class="sel" id="goal-select"></select>
-        <button class="btn" type="button" id="goal-prev" aria-label="Previous goal">← Prev</button>
-        <button class="btn" type="button" id="goal-next" aria-label="Next goal">Next →</button>
-      </div>
-      <div class="net-stats" id="net-stats" aria-live="polite"></div>
-      <div class="legend" id="lg-network"></div>
-      <div class="chart" id="net-chart"></div>
-      <div class="tablewrap" id="tbl-network" hidden></div>
-    </figure>
+    <p class="note small muted">Who mentions whom in a given goal or week: render the SwarmScope timeline (<code>swarm-mcp render timeline</code>). Its mention matrix follows the time window on screen, so zooming to a goal shows that goal’s network.</p>
   </section>
 
   <section id="ideas" aria-labelledby="h-ideas">
-    <h2 id="h-ideas">How ideas spread</h2>
+    <h2 id="h-ideas"><span class="secnum">2</span>How ideas spread</h2>
     <div class="prose">
       <p>A term here is a word or two-word phrase that first shows up in the chat after the village was running: a tool name, a project name, a coinage. An agent adopts a term once it has used it in two messages. Of <span data-k="adoptN">16,265</span> adoptions, <span data-k="newcomerShare">40%</span> come from agents who joined after the term was coined. Much of the shared vocabulary is inherited from the chat history instead of picked up live.</p>
       <p>As the village grew from about <span data-k="presFirst">4</span> to about <span data-k="presLast">26</span> agents present at a time, more new terms caught on with at least one other present agent within two weeks (<span data-k="anyFirst">37%</span> of terms coined in <span data-k="qFirst">Q2 2025</span>, <span data-k="anyLast">55%</span> in <span data-k="qLast">Q3 2026</span>). Each term reached a smaller share of the room, though: <span data-k="reachFirst">19%</span> of present agents on average, falling to <span data-k="reachLast">4%</span>.</p>
     </div>
 
-    <figure class="card" id="card-cascade">
-      <div class="card-head">
-        <div class="card-titles">
-          <h3>Who picked up each term, and when</h3>
-          <p class="card-sub">One row per term, ordered by number of adopters (the figure left of each term). The diamond marks the first use; each dot is another agent’s adoption. Select a row for details.</p>
-        </div>
-        <button class="btn btn-quiet" type="button" data-table="tbl-cascade" aria-expanded="false" aria-controls="tbl-cascade">Show table</button>
-      </div>
-      <div class="controls">
-        <div class="seg" role="group" aria-label="Term set">
+    <div class="controls">
+      <span class="ctl"><span class="ctl-label">Terms</span>
+        <span class="seg" role="group" aria-label="Term set">
           <button class="btn" type="button" id="cas-durable" aria-pressed="true">Lasting vocabulary</button>
           <button class="btn" type="button" id="cas-episodic" aria-pressed="false">Short-lived bursts</button>
-        </div>
-      </div>
-      <div class="legend" id="lg-cascade"></div>
-      <div class="chart" id="cascade-chart"></div>
-      <div class="term-detail" id="term-detail" aria-live="polite">
-        <div>
-          <div class="td-id"><code class="term-big" id="td-term">http</code><span class="td-kind" id="td-kind">Lasting vocabulary</span></div>
-          <p class="td-origin" id="td-origin"></p>
-        </div>
-        <dl class="td-stats" id="td-stats"></dl>
-        <div class="td-label">Messages using the term, per week</div>
-        <div class="chart" id="td-spark"></div>
-        <div class="td-label">Adopters in order of adoption <span>(hollow: joined after the term was coined)</span></div>
-        <div class="chips" id="td-adopters"></div>
-      </div>
-      <p class="note">A term is a non-dictionary word or a distinctive two-word phrase (lift ≥ <span data-k="minLift">30</span>), first seen at least <span data-k="noveltyWeeks">3</span> weeks into the data, used in at least <span data-k="minDocs">20</span> messages, and not taken from the goal text or the scaffolding changelog. An agent adopts a term on its <span data-k="minUses">2</span>nd message using it; the dot sits at its first use. “Lasting vocabulary” and “Short-lived bursts” are the 25 most-adopted terms whose use was spread out over time or concentrated in a short burst.</p>
-      <div class="tablewrap" id="tbl-cascade" hidden></div>
+        </span>
+      </span>
+      <span class="muted small">Applies to Figures 3 and 4. Click a row or a curve to select a term.</span>
+    </div>
+
+    <figure class="fig" id="fig-cascade">
+      <div class="fig-tools"><span class="status" aria-live="polite"></span><span class="exp"></span><button class="btn" type="button" data-table="tbl-cascade" aria-expanded="false" aria-controls="tbl-cascade">Table</button></div>
+      <div class="fig-body"><div class="chart" id="cascade-chart"></div></div>
+      <figcaption><span class="fig-label">Figure 3:</span> Who picked up each term, and when. One row per term (<span data-k="casSet">lasting vocabulary</span>), ordered by number of adopters (left of the term). The diamond marks the first use; a filled dot is an adoption by an agent present at coinage, a hollow dot one by an agent who joined later.</figcaption>
+      <div class="tablewrap scroll" id="tbl-cascade" hidden></div>
     </figure>
 
-    <figure class="card" id="card-quarters">
-      <div class="card-head">
-        <div class="card-titles">
-          <h3>A bigger village spreads terms wider but thinner</h3>
-          <p class="card-sub">The first three panels group terms by the quarter they were coined (terms with at least <span data-k="minDocsSpeed">5</span> messages, coined when at least two agents were present). The last panel groups adoptions by the quarter they happened.</p>
-        </div>
-        <button class="btn btn-quiet" type="button" data-table="tbl-quarters" aria-expanded="false" aria-controls="tbl-quarters">Show table</button>
-      </div>
-      <div class="mini-grid q-grid" id="quarters-chart"></div>
-      <p class="note" data-k="partialNote">* Q3 2026 is partial: the data ends in mid-September, and terms coined in the last 14 days are left out of the spread measures.</p>
+    <div class="term-detail" id="term-detail" aria-live="polite">
+      <div class="td-id"><code class="term-big" id="td-term"></code><span class="td-kind" id="td-kind"></span></div>
+      <p class="td-origin" id="td-origin"></p>
+      <dl class="td-stats" id="td-stats"></dl>
+      <div class="td-label">Messages using the term, per week</div>
+      <div class="chart" id="td-spark"></div>
+      <div class="td-label">Adopters in order of adoption (hollow: joined after the term was coined)</div>
+      <div class="chips" id="td-adopters"></div>
+    </div>
+
+    <figure class="fig" id="fig-curves">
+      <div class="fig-tools"><span class="status" aria-live="polite"></span><span class="exp"></span><button class="btn" type="button" data-table="tbl-curves" aria-expanded="false" aria-controls="tbl-curves">Table</button></div>
+      <div class="fig-body"><div class="chart" id="curves-chart"></div></div>
+      <figcaption><span class="fig-label">Figure 4:</span> <span data-k="curvesLead">Terms gain adopters over months, not days.</span> Cumulative adopters against days since coinage for the <span data-k="curvesN">25</span> terms of Figure 3 (grey), with <code data-k="curvesSel">http</code> highlighted. Half of a term’s adopters arrive a median of <span data-k="curvesHalf">231</span> days after coinage.</figcaption>
+      <div class="tablewrap scroll" id="tbl-curves" hidden></div>
+    </figure>
+
+    <figure class="fig" id="fig-quarters">
+      <div class="fig-tools"><span class="status" aria-live="polite"></span><span class="exp"></span><button class="btn" type="button" data-table="tbl-quarters" aria-expanded="false" aria-controls="tbl-quarters">Table</button></div>
+      <div class="fig-body"><div class="chart" id="quarters-chart"></div></div>
+      <figcaption><span class="fig-label">Figure 5:</span> A bigger village spreads terms wider but thinner. The first three panels group terms by the quarter they were coined (terms with at least <span data-k="minDocsSpeed">5</span> messages, coined when at least two agents were present); the last groups adoptions by the quarter they happened. Vertical bars are Wilson 95% intervals for proportions (none for means). <span data-k="partialNote">The hollow point is partial: the data end in mid-September, and terms coined in the last 14 days are left out of the spread measures.</span></figcaption>
       <div class="tablewrap" id="tbl-quarters" hidden></div>
     </figure>
 
-    <figure class="card" id="card-orig">
-      <div class="card-head">
-        <div class="card-titles">
-          <h3>Whose terms got adopted</h3>
-          <p class="card-sub">Adoptions by other agents of the terms each agent coined, for the top 12 originators. Hover a bar for the number of terms behind it.</p>
-        </div>
-        <button class="btn btn-quiet" type="button" data-table="tbl-orig" aria-expanded="false" aria-controls="tbl-orig">Show table</button>
-      </div>
-      <div class="legend" id="lg-orig"></div>
-      <div class="chart" id="orig-chart"></div>
+    <figure class="fig" id="fig-orig">
+      <div class="fig-tools"><span class="status" aria-live="polite"></span><span class="exp"></span><button class="btn" type="button" data-table="tbl-orig" aria-expanded="false" aria-controls="tbl-orig">Table</button></div>
+      <div class="fig-body"><div class="chart" id="orig-chart"></div></div>
+      <figcaption><span class="fig-label">Figure 6:</span> Whose terms got adopted. Adoptions by other agents of the terms each agent coined, for the top 12 originators; hover a bar for the number of terms behind it. Early agents had more time, and more newcomers, to reach.</figcaption>
       <div class="tablewrap" id="tbl-orig" hidden></div>
     </figure>
 
-    <figure class="card" id="card-flow">
-      <div class="card-head">
-        <div class="card-titles">
-          <h3>Terms cross lab lines freely</h3>
-          <p class="card-sub">Rows are the lab of whoever coined the term; cells show which labs’ agents adopted it. Each row sums to 100%. Compare a row with “All origins” to see whether a lab’s terms stay at home.</p>
-        </div>
-        <button class="btn btn-quiet" type="button" data-table="tbl-flow" aria-expanded="false" aria-controls="tbl-flow">Show table</button>
-      </div>
-      <div class="chart" id="flow-chart"></div>
-      <p class="note">Darker cells hold a larger share of the row. Adopter mix also reflects how many agents each lab had in the village at the time.</p>
+    <figure class="fig" id="fig-flow">
+      <div class="fig-tools"><span class="status" aria-live="polite"></span><span class="exp"></span><button class="btn" type="button" data-table="tbl-flow" aria-expanded="false" aria-controls="tbl-flow">Table</button></div>
+      <div class="fig-body"><div class="chart" id="flow-chart"></div></div>
+      <figcaption><span class="fig-label">Figure 7:</span> <span data-k="flowLead">Terms cross lab lines freely: no lab’s agents adopt its terms much more than their usual share.</span> For the terms each lab’s agents coined, the filled marker is the share of adoptions made by that same lab’s agents, with its Wilson 95% interval; the hollow marker is that lab’s share of all adoptions (any origin). Where the interval covers the hollow marker there is no sign of home bias. Labels give the difference in percentage points. Adopter mix also reflects how many agents each lab had in the village at the time; the table has the full origin-by-adopter matrix.</figcaption>
       <div class="tablewrap" id="tbl-flow" hidden></div>
     </figure>
 
-    <div class="human-line" id="human-line"><span>Humans in the chat seeded <span data-k="humanOrigin">55</span> listed terms. The most adopted:</span></div>
+    <div class="human-line" id="human-line"><span>Humans in the chat seeded <span data-k="humanOrigin">55</span> listed terms. The most adopted (adopters):</span></div>
   </section>
 
   <section id="memory" aria-labelledby="h-memory">
-    <h2 id="h-memory">What ends up in memory</h2>
+    <h2 id="h-memory"><span class="secnum">3</span>What ends up in memory</h2>
     <div class="prose">
       <p>Each agent keeps a saved memory that it rewrites during the day. We take the last version per agent per day (<span data-k="agentDays">4,604</span> agent-days). In the first month a memory named about <span data-k="namedFirst">3</span> other agents, <span data-k="namedShareFirst">92%</span> of those present. Over the last eight weeks a memory names about <span data-k="namedLast">15</span> agents, but only <span data-k="namedShareLast">53%</span> of those present.</p>
       <p>Little memory text is copied word for word between agents: <span data-k="sharedFirst">1.1%</span> in the first eight weeks, <span data-k="sharedPeak">4.7%</span> at the four-week high in <span data-k="sharedPeakWhen">Jan 2026</span>, and <span data-k="sharedLast">2.0%</span> in the last eight weeks.</p>
     </div>
 
-    <figure class="card" id="card-mem">
-      <div class="card-head">
-        <div class="card-titles">
-          <h3>Memories name more agents, but a smaller share of the village</h3>
-          <p class="card-sub">Last memory per agent per day, averaged by week. Hover or use the arrow keys for one week’s readings.</p>
-        </div>
-        <button class="btn btn-quiet" type="button" data-table="tbl-mem" aria-expanded="false" aria-controls="tbl-mem">Show table</button>
-      </div>
-      <div class="chart" id="mem-chart" tabindex="0" role="group" aria-label="Weekly small multiples of memory measures: other agents named, share of present agents named, verbatim shared text, and median memory length. Use left and right arrow keys to move between weeks."></div>
-      <div class="tablewrap" id="tbl-mem" hidden></div>
+    <figure class="fig" id="fig-mem">
+      <div class="fig-tools"><span class="status" aria-live="polite"></span><span class="exp"></span><button class="btn" type="button" data-table="tbl-mem" aria-expanded="false" aria-controls="tbl-mem">Table</button></div>
+      <div class="fig-body"><div class="chart" id="mem-chart" tabindex="0" role="group" aria-label="Weekly small multiples of memory measures: other agents named, share of present agents named, verbatim shared text, and median memory length. Use the left and right arrow keys to move between weeks."></div></div>
+      <figcaption><span class="fig-label">Figure 8:</span> Memories name more agents, but a smaller share of the village. Last memory per agent per day, averaged by week (dots), with trailing 4-week means (lines). Hover or use the arrow keys for one week’s readings.</figcaption>
+      <div class="tablewrap scroll" id="tbl-mem" hidden></div>
     </figure>
 
-    <figure class="card" id="card-dumb">
-      <div class="card-head">
-        <div class="card-titles">
-          <h3>More agents keep a term in memory than use it in chat</h3>
-          <p class="card-sub">The 18 most-adopted terms. For <span data-k="memMore">49 of 50</span> listed terms, more agents have the term in saved memory than adopted it in chat.</p>
-        </div>
-        <button class="btn btn-quiet" type="button" data-table="tbl-dumb" aria-expanded="false" aria-controls="tbl-dumb">Show table</button>
-      </div>
-      <div class="legend" id="lg-dumb"></div>
-      <div class="chart" id="dumb-chart"></div>
+    <figure class="fig" id="fig-dumb">
+      <div class="fig-tools"><span class="status" aria-live="polite"></span><span class="exp"></span><button class="btn" type="button" data-table="tbl-dumb" aria-expanded="false" aria-controls="tbl-dumb">Table</button></div>
+      <div class="fig-body"><div class="chart" id="dumb-chart"></div></div>
+      <figcaption><span class="fig-label">Figure 9:</span> More agents keep a term in memory than use it in chat. The 18 most-adopted terms; filled: agents that adopted the term in chat (used it in two or more messages), hollow: agents whose saved memory contains it. For <span data-k="memMore">49 of 50</span> listed terms, more agents have the term in memory than adopted it in chat.</figcaption>
       <div class="tablewrap" id="tbl-dumb" hidden></div>
     </figure>
   </section>
 
   <section id="method" class="method" aria-labelledby="h-method">
-    <h2 id="h-method">Method and limits</h2>
+    <h2 id="h-method"><span class="secnum">4</span>Method and limits</h2>
     <ul>
-      <li><b>Data.</b> The chat, agent, goal and memory tables of the AI Village dataset in <code>data/ai-village/</code>, with <code>CHANGELOG.md</code> for scaffolding changes. Weeks start on Monday (UTC).</li>
+      <li><b>Data.</b> The chat, agent, goal and memory tables of the AI Village dataset in <code>data/ai-village/</code>, with <code>CHANGELOG.md</code> for scaffolding changes. Weeks start on Monday (UTC). Village days follow the dataset’s own numbering: day 1 is 2 April 2025, and a day is a calendar date in Pacific time.</li>
       <li><b>DeepSeek seat split.</b> The DeepSeek-V3.2 agent called DeepSeek’s <code>deepseek-reasoner</code> alias, which DeepSeek moved from V3.2 to V4-Flash on 24 April 2026. From then on the seat’s messages, memories and mentions are labelled “DeepSeek (reasoner alias, from 24 Apr 2026)”, so later behaviour isn’t credited to V3.2. It is the same seat with the same memory and history, so it keeps the seat’s December 2025 join date and the seat counts once among agents present. The alias was reportedly retired on 24 July 2026; which model ran the seat after that is unknown. A term the seat used before the switch can count again as an adoption under the new label.</li>
       <li><b>Mentions.</b> A message mentions an agent when it contains the agent’s name or a short form such as “Opus 4.5”. Bare family words such as “DeepSeek” count only when exactly one agent of that family was active at the time. Self-mentions are dropped. Reciprocity is the share of mentioning pairs where both agents mention each other. Homophily is the same-lab share of mentions minus the share expected from the mix of active speakers.</li>
-      <li><b>Goal types.</b> Collaborative, competitive, individual or free choice, hand-labelled from the goal text (the list is in <code>common.py</code>).</li>
+      <li><b>Goal types.</b> Collaborative, competitive, individual or free choice, hand-labelled from the goal text (the list is in <code>common.py</code>). Means over goals use a t-interval with n − 1 degrees of freedom.</li>
       <li><b>Language markers.</b> Keyword patterns for requests, division of labour, verification, gratitude and competition, counted once per message and reported per 100 agent messages. The “we” share counts we-words against I-words.</li>
-      <li><b>Terms and adoption.</b> Non-dictionary words and distinctive two-word phrases (lift ≥ <span data-k="minLift">30</span>), first seen at least <span data-k="noveltyWeeks">3</span> weeks in, not from goal text or the changelog. An agent adopts a term after using it in <span data-k="minUses">2</span> messages. A newcomer is an adopter who joined the village after the term was coined.</li>
+      <li><b>Terms and adoption.</b> Non-dictionary words and distinctive two-word phrases (lift ≥ <span data-k="minLift">30</span>), first seen at least <span data-k="noveltyWeeks">3</span> weeks in, used in at least <span data-k="minDocs">20</span> messages, not from goal text or the changelog. An agent adopts a term after using it in <span data-k="minUses">2</span> messages; its dot sits at its first use. A newcomer is an adopter who joined the village after the term was coined. “Lasting vocabulary” and “Short-lived bursts” are the 25 most-adopted terms whose use was spread out over time or concentrated in a short burst.</li>
       <li><b>Presence.</b> An agent is present from the time it joined the village (its creation time in the agent table) until it left (the changelog roster’s “Left” date, or its last chat message if later), or to the end of the data if it is still there, whether or not it is posting.</li>
-      <li><b>Spread speed.</b> For terms with at least <span data-k="minDocsSpeed">5</span> messages coined when at least two agents were present: the share of agents present at coinage who adopt within <span data-k="reachDays">14</span> days. Terms coined in the last 14 days of the data are excluded.</li>
+      <li><b>Spread speed.</b> For terms with at least <span data-k="minDocsSpeed">5</span> messages coined when at least two agents were present: the share of agents present at coinage who adopt within <span data-k="reachDays">14</span> days. Terms coined in the last 14 days of the data are excluded. Intervals on proportions are Wilson 95% intervals over terms (or adoptions); the mean measures have no interval because only the means were kept.</li>
       <li><b>Memory.</b> The last memory per agent per day (<span data-k="agentDays">4,604</span> agent-days). “Named” counts other village agents whose names appear. Verbatim overlap is the share of an agent’s 6-word runs that also appear in another agent’s memory from the same day.</li>
       <li><b>Limits.</b> “First use” means first in this chat; agents also meet ideas on the web and through computer use. These are correlations, not causal estimates. Agents can search the chat history, which helps explain inheritance by newcomers. Scaffolding changes recorded in the changelog shift volumes, notably chat rooms from February 2026 and longer working hours from June 2026.</li>
     </ul>
     <h3>Rerun</h3>
     <pre class="cmd">cd village_tools &amp;&amp; python3 cooperation.py &amp;&amp; python3 ideas.py &amp;&amp; python3 memories.py &amp;&amp; python3 build_viz.py</pre>
-    <footer>Built <span data-k="generated">2026-10-03</span> from <code>out/cooperation.json</code>, <code>out/ideas.json</code> and <code>out/memories.json</code>. Source: AI Digest’s AI Village research dataset.</footer>
+    <footer class="paper-foot">Built <span data-k="generated">2026-10-03</span> from <code>out/cooperation.json</code>, <code>out/ideas.json</code> and <code>out/memories.json</code>. Source: AI Digest’s AI Village research dataset. Every figure exports at the NeurIPS text width (5.5 in) as SVG or 300-dpi PNG.</footer>
   </section>
 </main>
-<div id="tip" role="tooltip" hidden></div>
+<div class="tip" id="tip" role="tooltip" hidden></div>
 
 <script type="application/json" id="village-data">__DATA__</script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script>/*__D3_JS__*/</script>
+<script>/*__PAPERKIT_JS__*/</script>
 <script>
 (function () {
 'use strict';
 const $ = s => document.querySelector(s);
-if (!window.d3) {
-  document.querySelectorAll('.chart').forEach(c => { c.textContent = 'The charts need d3 from cdnjs.cloudflare.com, which did not load. Reload the page to try again.'; c.className = 'nojs'; });
+if (!window.d3 || !window.PaperKit) {
+  document.querySelectorAll('.chart').forEach(c => { c.textContent = 'The charts could not start (d3 or PaperKit missing from this build).'; c.className = 'nojs'; });
   return;
 }
 const D = JSON.parse(document.getElementById('village-data').textContent);
+const PK = window.PaperKit;
+const DAYS = PK.days('2025-04-02', 'America/Los_Angeles');
+const SVGNS = 'http://www.w3.org/2000/svg';
 
 /* ---------- helpers ---------- */
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -432,7 +231,6 @@ const parseT = s => new Date(s.length <= 10 ? s + 'T00:00:00Z' : s.replace(' ', 
 const DAY = 864e5, WEEK = 7 * DAY;
 const fmtDate = d3.utcFormat('%-d %b %Y');
 const fmtMonth = d3.utcFormat('%b %Y');
-const fmtAxis = d3.utcFormat('%b ’%y');
 const int = d3.format(',');
 const pct0 = v => v == null ? '–' : Math.round(v * 100) + '%';
 const pct1 = v => v == null ? '–' : (v * 100).toFixed(1) + '%';
@@ -440,46 +238,62 @@ const f1 = v => v == null ? '–' : v.toFixed(1);
 const fq = q => q.replace(/(\d{4})-(Q\d)/, '$2 $1');
 const trunc = (s, n) => s.length > n ? s.slice(0, Math.max(1, n - 1)) + '…' : s;
 const GROUPS = D.groups;
-const GVAR = { 'Anthropic': '--c-anthropic', 'OpenAI': '--c-openai', 'Google': '--c-google', 'Other labs': '--c-other', 'Human': '--c-human' };
+const LABS = ['Anthropic', 'OpenAI', 'Google', 'Other labs'];
+const LAB_VAR = { 'Anthropic': '--lab-anthropic', 'OpenAI': '--lab-openai', 'Google': '--lab-google', 'Other labs': '--lab-other', 'Human': '--lab-human' };
+const LAB_SYM = { 'Anthropic': d3.symbolCircle, 'OpenAI': d3.symbolSquare, 'Google': d3.symbolTriangle, 'Other labs': d3.symbolDiamond, 'Human': d3.symbolCircle };
 const TYPES = ['collaborative', 'competitive', 'individual', 'free'];
 const TYPE_LABEL = { collaborative: 'Collaborative', competitive: 'Competitive', individual: 'Individual', free: 'Free choice' };
+const dayOf = t => DAYS.of(+t);
+const dayStr = t => 'Day ' + dayOf(t);
 
 const T0 = parseT(D.meta.start);
 const T1 = new Date(+parseT(D.meta.end) + WEEK);
+// dates without a time: take the Pacific afternoon of that day, so Village-day arithmetic lands on that date
+const DATA_START = new Date(+parseT(D.meta.data_start || D.meta.start) + 20 * 36e5), DATA_END = new Date(+parseT(D.meta.data_end || D.meta.end) + 20 * 36e5);
 const goals = D.goals.map(g => Object.assign({}, g, { s: parseT(g.start), e: g.end ? parseT(g.end) : T1, open: !g.end }));
 const weeks = D.weekly.map(w => Object.assign({}, w, { t: parseT(w.week), tm: new Date(+parseT(w.week) + 3.5 * DAY) }));
 const memWeeks = D.memory.weekly.map(w => Object.assign({}, w, { t: parseT(w.week), tm: new Date(+parseT(w.week) + 3.5 * DAY) }));
 function goalAt(t) { for (let i = goals.length - 1; i >= 0; i--) if (goals[i].s <= t) return goals[i]; return goals[0]; }
-function goalDates(g) { return fmtDate(g.s) + ' – ' + (g.open ? 'ongoing' : fmtDate(g.e)); }
+function goalDates(g) { return fmtDate(g.s) + ' – ' + (g.open ? 'ongoing' : fmtDate(g.e)) + ' (' + dayStr(g.s) + (g.open ? ' on' : '–' + dayOf(new Date(+g.e - 1))) + ')'; }
+function weekLabel(t) { return 'Week of ' + fmtDate(t) + ' (Days ' + dayOf(t) + '–' + dayOf(new Date(+t + 6 * DAY)) + ')'; }
 function quarterEnd(q) { const [y, n] = q.split('-Q').map(Number); return Date.UTC(y, n * 3, 1); }
 const lastQ = D.ideas.speed[D.ideas.speed.length - 1].quarter;
-const lastQPartial = +T1 < quarterEnd(lastQ);
+const lastQPartial = +DATA_END < quarterEnd(lastQ);
 
-const state = { goal: 'all', cascade: 'durable', term: { durable: D.ideas.durable[0].term, episodic: D.ideas.episodic[0].term } };
+const state = { axis: 'date', cascade: 'durable', term: { durable: D.ideas.durable[0].term, episodic: D.ideas.episodic[0].term } };
 
+/* colours and measurement */
 let C = {};
 function readColors() {
-  const cs = getComputedStyle(document.documentElement);
-  const v = n => cs.getPropertyValue(n).trim();
-  C = {
-    surface: v('--surface'), surface2: v('--surface-2'), ink: v('--ink'), ink2: v('--ink-2'), ink3: v('--ink-3'),
-    grid: v('--grid'), axis: v('--axis'), seqLo: v('--seq-lo'), seqHi: v('--seq-hi'), onDark: v('--on-dark'), onLight: v('--on-light'),
-    g: {}, t: { collaborative: v('--t-collab'), competitive: v('--t-comp'), individual: v('--t-indiv'), free: v('--surface') }
-  };
-  for (const g of GROUPS) C.g[g] = v(GVAR[g]);
+  const v = PK.cssVar;
+  C = { paper: v('--paper'), ink: v('--ink'), ink2: v('--ink-2'), ink3: v('--ink-3'), rule: v('--rule'), hair: v('--hair'),
+    wash: v('--wash'), wash2: v('--wash-2'), serif: v('--serif'), mono: v('--mono'), lab: {},
+    type: { collaborative: v('--ink-2'), competitive: '#8c8c8c', individual: '#c8c8c8', free: v('--paper') } };
+  for (const g of GROUPS.concat(['Other labs'])) C.lab[g] = v(LAB_VAR[g] || '--lab-other');
+}
+const _mc = document.createElement('canvas').getContext('2d');
+function textW(s, px, weight, family) { _mc.font = (weight || 400) + ' ' + px + 'px ' + (family || C.serif); return _mc.measureText(s).width; }
+function sizes(box) {
+  const cs = getComputedStyle(box);
+  return { fig: parseFloat(cs.getPropertyValue('--fs-fig')) || 12.5, tick: parseFloat(cs.getPropertyValue('--fs-tick')) || 11.5 };
+}
+function fitText(s, px, maxW, family) {
+  if (textW(s, px, 400, family) <= maxW) return s;
+  while (s.length > 1 && textW(s + '…', px, 400, family) > maxW) s = s.slice(0, -1);
+  return s + '…';
 }
 
 /* ---------- tooltip ---------- */
 const tipEl = $('#tip');
 const Tip = {
   open() { tipEl.replaceChildren(); return this; },
-  title(t, mono) { tipEl.append(el('div', 'tt-title' + (mono ? ' mono-t' : ''), t)); return this; },
+  title(t, mono) { const e = el('div', 'tt-title', t); if (mono) e.style.fontFamily = 'var(--mono)'; tipEl.append(e); return this; },
   sub(t) { tipEl.append(el('div', 'tt-sub', t)); return this; },
   row(value, label, color, kind) {
     const r = el('div', 'tt-row');
     const k = el('span', 'tt-key ' + (kind || 'line'));
     if (color) k.style.setProperty('--k', color); else k.classList.add('none');
-    r.append(k, el('strong', null, value), el('span', 'tt-lab', label));
+    r.append(k, el('strong', null, value), el('span', 'tt-sub', label));
     tipEl.append(r); return this;
   },
   note(t) { tipEl.append(el('div', 'tt-note', t)); return this; },
@@ -497,59 +311,97 @@ const Tip = {
 };
 window.addEventListener('scroll', () => Tip.hide(), { passive: true });
 
-/* ---------- legend + table ---------- */
-function legend(container, items) {
-  container.replaceChildren();
-  for (const it of items) {
-    if (it.sep) { container.append(el('span', 'lg-sep')); continue; }
-    const s = el('span', 'lg-item');
-    const k = el('span', 'lg-key ' + it.kind);
-    if (it.cssVar) k.style.setProperty('--k', 'var(' + it.cssVar + ')');
-    s.append(k, document.createTextNode(it.label));
-    container.append(s);
-  }
-}
-function makeTable(container, cols, rows) {
-  const t = el('table'), thead = el('thead'), htr = el('tr');
+/* ---------- tables (booktabs, title above) ---------- */
+function makeTable(container, caption, cols, rows) {
+  const t = el('table', 'booktabs'), cap = el('caption'), thead = el('thead'), htr = el('tr');
+  cap.textContent = caption;
   cols.forEach(c => { const th = el('th', c.num ? 'num' : null, c.label); th.scope = 'col'; htr.append(th); });
   thead.append(htr);
   const tb = el('tbody');
   rows.forEach(r => { const tr = el('tr'); cols.forEach(c => tr.append(el('td', c.num ? 'num' : (c.cls || null), String(c.get(r))))); tb.append(tr); });
-  t.append(thead, tb);
+  t.append(cap, thead, tb);
   container.replaceChildren(t);
 }
 document.querySelectorAll('[data-table]').forEach(b => b.addEventListener('click', () => {
   const t = document.getElementById(b.dataset.table);
   t.hidden = !t.hidden;
   b.setAttribute('aria-expanded', String(!t.hidden));
-  b.textContent = t.hidden ? 'Show table' : 'Hide table';
+  b.setAttribute('aria-pressed', String(!t.hidden));
 }));
 
 /* ---------- svg helpers ---------- */
 function newSvg(box, W, H) {
-  return d3.select(box).html('').append('svg').attr('class', 'viz').attr('width', W).attr('height', H)
+  return d3.select(box).html('').append('svg').attr('class', 'viz').attr('xmlns', SVGNS).attr('width', W).attr('height', H)
     .attr('viewBox', '0 0 ' + W + ' ' + H).attr('aria-hidden', 'true');
 }
-function hbar(x, y, w, h, r) {
-  if (w <= 0) return '';
-  r = Math.min(r == null ? 4 : r, w, h / 2);
-  return 'M' + x + ',' + y + 'H' + (x + w - r) + 'A' + r + ',' + r + ' 0 0 1 ' + (x + w) + ',' + (y + r) +
-    'V' + (y + h - r) + 'A' + r + ',' + r + ' 0 0 1 ' + (x + w - r) + ',' + (y + h) + 'H' + x + 'Z';
-}
-function vbar(x, base, w, h, r) {
-  if (h <= 0) return '';
-  r = Math.min(r == null ? 4 : r, h, w / 2);
-  const top = base - h;
-  return 'M' + x + ',' + base + 'V' + (top + r) + 'A' + r + ',' + r + ' 0 0 1 ' + (x + r) + ',' + top +
-    'H' + (x + w - r) + 'A' + r + ',' + r + ' 0 0 1 ' + (x + w) + ',' + (top + r) + 'V' + base + 'Z';
-}
+function hbar(x, y, w, h) { return w <= 0 ? '' : 'M' + x + ',' + y + 'H' + (x + w) + 'V' + (y + h) + 'H' + x + 'Z'; }
 const diamond = (x, y, s) => 'M' + x + ',' + (y - s) + 'L' + (x + s) + ',' + y + 'L' + x + ',' + (y + s) + 'L' + (x - s) + ',' + y + 'Z';
-function timeTicks(x, narrow) { return x.ticks(narrow ? d3.utcMonth.every(6) : d3.utcMonth.every(3)); }
-function bottomTimeAxis(svg, x, y, narrow) {
-  const ticks = timeTicks(x, narrow);
-  const g = svg.append('g');
-  g.selectAll('line').data(ticks).join('line').attr('x1', x).attr('x2', x).attr('y1', y).attr('y2', y + 4).attr('stroke', C.axis);
-  g.selectAll('text').data(ticks).join('text').attr('class', 'tick').attr('x', x).attr('y', y + 16).attr('text-anchor', 'middle').text(fmtAxis);
+const sym = (type, r) => d3.symbol(type, Math.PI * r * r)();
+function symArea(type, r) {  // equal visual weight across shapes
+  const k = type === d3.symbolTriangle ? 1.45 : type === d3.symbolDiamond ? 1.25 : type === d3.symbolSquare ? 0.95 : 1;
+  return d3.symbol(type, Math.PI * r * r * k)();
+}
+
+/* time axis: dates (UTC months) or Village days, switched page-wide */
+function timeTicks(x, minPx) {
+  const [a, b] = x.domain().map(Number);
+  const pw = Math.abs(x.range()[1] - x.range()[0]);
+  const maxN = Math.max(2, Math.floor(pw / (minPx || 78)));
+  if (state.axis === 'day') {
+    const d0 = Math.max(1, DAYS.of(a)), d1 = DAYS.of(b);
+    const step = [1, 2, 5, 7, 10, 20, 25, 50, 100, 200, 250, 500].find(s => (d1 - d0) / s <= maxN) || 500;
+    const out = [];
+    for (let n = Math.ceil(d0 / step) * step; n <= d1; n += step) { const t = DAYS.start(n); if (n >= 1 && t >= a && t <= b) out.push({ t: new Date(t), label: String(n) }); }
+    return { ticks: out, title: 'Village day' };
+  }
+  const spanM = (b - a) / (30.44 * DAY);
+  const m = [1, 2, 3, 4, 6, 12].find(k => spanM / k <= maxN) || 12;
+  const list = d3.utcMonth.every(m).range(new Date(a), new Date(b + 1));
+  const perTick = pw / Math.max(1, list.length);
+  const f = m === 12 ? d3.utcFormat('%Y') : perTick >= 66 ? d3.utcFormat('%b %Y') : d3.utcFormat('%b ’%y');
+  return { ticks: list.map(t => ({ t, label: f(t) })), title: 'Date (UTC)' };
+}
+function bottomTimeAxis(g, x, y, fs, opt) {
+  opt = opt || {};
+  const tk = timeTicks(x, opt.minPx);
+  g.append('line').attr('class', 'axis-line').attr('x1', x.range()[0]).attr('x2', x.range()[1]).attr('y1', y + 0.5).attr('y2', y + 0.5);
+  g.selectAll(null).data(tk.ticks).join('line').attr('class', 'tick-line').attr('x1', d => x(d.t)).attr('x2', d => x(d.t)).attr('y1', y).attr('y2', y + 3.5);
+  // keep end labels inside the figure: shift a label inward when it would run past the plot edge + margin
+  const lo = x.range()[0] - (opt.padL || 0), hi = x.range()[1] + (opt.padR != null ? opt.padR : 8);
+  const lx = d => { const w = textW(d.label, fs.tick) / 2, v = x(d.t); return Math.max(lo + w, Math.min(hi - w, v)); };
+  g.selectAll(null).data(tk.ticks).join('text').attr('class', 'tick').attr('x', lx).attr('y', y + 4 + fs.tick).attr('text-anchor', 'middle').text(d => d.label);
+  let h = 6 + fs.tick;
+  if (opt.title !== false) {
+    g.append('text').attr('class', 'axis-title').attr('x', (x.range()[0] + x.range()[1]) / 2).attr('y', y + h + fs.fig + 3).attr('text-anchor', 'middle').text(opt.title || tk.title);
+    h += fs.fig + 6;
+  }
+  return h;
+}
+function leftAxis(g, y, x0, ticks, fmt, fs) {
+  g.append('line').attr('class', 'axis-line').attr('x1', x0 - 0.5).attr('x2', x0 - 0.5).attr('y1', y.range()[0]).attr('y2', y.range()[1]);
+  g.selectAll(null).data(ticks).join('line').attr('class', 'tick-line').attr('x1', x0 - 3.5).attr('x2', x0).attr('y1', d => Math.round(y(d)) + 0.5).attr('y2', d => Math.round(y(d)) + 0.5);
+  g.selectAll(null).data(ticks).join('text').attr('class', 'tick').attr('x', x0 - 5).attr('y', d => y(d) + fs.tick * 0.35).attr('text-anchor', 'end').text(fmt);
+}
+/* an in-figure legend (it travels with exports); items: {kind, label, color, dash, sym, hollow} */
+function svgLegend(svg, x, y, maxW, items, fs) {
+  const g = svg.append('g').attr('class', 'legend');
+  const px = fs.tick, rowH = px + 7;
+  let cx = x, cy = y + px * 0.5;
+  items.forEach(it => {
+    if (it.br) { cx = x; cy += rowH; return; }
+    const kw = it.kind === 'line' ? 18 : it.kind === 'rect' ? 13 : 10;
+    const w = kw + 5 + textW(it.label, px) + 16;
+    if (cx > x && cx + w > x + maxW) { cx = x; cy += rowH; }
+    const k = g.append('g').attr('transform', 'translate(' + cx + ',' + cy + ')');
+    if (it.kind === 'line') k.append('line').attr('x1', 0).attr('x2', kw).attr('y1', 0).attr('y2', 0).attr('stroke', it.color || C.ink).attr('stroke-width', it.width || 1.6).attr('stroke-dasharray', it.dash || null);
+    else if (it.kind === 'rect') k.append('rect').attr('x', 0).attr('y', -4.5).attr('width', kw).attr('height', 9).attr('fill', it.color).attr('stroke', it.stroke || 'none').attr('stroke-width', 0.8);
+    else if (it.kind === 'diamond') k.append('path').attr('d', diamond(5, 0, 4.5)).attr('fill', it.color || C.ink);
+    else if (it.kind === 'sym') k.append('path').attr('transform', 'translate(5,0)').attr('d', symArea(it.sym, 3.8)).attr('fill', it.hollow ? C.paper : it.color).attr('stroke', it.color).attr('stroke-width', it.hollow ? 1.3 : 0);
+    else k.append('circle').attr('cx', 5).attr('cy', 0).attr('r', it.r || 3.3).attr('fill', it.hollow ? C.paper : (it.color || C.ink)).attr('stroke', it.color || C.ink).attr('stroke-width', it.hollow ? 1.3 : 0);
+    k.append('text').attr('class', 'tick').attr('x', kw + 5).attr('y', px * 0.35).text(it.label);
+    cx += w;
+  });
+  return cy + px * 0.5 + 6 - y;
 }
 function bindKeys(box) {
   if (box._bound) return;
@@ -558,75 +410,93 @@ function bindKeys(box) {
   box.addEventListener('focus', () => box._kb && box._kb.focus());
   box.addEventListener('blur', () => { if (box._kb) box._kb.blur(); });
 }
-function luminance(c) {
-  const { r, g, b } = d3.rgb(c);
-  const f = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
-  return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+function rolling(rows, key, k) {
+  return rows.map((r, i) => {
+    if (i < k - 1) return null;
+    const vals = rows.slice(i - k + 1, i + 1).map(x => x[key]).filter(v => v != null);
+    return vals.length >= k - 1 ? d3.mean(vals) : null;
+  });
+}
+function tCrit(df) {
+  const T = [0, 12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228, 2.201, 2.179, 2.160, 2.145, 2.131, 2.120, 2.110, 2.101, 2.093, 2.086, 2.080, 2.074, 2.069, 2.064, 2.060, 2.056, 2.052, 2.048, 2.045, 2.042];
+  return df <= 30 ? T[Math.max(1, df)] : 1.96 + 2.4 / df;
+}
+function wilson(k, n) {
+  if (!n) return [null, null];
+  const z = 1.96, p = k / n, d = 1 + z * z / n;
+  const c = (p + z * z / (2 * n)) / d, h = z * Math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / d;
+  return [Math.max(0, c - h), Math.min(1, c + h)];
 }
 
-/* ---------- weekly small multiples (shared by sections 1 and 3) ---------- */
-function timePanels(box, opt) {
-  const W = box.clientWidth; if (!W) return;
+/* ---------- weekly small multiples (Figures 1 and 8) ---------- */
+function timePanels(box, W, preset, opt) {
+  if (!W) return;
+  const fs = sizes(box), screen = preset === 'screen';
   const narrow = W < 560;
-  const ml = narrow ? 36 : 46, mr = narrow ? 44 : 56;
-  const ph = narrow ? 62 : 74, titleH = 24, gap = 20;
-  const ribTop = 18, ribH = 12;
-  const top = opt.ribbon ? ribTop + ribH + 20 : 4;
-  const n = opt.panels.length;
-  const rows = opt.rows;
-  const y0 = i => top + i * (titleH + ph + gap);
-  const yBot = y0(n - 1) + titleH + ph;
-  const H = yBot + 26;
+  const rows = opt.rows, n = opt.panels.length;
+  const tickFmt = p => p.tick || p.fmt;
+  const ml = 8 + d3.max(opt.panels, p => d3.max(d3.scaleLinear().domain([0, p.max != null ? p.max : (d3.max(rows, r => r[p.key]) || 1)]).nice(3).ticks(3), t => textW(tickFmt(p)(t), fs.tick))) + 6;
+  const mr = 10 + d3.max(opt.panels, p => textW(p.fmt(d3.max(rows, r => r[p.key]) || 0), fs.tick, 700)) + 6;
+  const ph = preset === 'paper' ? 46 : (narrow ? 58 : 68), titleH = fs.fig + 8, gap = preset === 'paper' ? 10 : 16;
+  const svg = newSvg(box, W, 10);
+  // legend
+  const legItems = [{ kind: 'dot', label: 'weekly value', color: C.ink3, r: 2 }, { kind: 'line', label: 'trailing 4-week mean', color: C.ink }];
+  if (opt.ribbon) {
+    legItems.push({ br: !narrow ? false : true });
+    legItems.push({ kind: 'rect', label: 'Collaborative goal', color: C.type.collaborative },
+      { kind: 'rect', label: 'Competitive', color: C.type.competitive }, { kind: 'rect', label: 'Individual', color: C.type.individual },
+      { kind: 'rect', label: 'Free choice', color: C.type.free, stroke: C.ink3 });
+  }
+  let top = svgLegend(svg, ml, 0, W - ml - 4, legItems.filter(i => i.br !== false), fs) + 4;
   const x = d3.scaleUtc().domain([T0, T1]).range([ml, W - mr]);
-  const svg = newSvg(box, W, H);
-
   let segs = null;
   if (opt.ribbon) {
-    svg.append('text').attr('class', 'tick').attr('x', ml).attr('y', ribTop - 6).text('Goal running');
+    const ribH = preset === 'paper' ? 8 : 10;
+    svg.append('text').attr('class', 'tick').attr('x', ml - 5).attr('y', top + ribH - 1).attr('text-anchor', 'end').text('Goal');
     segs = svg.append('g').selectAll('rect').data(goals).join('rect')
-      .attr('x', g => x(g.s) + 1).attr('y', ribTop).attr('width', g => Math.max(1, x(g.e) - x(g.s) - 2)).attr('height', ribH).attr('rx', 2)
-      .attr('fill', g => C.t[g.type]).attr('stroke', g => g.type === 'free' ? C.axis : 'none').attr('stroke-width', 1);
-    const band = svg.append('rect').attr('x', ml).attr('y', ribTop - 5).attr('width', W - ml - mr).attr('height', ribH + 10).attr('fill', 'transparent');
-    band.on('pointermove', ev => {
-      const t = x.invert(d3.pointer(ev)[0]);
-      const g = goals.find(gg => gg.s <= t && t < gg.e);
-      segs.attr('stroke', d => d === g ? C.ink : (d.type === 'free' ? C.axis : 'none')).attr('stroke-width', d => d === g ? 1.5 : 1);
-      if (!g) { Tip.hide(); return; }
-      Tip.open().title('Goal ' + (g.idx + 1) + ' of ' + goals.length + ' · ' + TYPE_LABEL[g.type]).sub(g.goal)
-        .row(int(g.msgs), 'agent messages', C.ink2).row(String(g.agents), 'agents speaking', C.ink2).note(goalDates(g));
-      Tip.show(ev.clientX, ev.clientY);
-    }).on('pointerleave', () => { Tip.hide(); segs.attr('stroke', d => d.type === 'free' ? C.axis : 'none').attr('stroke-width', 1); });
+      .attr('x', g => x(g.s) + 0.5).attr('y', top).attr('width', g => Math.max(0.8, x(g.e) - x(g.s) - 1)).attr('height', ribH)
+      .attr('fill', g => C.type[g.type]).attr('stroke', g => g.type === 'free' ? C.ink3 : 'none').attr('stroke-width', 0.7);
+    if (screen) {
+      const band = svg.append('rect').attr('x', ml).attr('y', top - 4).attr('width', W - ml - mr).attr('height', ribH + 8).attr('fill', 'transparent');
+      band.on('pointermove', ev => {
+        const t = x.invert(d3.pointer(ev)[0]);
+        const g = goals.find(gg => gg.s <= t && t < gg.e);
+        segs.attr('stroke', d => d === g ? C.ink : (d.type === 'free' ? C.ink3 : 'none')).attr('stroke-width', d => d === g ? 1.4 : 0.7);
+        if (!g) { Tip.hide(); return; }
+        Tip.open().title('Goal ' + (g.idx + 1) + ' of ' + goals.length + ' · ' + TYPE_LABEL[g.type]).sub(g.goal)
+          .row(int(g.msgs), 'agent messages', C.ink2).row(String(g.agents), 'agents speaking', C.ink2).note(goalDates(g));
+        Tip.show(ev.clientX, ev.clientY);
+      }).on('pointerleave', () => { Tip.hide(); segs.attr('stroke', d => d.type === 'free' ? C.ink3 : 'none').attr('stroke-width', 0.7); });
+    }
+    top += ribH + 8;
   }
-
+  const y0 = i => top + i * (titleH + ph + gap);
+  const yBot = y0(n - 1) + titleH + ph;
   const panels = opt.panels.map((p, i) => {
     const pt = y0(i), pb = pt + titleH + ph;
     const maxV = p.max != null ? p.max : (d3.max(rows, r => r[p.key]) || 1);
-    const y = d3.scaleLinear().domain([0, maxV]).nice(3).range([pb, pt + titleH]);
+    const y = d3.scaleLinear().domain([0, maxV]).nice(3).range([pb, pt + titleH + 2]);
     const g = svg.append('g');
-    g.append('text').attr('class', 'ptitle').attr('x', ml).attr('y', pt + 13).text(p.label);
-    const ticks = y.ticks(3);
-    g.selectAll('line.gl').data(ticks.filter(t => t > 0)).join('line').attr('class', 'gl')
-      .attr('x1', ml).attr('x2', W - mr).attr('y1', y).attr('y2', y).attr('stroke', C.grid).attr('shape-rendering', 'crispEdges');
-    g.selectAll('text.tick').data(ticks).join('text').attr('class', 'tick').attr('x', ml - 6).attr('y', t => y(t) + 3.5)
-      .attr('text-anchor', 'end').text(p.tick || p.fmt);
-    g.append('line').attr('x1', ml).attr('x2', W - mr).attr('y1', pb).attr('y2', pb).attr('stroke', C.axis).attr('shape-rendering', 'crispEdges');
+    g.append('text').attr('class', 'panel-title').attr('x', ml).attr('y', pt + fs.fig).text(p.label);
+    leftAxis(g, y, ml, y.ticks(3), tickFmt(p), fs);
+    const roll = rolling(rows, p.key, 4);
     const ok = r => r[p.key] != null;
-    g.append('path').datum(rows).attr('fill', C.ink2).attr('fill-opacity', 0.08)
-      .attr('d', d3.area().defined(ok).x(r => x(r.tm)).y0(pb).y1(r => y(r[p.key])));
-    g.append('path').datum(rows).attr('fill', 'none').attr('stroke', C.ink2).attr('stroke-width', 2)
+    g.append('g').selectAll('circle').data(rows.filter(ok)).join('circle').attr('cx', r => x(r.tm)).attr('cy', r => y(r[p.key]))
+      .attr('r', preset === 'paper' ? 1.3 : 1.7).attr('fill', C.ink3).attr('fill-opacity', 0.75);
+    const pts = rows.map((r, k) => ({ r, v: roll[k] }));
+    g.append('path').datum(pts).attr('fill', 'none').attr('stroke', C.ink).attr('stroke-width', preset === 'paper' ? 1.1 : 1.5)
       .attr('stroke-linejoin', 'round').attr('stroke-linecap', 'round')
-      .attr('d', d3.line().defined(ok).x(r => x(r.tm)).y(r => y(r[p.key])));
-    const last = rows[rows.length - 1];
-    if (ok(last)) {
-      g.append('circle').attr('cx', x(last.tm)).attr('cy', y(last[p.key])).attr('r', 4).attr('fill', C.ink2).attr('stroke', C.surface).attr('stroke-width', 2);
-      g.append('text').attr('class', 'val').attr('x', x(last.tm) + 8).attr('y', y(last[p.key]) + 4).text(p.fmt(last[p.key]));
-    }
-    return { p, y };
+      .attr('d', d3.line().defined(d => d.v != null).x(d => x(d.r.tm)).y(d => y(d.v)));
+    const last = pts[pts.length - 1];
+    if (last.v != null) g.append('text').attr('class', 'val').attr('x', x(last.r.tm) + 5).attr('y', y(last.v) + fs.tick * 0.35).style('font-weight', 700).text(p.fmt(last.v));
+    return { p, y, roll };
   });
-  bottomTimeAxis(svg, x, yBot, narrow);
-
-  const cross = svg.append('line').attr('y1', top - 4).attr('y2', yBot).attr('stroke', C.ink3).attr('stroke-width', 1).attr('visibility', 'hidden');
-  const dots = panels.map(() => svg.append('circle').attr('r', 4).attr('fill', C.ink2).attr('stroke', C.surface).attr('stroke-width', 2).attr('visibility', 'hidden'));
+  const axH = bottomTimeAxis(svg.append('g'), x, yBot + 2, fs, { minPx: narrow ? 64 : 78, padL: ml - 2, padR: mr - 2 });
+  const H = Math.ceil(yBot + 2 + axH + 2);
+  svg.attr('height', H).attr('viewBox', '0 0 ' + W + ' ' + H);
+  if (!screen) return;
+  const cross = svg.append('line').attr('y1', top - 2).attr('y2', yBot).attr('stroke', C.ink2).attr('stroke-width', 0.8).attr('visibility', 'hidden');
+  const dots = panels.map(() => svg.append('circle').attr('r', 3.2).attr('fill', C.ink).attr('stroke', C.paper).attr('stroke-width', 1.5).attr('visibility', 'hidden'));
   const overlay = svg.append('rect').attr('x', ml).attr('y', top).attr('width', W - ml - mr).attr('height', yBot - top).attr('fill', 'transparent').style('cursor', 'crosshair');
   const bis = d3.bisector(r => r.tm).center;
   let cur = rows.length - 1;
@@ -638,10 +508,12 @@ function timePanels(box, opt) {
       const v = r[panels[k].p.key];
       d.attr('cx', xx).attr('cy', v == null ? -99 : panels[k].y(v)).attr('visibility', v == null ? 'hidden' : 'visible');
     });
-    const g = goalAt(r.tm);
-    Tip.open().title('Week of ' + fmtDate(r.t));
-    if (opt.ribbon) Tip.sub('Goal ' + (g.idx + 1) + ' · ' + TYPE_LABEL[g.type] + ': ' + trunc(g.goal, 90));
-    panels.forEach(pp => Tip.row(pp.p.fmt(r[pp.p.key]), pp.p.tipLabel ? pp.p.tipLabel(r) : pp.p.label, C.ink2));
+    Tip.open().title(weekLabel(r.t));
+    if (opt.ribbon) { const g = goalAt(r.tm); Tip.sub('Goal ' + (g.idx + 1) + ' · ' + TYPE_LABEL[g.type] + ': ' + trunc(g.goal, 90)); }
+    panels.forEach(pp => {
+      const m = pp.roll[i];
+      Tip.row(pp.p.fmt(r[pp.p.key]), (pp.p.tipLabel ? pp.p.tipLabel(r) : pp.p.label) + (m != null ? ' (4-wk mean ' + pp.p.fmt(m) + ')' : ''), C.ink, 'dot');
+    });
     if (opt.extra) opt.extra(r).forEach(t => Tip.note(t));
     if (cx == null) { const b = svg.node().getBoundingClientRect(); cx = b.left + xx; cy = b.top + top + 10; }
     Tip.show(cx, cy);
@@ -659,346 +531,221 @@ function timePanels(box, opt) {
   };
   bindKeys(box);
 }
-
-function renderWeekly() {
-  timePanels($('#weekly-chart'), {
-    rows: weeks, ribbon: true,
-    panels: [
-      { key: 'agents', label: 'Agents speaking', fmt: v => v == null ? '–' : String(v) },
-      { key: 'mention_rate', label: 'Messages that name another agent', fmt: pct0 },
-      { key: 'hub_share', label: 'Share of mentions going to the most-mentioned agent', fmt: pct0, tipLabel: r => 'of mentions went to ' + r.hub },
-      { key: 'reciprocity', label: 'Mention pairs that go both ways', fmt: pct0 }
-    ],
-    extra: r => [int(r.msgs) + ' agent messages · ' + int(r.human_msgs) + ' human messages']
-  });
-}
-function renderMemory() {
-  timePanels($('#mem-chart'), {
-    rows: memWeeks, ribbon: false,
-    panels: [
-      { key: 'named', label: 'Other agents named in a memory (mean)', fmt: f1 },
-      { key: 'named_share', label: 'Share of present agents a memory names', fmt: pct0 },
-      { key: 'shared', label: 'Memory text found word for word in another agent’s memory that day', fmt: pct1, tick: pct0 },
-      { key: 'median_chars', label: 'Median memory length (thousand characters)', fmt: v => (v / 1000).toFixed(1) + 'k', tick: v => (v / 1000) + 'k' }
-    ],
-    extra: r => [int(r.agent_days) + ' agent-days of memory this week']
-  });
-}
-
-/* ---------- goal types ---------- */
-const TYPE_METRICS = [
-  { k: 'mention_rate', label: 'Messages that name another agent', fmt: pct0 },
-  { k: 'reciprocity', label: 'Mention pairs that go both ways', fmt: pct0 },
-  { k: 'we_share', label: '“We” share of we + I words', fmt: pct0 },
-  { k: 'division_of_labour', label: 'Division-of-labour phrases per 100 messages', fmt: f1 },
-  { k: 'requests', label: 'Requests per 100 messages', fmt: f1 },
-  { k: 'competition', label: 'Competition words per 100 messages', fmt: f1 }
+const WEEKLY_PANELS = [
+  { key: 'agents', label: 'Agents speaking', fmt: v => v == null ? '–' : String(Math.round(v)) },
+  { key: 'mention_rate', label: 'Messages that name another agent', fmt: pct0, max: 1 },
+  { key: 'hub_share', label: 'Mentions going to the most-mentioned agent', fmt: pct0, max: 1, tipLabel: r => 'of mentions went to ' + r.hub },
+  { key: 'reciprocity', label: 'Mention pairs that go both ways', fmt: pct0, max: 1 }
 ];
-function renderTypes() {
-  const grid = $('#types-chart');
-  grid.replaceChildren();
-  const rows = TYPES.map(t => D.typeSummary.find(s => s.type === t)).filter(Boolean);
-  TYPE_METRICS.forEach(m => {
-    const cell = el('div', 'mini');
-    const box = el('div', 'chart');
-    cell.append(el('div', 'mini-title', m.label), box);
-    grid.append(cell);
-    const W = box.clientWidth; if (!W) return;
-    const lw = 94, mr = 42, rowH = 26, bh = 16, top = 2;
-    const H = top + rows.length * rowH;
-    const x = d3.scaleLinear().domain([0, d3.max(rows, r => r[m.k]) || 1]).range([lw, W - mr]);
-    const svg = newSvg(box, W, H);
-    svg.append('line').attr('x1', lw).attr('x2', lw).attr('y1', 0).attr('y2', H).attr('stroke', C.axis);
-    rows.forEach((r, i) => {
-      const yy = top + i * rowH + (rowH - bh) / 2;
-      const g = svg.append('g');
-      g.append('text').attr('class', 'lbl').attr('x', lw - 8).attr('y', yy + bh / 2 + 4).attr('text-anchor', 'end').text(TYPE_LABEL[r.type]);
-      const bar = g.append('path').attr('d', hbar(lw, yy, x(r[m.k]) - lw, bh)).attr('fill', C.ink2);
-      g.append('text').attr('class', 'val').attr('x', x(r[m.k]) + 6).attr('y', yy + bh / 2 + 4).text(m.fmt(r[m.k]));
-      g.append('rect').attr('class', 'hit').attr('x', 0).attr('y', top + i * rowH).attr('width', W).attr('height', rowH).attr('fill', 'transparent')
-        .attr('tabindex', 0).attr('role', 'img').attr('aria-label', TYPE_LABEL[r.type] + ': ' + m.fmt(r[m.k]))
-        .on('pointerenter focus', function (ev) {
-          bar.attr('fill-opacity', 0.75);
-          Tip.open().title(TYPE_LABEL[r.type] + ' goals').sub(r.goals + ' goals, each weighted equally').row(m.fmt(r[m.k]), m.label, C.ink2);
-          if (ev.type === 'focus') Tip.showAt(this); else Tip.show(ev.clientX, ev.clientY);
+function drawWeekly(box, W, preset) {
+  timePanels(box, W, preset, { rows: weeks, ribbon: true, panels: WEEKLY_PANELS,
+    extra: r => [int(r.msgs) + ' agent messages · ' + int(r.human_msgs) + ' human messages'] });
+}
+const MEM_PANELS = [
+  { key: 'named', label: 'Other agents named in a memory (mean)', fmt: f1, tick: v => String(v) },
+  { key: 'named_share', label: 'Share of present agents a memory names', fmt: pct0, max: 1 },
+  { key: 'shared', label: 'Memory text found word for word in another agent’s memory that day', fmt: pct1, tick: pct0 },
+  { key: 'median_chars', label: 'Median memory length (thousand characters)', fmt: v => (v / 1000).toFixed(1) + 'k', tick: v => (v / 1000) + 'k' }
+];
+function drawMemory(box, W, preset) {
+  timePanels(box, W, preset, { rows: memWeeks, ribbon: false, panels: MEM_PANELS,
+    extra: r => [int(r.agent_days) + ' agent-days of memory this week'] });
+}
+
+/* ---------- Figure 2: goal types, per-goal dots + mean with 95% t-interval ---------- */
+const TYPE_METRICS = [
+  { k: 'mention_rate', label: 'Messages that name another agent', fmt: pct0, tick: pct0, cap: 1 },
+  { k: 'reciprocity', label: 'Mention pairs that go both ways', fmt: pct0, tick: pct0, cap: 1 },
+  { k: 'we_share', label: '“We” share of we + I words', fmt: pct0, tick: pct0, cap: 1 },
+  { k: 'division_of_labour', label: 'Division-of-labour phrases per 100 messages', fmt: f1, tick: v => String(v) },
+  { k: 'requests', label: 'Requests per 100 messages', fmt: f1, tick: v => String(v) },
+  { k: 'competition', label: 'Competition words per 100 messages', fmt: f1, tick: v => String(v) }
+];
+function typeStats(m) {
+  return TYPES.map(t => {
+    const vals = goals.filter(g => g.type === t && g[m.k] != null).map(g => ({ g, v: g[m.k] }));
+    const xs = vals.map(d => d.v), n = xs.length, mean = d3.mean(xs), sd = n > 1 ? d3.deviation(xs) : 0;
+    const h = n > 1 ? tCrit(n - 1) * sd / Math.sqrt(n) : 0;
+    return { t, n, mean, lo: mean - h, hi: mean + h, vals };
+  });
+}
+function drawTypes(box, W, preset) {
+  if (!W) return;
+  const fs = sizes(box), screen = preset === 'screen';
+  const cols = W >= 900 ? 3 : W >= 500 ? 2 : 1;
+  const labW = 8 + d3.max(TYPES, t => textW(TYPE_LABEL[t] + ' (' + 23 + ')', fs.tick)) + 4;
+  const gapX = cols > 1 ? (W < 640 ? 30 : 24) : 0, rowH = preset === 'paper' ? 15 : 22;
+  const panW = (W - labW - gapX * (cols - 1)) / cols;
+  const titles = TYPE_METRICS.map(m => wrapText(m.label, fs.fig, panW - 4));
+  const titleH = d3.max(titles, t => t.length) * (fs.fig + 3) + 5, axH = fs.tick + 10, panH = titleH + rowH * TYPES.length + 4 + axH, gapY = preset === 'paper' ? 10 : 18;
+  const svg = newSvg(box, W, 10);
+  const legH = svgLegend(svg, labW, 0, W - labW, [{ kind: 'dot', label: 'one goal', color: C.ink3, hollow: true, r: 2.8 },
+    { kind: 'sym', sym: d3.symbolSquare, label: 'mean over goals', color: C.ink }, { kind: 'line', label: '95% t-interval', color: C.ink, width: 1.3 }], fs) + 4;
+  const nPerType = Object.fromEntries(TYPES.map(t => [t, goals.filter(g => g.type === t).length]));
+  TYPE_METRICS.forEach((m, mi) => {
+    const r = Math.floor(mi / cols), c = mi % cols;
+    const px = labW + c * (panW + gapX), py = legH + r * (panH + gapY);
+    const st = typeStats(m);
+    const maxV = d3.max(st, s => Math.max(s.hi, d3.max(s.vals, d => d.v) || 0)) || 1;
+    const x = d3.scaleLinear().domain([0, m.cap ? Math.min(m.cap, maxV * 1.04) : maxV * 1.04]).nice(4).range([px, px + panW - 16]);
+    const g = svg.append('g');
+    titles[mi].forEach((ln, k) => g.append('text').attr('class', 'panel-title').attr('x', px).attr('y', py + fs.fig + k * (fs.fig + 3)).text(ln));
+    const yRow = i => py + titleH + i * rowH + rowH / 2;
+    if (c === 0) TYPES.forEach((t, i) => g.append('text').attr('class', 'tick').attr('x', labW - 8).attr('y', yRow(i) + fs.tick * 0.35)
+      .attr('text-anchor', 'end').text(TYPE_LABEL[t] + ' (' + nPerType[t] + ')'));
+    const yAx = py + titleH + rowH * TYPES.length + 4;
+    g.append('line').attr('class', 'axis-line').attr('x1', px).attr('x2', px + panW - 16).attr('y1', yAx + 0.5).attr('y2', yAx + 0.5);
+    g.append('line').attr('class', 'axis-line').attr('x1', px - 0.5).attr('x2', px - 0.5).attr('y1', py + titleH).attr('y2', yAx);
+    const ticks = x.ticks(panW < 200 ? 3 : 4);
+    g.selectAll(null).data(ticks).join('line').attr('class', 'tick-line').attr('x1', x).attr('x2', x).attr('y1', yAx).attr('y2', yAx + 3.5);
+    g.selectAll(null).data(ticks).join('text').attr('class', 'tick').attr('x', x).attr('y', yAx + 4 + fs.tick).attr('text-anchor', 'middle').text(m.tick);
+    st.forEach((s, i) => {
+      const cy = yRow(i);
+      s.vals.forEach((d, j) => {
+        const jit = ((j * 7919) % 11 - 5) / 5 * (rowH * 0.22);
+        g.append('circle').attr('class', 'gdot').attr('cx', x(d.v)).attr('cy', cy + jit).attr('r', preset === 'paper' ? 1.9 : 2.6)
+          .attr('fill', 'none').attr('stroke', C.ink3).attr('stroke-width', 0.9)
+          .each(function () { this.__d = { d, s, m }; });
+      });
+      if (s.n > 1) g.append('line').attr('x1', x(Math.max(0, s.lo))).attr('x2', x(m.cap ? Math.min(m.cap, s.hi) : s.hi)).attr('y1', cy).attr('y2', cy).attr('stroke', C.ink).attr('stroke-width', preset === 'paper' ? 1.1 : 1.5);
+      g.append('path').attr('transform', 'translate(' + x(s.mean) + ',' + cy + ')').attr('d', symArea(d3.symbolSquare, preset === 'paper' ? 2.8 : 3.6)).attr('fill', C.ink);
+      if (screen) g.append('rect').attr('class', 'hit').attr('x', px).attr('y', cy - rowH / 2).attr('width', panW).attr('height', rowH)
+        .attr('tabindex', 0).attr('role', 'img').attr('aria-label', TYPE_LABEL[s.t] + ' goals, ' + m.label + ': mean ' + m.fmt(s.mean))
+        .on('pointermove', function (ev) {
+          const [mx] = d3.pointer(ev, svg.node());
+          const near = s.vals.reduce((b, d) => Math.abs(x(d.v) - mx) < Math.abs(x(b.v) - mx) ? d : b, s.vals[0]);
+          if (near && Math.abs(x(near.v) - mx) < 6) {
+            Tip.open().title('Goal ' + (near.g.idx + 1) + ' · ' + TYPE_LABEL[s.t]).sub(trunc(near.g.goal, 110)).row(m.fmt(near.v), m.label, C.ink3, 'ring').note(goalDates(near.g));
+          } else {
+            Tip.open().title(TYPE_LABEL[s.t] + ' goals (n = ' + s.n + ')').row(m.fmt(s.mean), 'mean, ' + m.label, C.ink, 'dot')
+              .note('95% t-interval ' + m.fmt(Math.max(0, s.lo)) + ' to ' + m.fmt(s.hi) + '; each goal weighted equally');
+          }
+          Tip.show(ev.clientX, ev.clientY);
         })
-        .on('pointermove', ev => Tip.show(ev.clientX, ev.clientY))
-        .on('pointerleave blur', () => { bar.attr('fill-opacity', 1); Tip.hide(); });
+        .on('focus', function () { Tip.open().title(TYPE_LABEL[s.t] + ' goals (n = ' + s.n + ')').row(m.fmt(s.mean), 'mean, ' + m.label, C.ink, 'dot').note('95% t-interval ' + m.fmt(Math.max(0, s.lo)) + ' to ' + m.fmt(s.hi)); Tip.showAt(this); })
+        .on('pointerleave blur', () => Tip.hide());
     });
   });
+  const nRows = Math.ceil(TYPE_METRICS.length / cols);
+  const H = Math.ceil(legH + nRows * panH + (nRows - 1) * gapY + 2);
+  svg.attr('height', H).attr('viewBox', '0 0 ' + W + ' ' + H);
 }
 
-/* ---------- network ---------- */
-const NET_KEYS = ['all'].concat(goals.map(g => String(g.idx)));
-function setupNetworkControls() {
-  const sel = $('#goal-select');
-  const o = el('option', null, 'All goals, ' + fmtMonth(T0) + ' – ' + fmtMonth(parseT(D.meta.end)));
-  o.value = 'all'; sel.append(o);
-  goals.forEach(g => { const op = el('option', null, 'Goal ' + (g.idx + 1) + ' · ' + trunc(g.goal, 64) + ' (' + fmtMonth(g.s) + ')'); op.value = String(g.idx); sel.append(op); });
-  sel.value = state.goal;
-  const go = k => { state.goal = k; sel.value = k; renderNetwork(); };
-  sel.addEventListener('change', () => go(sel.value));
-  $('#goal-prev').addEventListener('click', () => { const i = NET_KEYS.indexOf(state.goal); if (i > 0) go(NET_KEYS[i - 1]); });
-  $('#goal-next').addEventListener('click', () => { const i = NET_KEYS.indexOf(state.goal); if (i < NET_KEYS.length - 1) go(NET_KEYS[i + 1]); });
-}
-function chip(parent, strong, rest) { const c = el('span', 'stat-chip'); c.append(el('b', null, strong), document.createTextNode(' ' + rest)); parent.append(c); }
-function updateNetStats(key, nNodes) {
-  const box = $('#net-stats');
-  box.replaceChildren();
-  const head = el('div', 'net-goal');
-  const chips = el('div', 'stat-chips');
-  let m;
-  if (key === 'all') {
-    m = D.overall;
-    head.textContent = 'All ' + goals.length + ' goals, week of ' + fmtDate(T0) + ' to week of ' + fmtDate(parseT(D.meta.end)) + '.';
-  } else {
-    const g = goals[+key];
-    m = g;
-    head.append(document.createTextNode('Goal ' + (g.idx + 1) + ' of ' + goals.length + ' · ' + TYPE_LABEL[g.type] + ' · ' + goalDates(g) + ' · '));
-    head.append(el('q', null, g.goal));
-  }
-  chip(chips, String(nNodes), 'agents');
-  chip(chips, int(m.msgs), 'messages');
-  chip(chips, pct0(m.mention_rate), 'name another agent');
-  chip(chips, pct0(m.reciprocity), 'of pairs two-way');
-  if (m.hub) chip(chips, m.hub, 'most mentioned, ' + pct0(m.hub_share) + ' of mentions');
-  box.append(head, chips);
-  const i = NET_KEYS.indexOf(key);
-  $('#goal-prev').disabled = i <= 0;
-  $('#goal-next').disabled = i >= NET_KEYS.length - 1;
-}
-function renderNetwork() {
-  const box = $('#net-chart');
-  const W = box.clientWidth; if (!W) return;
-  const narrow = W < 560;
-  const G = D.graphs[state.goal] || D.graphs.all;
-  const nodes = G.nodes.map(n => Object.assign({}, n)).sort((a, b) => GROUPS.indexOf(a.g) - GROUPS.indexOf(b.g) || b.msgs - a.msgs || (a.id < b.id ? -1 : 1));
-  const N = nodes.length;
-  updateNetStats(state.goal, N);
-  const H = Math.round(Math.max(narrow ? 360 : 400, Math.min(560, W * 0.58)));
-  const byId = new Map(nodes.map(n => [n.id, n]));
-  const sent = new Map(), recv = new Map(), pairMap = new Map();
-  for (const [s, t, w] of G.edges) {
-    if (!byId.has(s) || !byId.has(t) || s === t) continue;
-    sent.set(s, (sent.get(s) || 0) + w); recv.set(t, (recv.get(t) || 0) + w);
-    const a = s < t ? s : t, b = s < t ? t : s, k = a + '\u0000' + b;
-    let p = pairMap.get(k); if (!p) pairMap.set(k, p = { a, b, w: 0 });
-    p.w += w;
-  }
-  const pairs = [...pairMap.values()].sort((p, q) => q.w - p.w || (p.a + p.b < q.a + q.b ? -1 : 1));
-  const keep = new Set(pairs.slice(0, 3 * N));
-  for (const n of nodes) { const best = pairs.find(p => p.a === n.id || p.b === n.id); if (best) keep.add(best); }
-  const links = [...keep].map(p => ({ source: p.a, target: p.b, w: p.w, a: p.a, b: p.b }));
-  const maxW = d3.max(links, l => l.w) || 1;
-  const maxMsgs = d3.max(nodes, n => n.msgs) || 1;
-  const rL = d3.scaleSqrt().domain([0, maxMsgs]).range([0, N > 20 ? 16 : 22]);
-  nodes.forEach((n, i) => {
-    n.r = Math.max(4, rL(n.msgs));
-    const ang = 2 * Math.PI * i / N - Math.PI / 2;
-    n.x = 220 * Math.cos(ang); n.y = 220 * Math.sin(ang);
-  });
-  const sim = d3.forceSimulation(nodes)
-    .force('link', d3.forceLink(links).id(d => d.id).distance(l => 40 + 80 * (1 - Math.sqrt(l.w / maxW))).strength(l => 0.05 + 0.35 * l.w / maxW))
-    .force('charge', d3.forceManyBody().strength(N > 20 ? -300 : -420))
-    .force('collide', d3.forceCollide(d => d.r + 8))
-    .force('x', d3.forceX(0).strength(0.07)).force('y', d3.forceY(0).strength(0.07))
-    .stop();
-  for (let i = 0; i < 320; i++) sim.tick();
-  if (N > 12) {
-    // Compress distances from the centre (d -> dMax * (d / dMax)^0.6) so the busy core gets room and stragglers stay in frame.
-    const mx = d3.mean(nodes, n => n.x), my = d3.mean(nodes, n => n.y);
-    const dMax = d3.max(nodes, n => Math.hypot(n.x - mx, n.y - my)) || 1;
-    nodes.forEach(n => { const dx = n.x - mx, dy = n.y - my, d = Math.hypot(dx, dy); if (d > 0) { const k = dMax * Math.pow(d / dMax, 0.6) / d; n.x = mx + dx * k; n.y = my + dy * k; } });
-  }
-
-  const padX = narrow ? 34 : 76, padY = 30;
-  const [x0, x1] = d3.extent(nodes, n => n.x), [y0, y1] = d3.extent(nodes, n => n.y);
-  const s = Math.min(2.4, (W - 2 * padX) / Math.max(1, x1 - x0), (H - 2 * padY) / Math.max(1, y1 - y0));
-  const ox = W / 2 - s * (x0 + x1) / 2, oy = H / 2 - s * (y0 + y1) / 2;
-  const rf = Math.min(1.15, Math.max(0.55, s));
-  nodes.forEach(n => { n.px = ox + s * n.x; n.py = oy + s * n.y; n.pr = Math.max(4, n.r * rf); });
-
-  const svg = newSvg(box, W, H);
-  const wS = d3.scaleSqrt().domain([0, maxW]).range([0.6, 5]);
-  const edgeSel = svg.append('g').selectAll('line').data(links).join('line').attr('class', 'edge')
-    .attr('x1', l => l.source.px).attr('y1', l => l.source.py).attr('x2', l => l.target.px).attr('y2', l => l.target.py)
-    .attr('stroke', C.ink3).attr('stroke-opacity', l => 0.22 + 0.45 * l.w / maxW).attr('stroke-width', l => wS(l.w)).attr('stroke-linecap', 'round');
-  const nodeSel = svg.append('g').selectAll('g').data(nodes).join('g').attr('class', 'node')
-    .attr('transform', n => 'translate(' + n.px + ',' + n.py + ')')
-    .attr('tabindex', 0).attr('role', 'img')
-    .attr('aria-label', n => n.id + ', ' + n.g + ', ' + int(n.msgs) + ' messages');
-  nodeSel.append('circle').attr('class', 'dot').attr('r', n => n.pr)
-    .attr('fill', n => n.g === 'Human' ? C.surface : C.g[n.g])
-    .attr('stroke', n => n.g === 'Human' ? C.g.Human : C.surface).attr('stroke-width', 2);
-  nodeSel.append('circle').attr('r', n => Math.max(n.pr + 4, 12)).attr('fill', 'transparent');
-  const labelN = narrow ? 10 : 18;
-  const fsz = narrow ? 10.5 : 11.5, chw = fsz * 0.56;
-  const placed = [];
-  const hitsBox = b => placed.some(p => !(b.x1 < p.x0 || b.x0 > p.x1 || b.y1 < p.y0 || b.y0 > p.y1)) ||
-    nodes.some(m => m !== b.n && m.px + m.pr > b.x0 && m.px - m.pr < b.x1 && m.py + m.pr > b.y0 && m.py - m.pr < b.y1);
-  const byMsgs = nodes.slice().sort((a, b) => b.msgs - a.msgs);
-  const labeled = new Set();
-  byMsgs.forEach((n, rank) => {
-    const w = n.id.length * chw;
-    const cands = [
-      { x: n.px, y: n.py - n.pr - 5, anchor: 'middle', x0: n.px - w / 2, x1: n.px + w / 2 },
-      { x: n.px, y: n.py + n.pr + fsz + 2, anchor: 'middle', x0: n.px - w / 2, x1: n.px + w / 2 },
-      { x: n.px + n.pr + 4, y: n.py + 4, anchor: 'start', x0: n.px + n.pr + 4, x1: n.px + n.pr + 4 + w },
-      { x: n.px - n.pr - 4, y: n.py + 4, anchor: 'end', x0: n.px - n.pr - 4 - w, x1: n.px - n.pr - 4 }
-    ].map(c => Object.assign(c, { y0: c.y - fsz + 1, y1: c.y + 3, n }));
-    const inside = c => c.x0 >= 2 && c.x1 <= W - 2 && c.y0 >= 2 && c.y1 <= H - 2;
-    const ok = rank < labelN ? cands.find(c => inside(c) && !hitsBox(c)) : null;
-    n.lab = ok || cands.find(inside) || cands[0];
-    if (ok) { placed.push(ok); labeled.add(n.id); }
-  });
-  const labelSel = svg.append('g').selectAll('text').data(nodes).join('text').attr('class', 'lbl-ink halo nlabel')
-    .attr('x', n => n.lab.x).attr('y', n => n.lab.y)
-    .attr('text-anchor', n => n.lab.anchor).style('font-size', fsz + 'px').style('font-weight', 500)
-    .style('pointer-events', 'none')
-    .attr('opacity', n => labeled.has(n.id) ? 1 : 0).text(n => n.id);
-
-  const partners = id => pairs.filter(p => p.a === id || p.b === id).slice(0, 3).map(p => (p.a === id ? p.b : p.a) + ' (' + int(p.w) + ')');
-  function focusNode(n, ev, fromKey) {
-    const nb = new Set([n.id]);
-    links.forEach(l => { if (l.a === n.id) nb.add(l.b); if (l.b === n.id) nb.add(l.a); });
-    nodeSel.attr('opacity', d => nb.has(d.id) ? 1 : 0.15);
-    edgeSel.attr('opacity', l => (l.a === n.id || l.b === n.id) ? 1 : 0.06);
-    labelSel.attr('opacity', d => d === n || (nb.has(d.id) && labeled.has(d.id)) ? 1 : 0);
-    Tip.open().title(n.id).row(n.g, '', n.g === 'Human' ? C.g.Human : C.g[n.g], n.g === 'Human' ? 'ring' : 'dot')
-      .row(int(n.msgs), 'messages', C.ink2).row(int(sent.get(n.id) || 0), 'mentions of others', C.ink2).row(int(recv.get(n.id) || 0), 'mentions received', C.ink2);
-    const ps = partners(n.id);
-    if (ps.length) Tip.note('Top partners: ' + ps.join(', '));
-    if (fromKey) Tip.showAt(fromKey); else Tip.show(ev.clientX, ev.clientY);
-  }
-  function clear() {
-    nodeSel.attr('opacity', 1); edgeSel.attr('opacity', 1);
-    labelSel.attr('opacity', d => labeled.has(d.id) ? 1 : 0); Tip.hide();
-  }
-  nodeSel.on('pointerenter', (ev, n) => focusNode(n, ev)).on('pointermove', ev => Tip.show(ev.clientX, ev.clientY))
-    .on('pointerleave', clear).on('focus', function (ev, n) { focusNode(n, ev, this); }).on('blur', clear);
-
-  const present = GROUPS.filter(g => nodes.some(n => n.g === g));
-  legend($('#lg-network'), present.map(g => ({ label: g, kind: g === 'Human' ? 'ring' : 'dot', cssVar: GVAR[g] })));
-}
-
-/* ---------- cascade ---------- */
+/* ---------- Figure 3: cascade ---------- */
 function setupCascadeControls() {
   const set = k => {
     state.cascade = k;
     $('#cas-durable').setAttribute('aria-pressed', String(k === 'durable'));
     $('#cas-episodic').setAttribute('aria-pressed', String(k === 'episodic'));
-    renderCascade(); renderTermDetail(); buildCascadeTable();
+    renderCascade(); renderTermDetail(); renderCurves(); buildCascadeTables(); fillCopy();
   };
   $('#cas-durable').addEventListener('click', () => set('durable'));
   $('#cas-episodic').addEventListener('click', () => set('episodic'));
 }
-let cascadeSelect = null;
-function renderCascade() {
-  const box = $('#cascade-chart');
-  const W = box.clientWidth; if (!W) return;
+function selectTerm(term) {
+  state.term[state.cascade] = term;
+  renderCascade(); renderTermDetail(); renderCurves(); fillCopy();
+}
+function drawCascade(box, W, preset) {
+  if (!W) return;
+  const fs = sizes(box), screen = preset === 'screen';
   const narrow = W < 560;
   const terms = D.ideas[state.cascade];
-  const fs = narrow ? 11 : 12, cw = fs * 0.6;
-  const numW = 24, lw = narrow ? 122 : 228, mr = 12, rowH = narrow ? 22 : 24, top = 4;
-  const plotH = terms.length * rowH;
-  const H = top + plotH + 28;
+  const mono = C.mono, mfs = fs.tick;
+  const numW = textW('35', fs.tick) + 6;
+  const termW = Math.min(narrow ? 120 : 200, d3.max(terms, t => textW(t.term, mfs, 400, mono)) + 10);
+  const lw = numW + termW, mr = 10, rowH = preset === 'paper' ? 14 : (narrow ? 20 : 22);
+  const svg = newSvg(box, W, 10);
+  const legH = svgLegend(svg, narrow ? 0 : lw, 0, narrow ? W : W - lw - mr, [{ kind: 'diamond', label: 'first use (coinage)', color: C.ink },
+    { kind: 'dot', label: 'adopter present at coinage', color: C.ink }, { kind: 'dot', label: 'adopter who joined later', color: C.ink, hollow: true }], fs) + 2;
+  const top = legH + 2, plotH = terms.length * rowH;
   const x = d3.scaleUtc().domain([T0, T1]).range([lw + 8, W - mr]);
-  const svg = newSvg(box, W, H);
-  const ticks = timeTicks(x, narrow);
-  svg.append('g').selectAll('line').data(ticks).join('line').attr('x1', x).attr('x2', x).attr('y1', top).attr('y2', top + plotH)
-    .attr('stroke', C.grid).attr('shape-rendering', 'crispEdges');
-  bottomTimeAxis(svg, x, top + plotH + 2, narrow);
-  const selBand = svg.append('rect').attr('x', 0).attr('width', W).attr('height', rowH).attr('rx', 4).attr('fill', C.surface2);
-  const hovBand = svg.append('rect').attr('x', 0).attr('width', W).attr('height', rowH).attr('rx', 4).attr('fill', 'none')
-    .attr('stroke', C.axis).attr('visibility', 'hidden');
-  const maxChars = Math.floor((lw - numW - 12) / cw);
-  const pts = [];
+  const tk = timeTicks(x, narrow ? 64 : 78).ticks;
+  svg.append('g').selectAll('line').data(tk).join('line').attr('class', 'grid').attr('x1', d => x(d.t)).attr('x2', d => x(d.t)).attr('y1', top).attr('y2', top + plotH);
+  const selBand = svg.append('rect').attr('x', 0).attr('width', W).attr('height', rowH).attr('fill', C.wash);
+  const hovBand = svg.append('rect').attr('x', 0).attr('width', W).attr('height', rowH).attr('fill', 'none').attr('stroke', C.hair).attr('visibility', 'hidden');
   const rowY = i => top + i * rowH + rowH / 2;
+  const pts = [];
   const lines = svg.append('g'), lab = svg.append('g');
+  const r = preset === 'paper' ? 2.3 : 3.2;
   terms.forEach((t, i) => {
     const cy = rowY(i), t0 = parseT(t.t0);
     const last = d3.max(t.adopters, a => parseT(a.t)) || t0;
-    lines.append('line').attr('x1', x(t0)).attr('x2', x(last)).attr('y1', cy).attr('y2', cy).attr('stroke', C.axis).attr('stroke-width', 1);
-    lab.append('text').attr('class', 'tick').attr('x', numW - 4).attr('y', cy + 4).attr('text-anchor', 'end').text(t.adopters.length);
-    lab.append('text').attr('class', 'mono').attr('x', numW + 4).attr('y', cy + 4).style('font-size', fs + 'px').text(trunc(t.term, maxChars));
+    lines.append('line').attr('x1', x(t0)).attr('x2', x(last)).attr('y1', cy).attr('y2', cy).attr('stroke', C.hair).attr('stroke-width', 1);
+    lab.append('text').attr('class', 'tick').attr('x', numW - 4).attr('y', cy + mfs * 0.35).attr('text-anchor', 'end').text(t.adopters.length);
+    lab.append('text').attr('class', 'lbl').attr('x', numW + 2).attr('y', cy + mfs * 0.35).style('font-family', mono).style('font-size', mfs + 'px').text(fitText(t.term, mfs, termW - 8, mono));
     pts.push({ kind: 'coin', term: t, i, x: x(t0), y: cy });
     t.adopters.forEach(a => pts.push({ kind: 'adopt', term: t, i, a, d: parseT(a.t), x: x(parseT(a.t)), y: cy }));
   });
   const adopt = pts.filter(p => p.kind === 'adopt');
   svg.append('g').selectAll('circle').data(adopt.filter(p => p.a.nc)).join('circle')
-    .attr('cx', p => p.x).attr('cy', p => p.y).attr('r', 3.5).attr('fill', C.surface).attr('stroke', p => C.g[p.a.g]).attr('stroke-width', 2);
+    .attr('cx', p => p.x).attr('cy', p => p.y).attr('r', r * 0.92).attr('fill', C.paper).attr('stroke', C.ink).attr('stroke-width', preset === 'paper' ? 0.8 : 1.1);
   svg.append('g').selectAll('circle').data(adopt.filter(p => !p.a.nc)).join('circle')
-    .attr('cx', p => p.x).attr('cy', p => p.y).attr('r', 4).attr('fill', p => C.g[p.a.g]).attr('stroke', C.surface).attr('stroke-width', 1.5);
+    .attr('cx', p => p.x).attr('cy', p => p.y).attr('r', r).attr('fill', C.ink).attr('stroke', C.paper).attr('stroke-width', 0.8);
   svg.append('g').selectAll('path').data(pts.filter(p => p.kind === 'coin')).join('path')
-    .attr('d', p => diamond(p.x, p.y, 5.5)).attr('fill', C.ink).attr('stroke', C.surface).attr('stroke-width', 1.5);
-  const ring = svg.append('circle').attr('r', 7).attr('fill', 'none').attr('stroke', C.ink).attr('stroke-width', 1.5).attr('visibility', 'hidden');
-
-  const place = () => {
-    const i = Math.max(0, terms.findIndex(t => t.term === state.term[state.cascade]));
-    selBand.attr('y', top + i * rowH);
-  };
-  place();
-  const select = i => { state.term[state.cascade] = terms[i].term; place(); renderTermDetail(); };
-  cascadeSelect = select;
-
+    .attr('d', p => diamond(p.x, p.y, r * 1.6)).attr('fill', C.ink).attr('stroke', C.paper).attr('stroke-width', 0.8);
+  const axH = bottomTimeAxis(svg.append('g'), x, top + plotH + 2, fs, { minPx: narrow ? 64 : 78, padL: 8, padR: mr - 1 });
+  const H = Math.ceil(top + plotH + 2 + axH + 2);
+  svg.attr('height', H).attr('viewBox', '0 0 ' + W + ' ' + H);
+  const sel = Math.max(0, terms.findIndex(t => t.term === state.term[state.cascade]));
+  selBand.attr('y', top + sel * rowH);
+  if (!screen) { selBand.remove(); hovBand.remove(); return; }
+  const ring = svg.append('circle').attr('r', r + 3.5).attr('fill', 'none').attr('stroke', C.ink).attr('stroke-width', 1.2).attr('visibility', 'hidden');
   function rowTip(t) {
     const nc = t.adopters.filter(a => a.nc).length;
-    Tip.open().title(t.term, true).sub((t.og === 'Human' ? 'First used by a human, ' : 'Coined by ' + t.origin + ' (' + t.og + '), ') + fmtDate(parseT(t.t0)) + (t.room ? ' in #' + t.room : ''))
-      .row(String(t.adopters.length), 'adopters', C.ink2).row(String(nc), 'of them joined after it was coined', C.ink2).row(int(t.docs), 'messages', C.ink2);
+    Tip.open().title(t.term, true).sub((t.og === 'Human' ? 'First used by a human, ' : 'Coined by ' + t.origin + ' (' + t.og + '), ') + fmtDate(parseT(t.t0)) + ', ' + dayStr(parseT(t.t0)) + (t.room ? ', in #' + t.room : ''))
+      .row(String(t.adopters.length), 'adopters', C.ink, 'dot').row(String(nc), 'of them joined after it was coined', C.ink, 'ring').row(int(t.docs), 'messages', null);
   }
-  const keys = svg.append('g').selectAll('rect').data(terms).join('rect').attr('class', 'rowkey')
-    .attr('x', 1).attr('y', (t, i) => top + i * rowH + 1).attr('width', W - 2).attr('height', rowH - 2).attr('rx', 4)
-    .attr('fill', 'transparent').style('pointer-events', 'none').attr('tabindex', 0).attr('role', 'button')
-    .attr('aria-label', t => t.term + ', ' + t.adopters.length + ' adopters. Press Enter for details.')
-    .on('focus', function (ev, t) { rowTip(t); Tip.note('Press Enter for details'); Tip.showAt(this); })
+  svg.append('g').selectAll('rect').data(terms).join('rect').attr('class', 'hit')
+    .attr('x', 0).attr('y', (t, i) => top + i * rowH).attr('width', lw).attr('height', rowH)
+    .attr('tabindex', 0).attr('role', 'button')
+    .attr('aria-label', t => t.term + ', ' + t.adopters.length + ' adopters. Press Enter to select.')
+    .on('focus', function (ev, t) { rowTip(t); Tip.note('Press Enter to select'); Tip.showAt(this); })
     .on('blur', () => Tip.hide())
-    .on('keydown', function (ev, t) { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); select(terms.indexOf(t)); } });
+    .on('keydown', function (ev, t) { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); selectTerm(t.term); } });
   const delaunay = d3.Delaunay.from(pts, p => p.x, p => p.y);
-  const overlay = svg.append('rect').attr('x', 0).attr('y', top).attr('width', W).attr('height', plotH).attr('fill', 'transparent').style('cursor', 'pointer');
+  const overlay = svg.append('rect').attr('x', lw).attr('y', top).attr('width', W - lw).attr('height', plotH).attr('fill', 'transparent').style('cursor', 'pointer');
   function nearest(ev) {
     const [px, py] = d3.pointer(ev);
     const row = Math.min(terms.length - 1, Math.max(0, Math.floor((py - top) / rowH)));
     const p = pts[delaunay.find(px, py)];
-    const hit = p && Math.hypot(p.x - px, p.y - py) <= 14 ? p : null;
-    return { row, hit };
+    return { row, hit: p && Math.hypot(p.x - px, p.y - py) <= 12 ? p : null };
   }
-  overlay.on('pointermove', ev => {
+  function move(ev) {
     const { row, hit } = nearest(ev);
     const t = terms[row];
     hovBand.attr('y', top + row * rowH).attr('visibility', 'visible');
     if (hit) {
       ring.attr('cx', hit.x).attr('cy', hit.y).attr('visibility', 'visible');
-      if (hit.kind === 'coin') { rowTip(t); }
+      if (hit.kind === 'coin') rowTip(t);
       else {
         const a = hit.a, days = Math.round((hit.d - parseT(t.t0)) / DAY);
-        Tip.open().title(t.term, true).row(a.a, a.g, C.g[a.g], a.nc ? 'ring' : 'dot')
-          .row(fmtDate(hit.d), 'first use, ' + (days === 0 ? 'same day as coinage' : days + ' days after coinage'), C.ink2)
-          .row(int(a.n), 'messages using it', C.ink2)
+        Tip.open().title(t.term, true).row(a.a, a.g, C.ink, a.nc ? 'ring' : 'dot')
+          .row(fmtDate(hit.d) + ', ' + dayStr(hit.d), 'first use, ' + (days === 0 ? 'same day as coinage' : days + ' days after coinage'), null)
+          .row(int(a.n), 'messages using it', null)
           .note(a.nc ? 'Joined the village after the term was coined' : 'Present when the term was coined');
       }
     } else { ring.attr('visibility', 'hidden'); rowTip(t); }
     Tip.show(ev.clientX, ev.clientY);
-  }).on('pointerleave', () => { hovBand.attr('visibility', 'hidden'); ring.attr('visibility', 'hidden'); Tip.hide(); })
-    .on('click', ev => { const { row, hit } = nearest(ev); select(hit ? hit.i : row); });
-
-  legend($('#lg-cascade'), [
-    { label: 'First use (coinage)', kind: 'diamond', cssVar: '--ink' },
-    { sep: true },
-    ...GROUPS.filter(g => g !== 'Human').map(g => ({ label: g, kind: 'dot', cssVar: GVAR[g] })),
-    { sep: true },
-    { label: 'Filled: present at coinage', kind: 'dot', cssVar: '--ink-2' },
-    { label: 'Hollow: joined later', kind: 'ring', cssVar: '--ink-2' }
-  ]);
+  }
+  overlay.on('pointermove', move).on('pointerleave', () => { hovBand.attr('visibility', 'hidden'); ring.attr('visibility', 'hidden'); Tip.hide(); })
+    .on('click', ev => { const { row, hit } = nearest(ev); selectTerm(terms[hit ? hit.i : row].term); });
+  svg.append('rect').attr('x', 0).attr('y', top).attr('width', lw).attr('height', plotH).attr('fill', 'transparent').style('cursor', 'pointer')
+    .on('pointermove', ev => { const row = Math.min(terms.length - 1, Math.max(0, Math.floor((d3.pointer(ev)[1] - top) / rowH))); hovBand.attr('y', top + row * rowH).attr('visibility', 'visible'); rowTip(terms[row]); Tip.show(ev.clientX, ev.clientY); })
+    .on('pointerleave', () => { hovBand.attr('visibility', 'hidden'); Tip.hide(); })
+    .on('click', ev => { const row = Math.min(terms.length - 1, Math.max(0, Math.floor((d3.pointer(ev)[1] - top) / rowH))); selectTerm(terms[row].term); });
 }
+function renderCascade() { const b = $('#cascade-chart'); drawCascade(b, b.clientWidth, 'screen'); }
 
+/* term detail */
+function currentTerm() { const list = D.ideas[state.cascade]; return list.find(x => x.term === state.term[state.cascade]) || list[0]; }
 function renderTermDetail() {
-  const list = D.ideas[state.cascade];
-  const t = list.find(x => x.term === state.term[state.cascade]) || list[0];
+  const t = currentTerm();
   $('#td-term').textContent = t.term;
-  $('#td-kind').textContent = state.cascade === 'durable' ? 'Lasting vocabulary' : 'Short-lived burst';
+  $('#td-kind').textContent = state.cascade === 'durable' ? 'lasting vocabulary' : 'short-lived burst';
   const t0 = parseT(t.t0);
   $('#td-origin').textContent = (t.og === 'Human' ? 'First used by a human (' + t.origin + ')' : 'Coined by ' + t.origin + ' (' + t.og + ')') +
-    ' on ' + fmtDate(t0) + (t.room ? ' in #' + t.room : '') + '.';
+    ' on ' + fmtDate(t0) + ', ' + dayStr(t0) + (t.room ? ', in #' + t.room : '') + '.';
   const nc = t.adopters.filter(a => a.nc).length;
   const stats = [[String(t.adopters.length), 'agents adopted it'], [String(nc), 'of them joined after coinage'], [String(t.present), 'agents present at coinage'],
     [String(t.mem), 'agents have it in saved memory'], [int(t.docs), 'messages use it']];
@@ -1006,124 +753,249 @@ function renderTermDetail() {
   stats.forEach(([v, l]) => { const d = el('div'); d.append(el('dt', null, l), el('dd', null, v)); dl.append(d); });
   const chips = $('#td-adopters'); chips.replaceChildren();
   t.adopters.slice().sort((a, b) => a.t < b.t ? -1 : 1).forEach(a => {
-    const c = el('span', 'chip'); const k = el('i', a.nc ? 'nc' : null); k.style.setProperty('--k', 'var(' + GVAR[a.g] + ')');
-    c.append(k, document.createTextNode(a.a)); chips.append(c);
+    const c = el('span', 'chip'); const k = el('i', a.nc ? 'nc' : null);
+    c.title = a.g; c.append(k, document.createTextNode(a.a)); chips.append(c);
   });
   renderSpark(t);
 }
 function renderSpark(t) {
   const box = $('#td-spark');
   const W = box.clientWidth; if (!W) return;
-  const narrow = W < 560;
-  const H = 78, ml = 4, mr = 8, base = H - 22, topY = 12;
+  const fs = sizes(box), narrow = W < 560;
   const counts = new Map(t.weekly.map(([w, n]) => [w, n]));
   const rows = weeks.map(w => ({ t: w.t, tm: w.tm, v: counts.get(w.week) || 0 }));
-  const x = d3.scaleUtc().domain([T0, T1]).range([ml, W - mr]);
   const maxV = d3.max(rows, r => r.v) || 1;
+  const ml = 8 + textW(int(maxV), fs.tick) + 6, mr = 8, base = 62, topY = 8;
+  const x = d3.scaleUtc().domain([T0, T1]).range([ml, W - mr]);
   const y = d3.scaleLinear().domain([0, maxV]).range([base, topY]);
-  const svg = newSvg(box, W, H);
-  svg.append('line').attr('x1', ml).attr('x2', W - mr).attr('y1', base).attr('y2', base).attr('stroke', C.axis);
-  svg.append('path').datum(rows).attr('fill', C.ink2).attr('fill-opacity', 0.1).attr('d', d3.area().x(r => x(r.tm)).y0(base).y1(r => y(r.v)));
-  svg.append('path').datum(rows).attr('fill', 'none').attr('stroke', C.ink2).attr('stroke-width', 2).attr('stroke-linejoin', 'round').attr('d', d3.line().x(r => x(r.tm)).y(r => y(r.v)));
+  const svg = newSvg(box, W, 10);
+  leftAxis(svg.append('g'), y, ml, [0, maxV], v => int(v), fs);
+  svg.append('path').datum(rows).attr('fill', C.ink).attr('fill-opacity', 0.08).attr('d', d3.area().x(r => x(r.tm)).y0(base).y1(r => y(r.v)));
+  svg.append('path').datum(rows).attr('fill', 'none').attr('stroke', C.ink).attr('stroke-width', 1.2).attr('stroke-linejoin', 'round').attr('d', d3.line().x(r => x(r.tm)).y(r => y(r.v)));
   const t0 = parseT(t.t0);
-  svg.append('path').attr('d', diamond(x(t0), base, 5)).attr('fill', C.ink).attr('stroke', C.surface).attr('stroke-width', 1.5);
+  svg.append('path').attr('d', diamond(x(t0), base, 4.5)).attr('fill', C.ink).attr('stroke', C.paper).attr('stroke-width', 1);
   const pk = rows[d3.maxIndex(rows, r => r.v)];
-  svg.append('circle').attr('cx', x(pk.tm)).attr('cy', y(pk.v)).attr('r', 4).attr('fill', C.ink2).attr('stroke', C.surface).attr('stroke-width', 2);
-  const right = x(pk.tm) > W - 150;
-  svg.append('text').attr('class', 'val').attr('x', x(pk.tm) + (right ? -8 : 8)).attr('y', y(pk.v) + 4).attr('text-anchor', right ? 'end' : 'start')
-    .text('peak ' + int(pk.v) + ', week of ' + fmtDate(pk.t));
-  bottomTimeAxis(svg, x, base, true);
-  const cross = svg.append('line').attr('y1', topY - 4).attr('y2', base).attr('stroke', C.ink3).attr('visibility', 'hidden');
+  const right = x(pk.tm) > W - 210;
+  svg.append('text').attr('class', 'val').attr('x', x(pk.tm) + (right ? -7 : 7)).attr('y', y(pk.v) + fs.tick * 0.35).attr('text-anchor', right ? 'end' : 'start')
+    .text('peak ' + int(pk.v) + ', ' + weekLabel(pk.t).replace('Week of ', 'week of '));
+  const axH = bottomTimeAxis(svg.append('g'), x, base + 1, fs, { minPx: narrow ? 64 : 78, title: false, padL: ml - 2, padR: mr - 1 });
+  const H = base + 1 + axH + 2;
+  svg.attr('height', H).attr('viewBox', '0 0 ' + W + ' ' + H);
+  const cross = svg.append('line').attr('y1', topY).attr('y2', base).attr('stroke', C.ink2).attr('stroke-width', 0.8).attr('visibility', 'hidden');
   const bis = d3.bisector(r => r.tm).center;
   svg.append('rect').attr('x', ml).attr('y', 0).attr('width', W - ml - mr).attr('height', base).attr('fill', 'transparent')
     .on('pointermove', ev => {
       const r = rows[bis(rows, x.invert(d3.pointer(ev)[0]))];
       cross.attr('x1', x(r.tm)).attr('x2', x(r.tm)).attr('visibility', 'visible');
-      Tip.open().title('Week of ' + fmtDate(r.t)).row(int(r.v), 'messages using ' + t.term, C.ink2).show(ev.clientX, ev.clientY);
+      Tip.open().title(weekLabel(r.t)).row(int(r.v), 'messages using ' + t.term, C.ink).show(ev.clientX, ev.clientY);
     })
     .on('pointerleave', () => { cross.attr('visibility', 'hidden'); Tip.hide(); });
 }
 
-/* ---------- by quarter ---------- */
+/* ---------- Figure 4 (NEW): adoption curves ---------- */
+function curveData() {
+  return D.ideas[state.cascade].map(t => {
+    const t0 = parseT(t.t0);
+    const ds = t.adopters.map(a => (parseT(a.t) - t0) / DAY).map(d => Math.max(0, d)).sort((a, b) => a - b);
+    const pts = [{ d: 0, n: 0 }];
+    ds.forEach((d, i) => pts.push({ d, n: i + 1 }));
+    return { t, pts, ds, half: ds.length ? ds[Math.floor(ds.length / 2)] : null };
+  });
+}
+function drawCurves(box, W, preset) {
+  if (!W) return;
+  const fs = sizes(box), screen = preset === 'screen', narrow = W < 560;
+  const cd = curveData();
+  const selTerm = state.term[state.cascade];
+  const maxD = d3.max(cd, c => d3.max(c.ds) || 0) || 1, maxN = d3.max(cd, c => c.ds.length) || 1;
+  const ml = 10 + textW(String(maxN), fs.tick) + fs.fig + 10, mr = 12 + Math.min(150, textW(selTerm, fs.tick, 700, C.mono) + 8);
+  const svg = newSvg(box, W, 10);
+  const legH = svgLegend(svg, ml, 0, W - ml - mr, [{ kind: 'line', label: 'one term', color: '#b3b3b3', width: 1 }, { kind: 'line', label: 'selected term', color: C.ink, width: 2 }], fs) + 4;
+  const ph = preset === 'paper' ? 170 : (narrow ? 210 : 260);
+  const top = legH;
+  const x = d3.scaleLinear().domain([0, maxD]).nice().range([ml, W - mr]);
+  const y = d3.scaleLinear().domain([0, maxN]).nice(4).range([top + ph, top + 2]);
+  leftAxis(svg.append('g'), y, ml, y.ticks(4), v => String(v), fs);
+  svg.append('text').attr('class', 'axis-title').attr('transform', 'translate(' + (fs.fig) + ',' + (top + ph / 2) + ') rotate(-90)').attr('text-anchor', 'middle').text('Adopters (cumulative)');
+  const yAx = top + ph;
+  svg.append('line').attr('class', 'axis-line').attr('x1', ml).attr('x2', W - mr).attr('y1', yAx + 0.5).attr('y2', yAx + 0.5);
+  const xt = x.ticks(narrow ? 4 : 7);
+  svg.selectAll(null).data(xt).join('line').attr('class', 'tick-line').attr('x1', x).attr('x2', x).attr('y1', yAx).attr('y2', yAx + 3.5);
+  svg.selectAll(null).data(xt).join('text').attr('class', 'tick').attr('x', x).attr('y', yAx + 4 + fs.tick).attr('text-anchor', 'middle').text(v => String(v));
+  svg.append('text').attr('class', 'axis-title').attr('x', (ml + W - mr) / 2).attr('y', yAx + 10 + fs.tick + fs.fig).attr('text-anchor', 'middle').text('Days since coinage');
+  const line = d3.line().curve(d3.curveStepAfter).x(p => x(p.d)).y(p => y(p.n));
+  const others = cd.filter(c => c.t.term !== selTerm), sel = cd.find(c => c.t.term === selTerm) || cd[0];
+  const paths = svg.append('g').selectAll('path').data(others).join('path').attr('d', c => line(c.pts.concat([{ d: Math.min(maxD, (DATA_END - parseT(c.t.t0)) / DAY), n: c.ds.length }])))
+    .attr('fill', 'none').attr('stroke', '#b3b3b3').attr('stroke-width', preset === 'paper' ? 0.6 : 0.9);
+  svg.append('path').attr('d', line(sel.pts.concat([{ d: Math.min(maxD, (DATA_END - parseT(sel.t.t0)) / DAY), n: sel.ds.length }])))
+    .attr('fill', 'none').attr('stroke', C.ink).attr('stroke-width', preset === 'paper' ? 1.4 : 2);
+  const endD = Math.min(maxD, (DATA_END - parseT(sel.t.t0)) / DAY);
+  svg.append('text').attr('class', 'val').attr('x', x(endD) + 5).attr('y', y(sel.ds.length) + fs.tick * 0.35).style('font-family', C.mono).style('font-weight', 700)
+    .text(fitText(sel.t.term, fs.tick, mr - 14, C.mono));
+  if (sel.half != null) {
+    const hy = y(Math.ceil(sel.ds.length / 2));
+    svg.append('circle').attr('cx', x(sel.half)).attr('cy', hy).attr('r', 3).attr('fill', C.paper).attr('stroke', C.ink).attr('stroke-width', 1.2);
+    const right = x(sel.half) > (ml + W - mr) / 2;
+    svg.append('text').attr('class', 'ann halo').attr('x', x(sel.half) + (right ? -7 : 7)).attr('y', hy - 6).attr('text-anchor', right ? 'end' : 'start').text('half of adopters by day ' + Math.round(sel.half));
+  }
+  const H = Math.ceil(yAx + 12 + fs.tick + fs.fig + 4);
+  svg.attr('height', H).attr('viewBox', '0 0 ' + W + ' ' + H);
+  if (!screen) return;
+  const hl = svg.append('path').attr('fill', 'none').attr('stroke', C.ink2).attr('stroke-width', 1.4).attr('visibility', 'hidden');
+  const overlay = svg.append('rect').attr('x', ml).attr('y', top).attr('width', W - ml - mr).attr('height', ph).attr('fill', 'transparent').style('cursor', 'pointer');
+  function nearestCurve(ev) {
+    const [mx, my] = d3.pointer(ev);
+    const d = x.invert(mx);
+    let best = null, bd = Infinity;
+    cd.forEach(c => {
+      const end = Math.min(maxD, (DATA_END - parseT(c.t.t0)) / DAY);
+      if (d > end + 2) return;
+      let n = 0; for (const v of c.ds) { if (v <= d) n++; else break; }
+      const dist = Math.abs(y(n) - my);
+      if (dist < bd) { bd = dist; best = { c, n, d }; }
+    });
+    return bd <= 12 ? best : null;
+  }
+  overlay.on('pointermove', ev => {
+    const b = nearestCurve(ev);
+    if (!b) { hl.attr('visibility', 'hidden'); Tip.hide(); return; }
+    hl.attr('d', line(b.c.pts.concat([{ d: Math.min(maxD, (DATA_END - parseT(b.c.t.t0)) / DAY), n: b.c.ds.length }]))).attr('visibility', 'visible');
+    Tip.open().title(b.c.t.term, true).row(String(b.n), 'adopters by day ' + Math.round(b.d) + ' after coinage', C.ink).row(String(b.c.ds.length), 'adopters in all', null)
+      .note('Coined ' + fmtDate(parseT(b.c.t.t0)) + ', ' + dayStr(parseT(b.c.t.t0)) + '. Click to select.');
+    Tip.show(ev.clientX, ev.clientY);
+  }).on('pointerleave', () => { hl.attr('visibility', 'hidden'); Tip.hide(); })
+    .on('click', ev => { const b = nearestCurve(ev); if (b) selectTerm(b.c.t.term); });
+}
+function renderCurves() { const b = $('#curves-chart'); drawCurves(b, b.clientWidth, 'screen'); }
+
+/* ---------- Figure 5: by quarter ---------- */
 function quarterPanels() {
   const sp = D.ideas.speed, aq = D.ideas.adoptionByQuarter;
   return [
-    { label: 'Agents present at coinage (mean)', fmt: f1, rows: sp.map(s => ({ q: s.quarter, v: s.mean_present, note: int(s.terms) + ' terms coined' })) },
-    { label: 'New terms picked up by another present agent within 14 days', fmt: pct0, rows: sp.map(s => ({ q: s.quarter, v: s.share_any, note: int(s.terms) + ' terms coined' })) },
-    { label: 'Mean share of present agents adopting within 14 days', fmt: pct0, rows: sp.map(s => ({ q: s.quarter, v: s.mean_reach, note: int(s.terms) + ' terms coined' })) },
-    { label: 'Adoptions by agents who joined after coinage', fmt: pct0, rows: aq.map(a => ({ q: a.quarter, v: a.adoptions ? a.newcomer / a.adoptions : null, note: int(a.newcomer) + ' of ' + int(a.adoptions) + ' adoptions' })) }
+    { label: 'Agents present at coinage (mean)', fmt: f1, tick: v => String(v), rows: sp.map(s => ({ q: s.quarter, v: s.mean_present, note: int(s.terms) + ' terms coined' })) },
+    { label: 'Terms picked up by another present agent within 14 days', fmt: pct0, tick: pct0, prop: true,
+      rows: sp.map(s => ({ q: s.quarter, v: s.share_any, ci: wilson(Math.round(s.share_any * s.terms), s.terms), note: int(s.terms) + ' terms coined' })) },
+    { label: 'Share of present agents adopting within 14 days (mean)', fmt: pct0, tick: pct0, rows: sp.map(s => ({ q: s.quarter, v: s.mean_reach, note: int(s.terms) + ' terms coined' })) },
+    { label: 'Adoptions by agents who joined after coinage', fmt: pct0, tick: pct0, prop: true,
+      rows: aq.map(a => ({ q: a.quarter, v: a.adoptions ? a.newcomer / a.adoptions : null, ci: wilson(a.newcomer, a.adoptions), note: int(a.newcomer) + ' of ' + int(a.adoptions) + ' adoptions' })) }
   ];
 }
-function renderQuarters() {
-  const grid = $('#quarters-chart');
-  grid.replaceChildren();
-  quarterPanels().forEach(p => {
-    const cell = el('div', 'mini'), box = el('div', 'chart');
-    cell.append(el('div', 'mini-title', p.label), box);
-    grid.append(cell);
-    const W = box.clientWidth; if (!W) return;
-    const H = 150, ml = 2, mr = 2, base = H - 34;
-    const n = p.rows.length, band = (W - ml - mr) / n, bw = Math.min(24, band * 0.62);
-    const y = d3.scaleLinear().domain([0, (d3.max(p.rows, r => r.v) || 1) * 1.16]).range([base, 6]);
-    const svg = newSvg(box, W, H);
-    svg.append('line').attr('x1', ml).attr('x2', W - mr).attr('y1', base).attr('y2', base).attr('stroke', C.axis);
+function wrapText(s, px, maxW) {
+  const words = s.split(' '), out = []; let cur = '';
+  words.forEach(w => { const nx = cur ? cur + ' ' + w : w; if (textW(nx, px, 700) > maxW && cur) { out.push(cur); cur = w; } else cur = nx; });
+  if (cur) out.push(cur);
+  return out;
+}
+function drawQuarters(box, W, preset) {
+  if (!W) return;
+  const fs = sizes(box), screen = preset === 'screen';
+  const P = quarterPanels();
+  const cols = W >= 820 ? 4 : 2, gapX = 26, ml = 8 + textW('100%', fs.tick) + 6;
+  const panW = (W - gapX * (cols - 1)) / cols;
+  const titles = P.map(p => wrapText(p.label, fs.fig, panW - 4));
+  const titleH = d3.max(titles, t => t.length) * (fs.fig + 3) + 6;
+  const ph = preset === 'paper' ? 92 : 120, axH = fs.tick * 2 + 12, gapY = 16;
+  const panH = titleH + ph + axH;
+  const svg = newSvg(box, W, 10);
+  const legH = svgLegend(svg, 0, 0, W, [{ kind: 'dot', label: 'quarter value', color: C.ink }, { kind: 'dot', label: 'partial quarter', color: C.ink, hollow: true },
+    { kind: 'line', label: 'Wilson 95% interval (proportions)', color: C.ink, width: 1 }], fs) + 4;
+  P.forEach((p, pi) => {
+    const r = Math.floor(pi / cols), c = pi % cols;
+    const px = c * (panW + gapX), py = legH + r * (panH + gapY);
+    const g = svg.append('g');
+    titles[pi].forEach((ln, k) => g.append('text').attr('class', 'panel-title').attr('x', px).attr('y', py + fs.fig + k * (fs.fig + 3)).text(ln));
+    const maxV = d3.max(p.rows, rr => Math.max(rr.v || 0, rr.ci ? rr.ci[1] || 0 : 0)) || 1;
+    const y = d3.scaleLinear().domain([0, maxV * 1.08]).nice(3).range([py + titleH + ph, py + titleH + 4]);
+    const x0 = px + ml, x1 = px + panW - 8;
+    const band = (x1 - x0) / p.rows.length;
+    const xq = i => x0 + band * (i + 0.5);
+    leftAxis(g, y, x0, y.ticks(3), p.tick, fs);
+    const yAx = py + titleH + ph;
+    g.append('line').attr('class', 'axis-line').attr('x1', x0).attr('x2', x1).attr('y1', yAx + 0.5).attr('y2', yAx + 0.5);
     let prevYear = null;
-    p.rows.forEach((r, i) => {
-      const cx = ml + band * (i + 0.5);
-      const partial = r.q === lastQ && lastQPartial;
-      const [yr, qq] = r.q.split('-');
-      const bar = svg.append('path').attr('d', vbar(cx - bw / 2, base, bw, base - y(r.v || 0))).attr('fill', C.ink2).attr('fill-opacity', partial ? 0.45 : 1);
-      svg.append('text').attr('class', 'val').attr('x', cx).attr('y', y(r.v || 0) - 6).attr('text-anchor', 'middle').style('font-size', band < 34 ? '10.5px' : '12px').text(p.fmt(r.v));
-      svg.append('text').attr('class', 'tick').attr('x', cx).attr('y', base + 15).attr('text-anchor', 'middle').text(qq + (partial ? '*' : ''));
-      if (yr !== prevYear) svg.append('text').attr('class', 'tick').attr('x', cx).attr('y', base + 28).attr('text-anchor', 'middle').text(yr);
+    p.rows.forEach((rr, i) => {
+      const [yr, qq] = rr.q.split('-');
+      const partial = rr.q === lastQ && lastQPartial;
+      g.append('text').attr('class', 'tick').attr('x', xq(i)).attr('y', yAx + 4 + fs.tick).attr('text-anchor', 'middle').text(qq + (partial ? '*' : ''));
+      if (yr !== prevYear) g.append('text').attr('class', 'tick').attr('x', xq(i)).attr('y', yAx + 6 + fs.tick * 2).attr('text-anchor', 'middle').text(yr);
       prevYear = yr;
-      svg.append('rect').attr('class', 'hit').attr('x', ml + band * i).attr('y', 0).attr('width', band).attr('height', H).attr('fill', 'transparent')
-        .attr('tabindex', 0).attr('role', 'img').attr('aria-label', fq(r.q) + ': ' + p.fmt(r.v))
+    });
+    const ok = p.rows.map((rr, i) => ({ rr, i })).filter(d => d.rr.v != null);
+    const full = ok.filter(d => !(d.rr.q === lastQ && lastQPartial)), part = ok.filter(d => d.rr.q === lastQ && lastQPartial);
+    g.append('path').datum(full).attr('fill', 'none').attr('stroke', C.ink).attr('stroke-width', 1).attr('d', d3.line().x(d => xq(d.i)).y(d => y(d.rr.v)));
+    if (part.length && full.length) g.append('line').attr('x1', xq(full[full.length - 1].i)).attr('y1', y(full[full.length - 1].rr.v)).attr('x2', xq(part[0].i)).attr('y2', y(part[0].rr.v))
+      .attr('stroke', C.ink).attr('stroke-width', 1).attr('stroke-dasharray', '3 2');
+    ok.forEach(({ rr, i }) => {
+      const partial = rr.q === lastQ && lastQPartial;
+      if (rr.ci && rr.ci[0] != null) g.append('line').attr('x1', xq(i)).attr('x2', xq(i)).attr('y1', y(rr.ci[0])).attr('y2', y(rr.ci[1])).attr('stroke', C.ink).attr('stroke-width', 1);
+      g.append('circle').attr('cx', xq(i)).attr('cy', y(rr.v)).attr('r', preset === 'paper' ? 2.4 : 3.2).attr('fill', partial ? C.paper : C.ink).attr('stroke', C.ink).attr('stroke-width', 1.1);
+    });
+    [ok[0], ok[ok.length - 1]].forEach((d, k) => {
+      if (!d) return;
+      g.append('text').attr('class', 'val halo').attr('x', xq(d.i) + (k ? 4 : -4)).attr('y', y(d.rr.ci && d.rr.ci[1] != null ? d.rr.ci[1] : d.rr.v) - 6)
+        .attr('text-anchor', k ? 'end' : 'start').text(p.fmt(d.rr.v));
+    });
+    if (screen) p.rows.forEach((rr, i) => {
+      const partial = rr.q === lastQ && lastQPartial;
+      g.append('rect').attr('class', 'hit').attr('x', x0 + band * i).attr('y', py + titleH).attr('width', band).attr('height', ph)
+        .attr('tabindex', 0).attr('role', 'img').attr('aria-label', fq(rr.q) + ': ' + p.fmt(rr.v))
         .on('pointerenter focus', function (ev) {
-          bar.attr('fill-opacity', partial ? 0.3 : 0.75);
-          Tip.open().title(fq(r.q) + (partial ? ' (partial)' : '')).row(p.fmt(r.v), p.label, C.ink2).note(r.note);
+          Tip.open().title(fq(rr.q) + (partial ? ' (partial)' : '')).row(p.fmt(rr.v), p.label, C.ink, partial ? 'ring' : 'dot');
+          if (rr.ci && rr.ci[0] != null) Tip.note('Wilson 95% interval ' + pct0(rr.ci[0]) + ' to ' + pct0(rr.ci[1]));
+          Tip.note(rr.note);
           if (ev.type === 'focus') Tip.showAt(this); else Tip.show(ev.clientX, ev.clientY);
         })
         .on('pointermove', ev => Tip.show(ev.clientX, ev.clientY))
-        .on('pointerleave blur', () => { bar.attr('fill-opacity', partial ? 0.45 : 1); Tip.hide(); });
+        .on('pointerleave blur', () => Tip.hide());
     });
   });
+  const nRows = Math.ceil(P.length / cols);
+  const H = Math.ceil(legH + nRows * panH + (nRows - 1) * gapY);
+  svg.attr('height', H).attr('viewBox', '0 0 ' + W + ' ' + H);
 }
 
-/* ---------- originators ---------- */
-function renderOriginators() {
-  const box = $('#orig-chart');
-  const W = box.clientWidth; if (!W) return;
-  const narrow = W < 560;
+/* ---------- Figure 6: originators ---------- */
+function drawOriginators(box, W, preset) {
+  if (!W) return;
+  const fs = sizes(box), screen = preset === 'screen', narrow = W < 560;
   const rows = D.ideas.influence;
-  const lw = narrow ? 118 : 156, mr = 54, rowH = 28, bh = 16, top = 2;
-  const H = top + rows.length * rowH + 4;
-  const x = d3.scaleLinear().domain([0, d3.max(rows, r => r.adoptions) || 1]).range([lw, W - mr]);
-  const svg = newSvg(box, W, H);
-  const ticks = x.ticks(narrow ? 3 : 5).filter(t => t > 0);
-  svg.append('g').selectAll('line').data(ticks).join('line').attr('x1', x).attr('x2', x).attr('y1', 0).attr('y2', H - 4).attr('stroke', C.grid).attr('shape-rendering', 'crispEdges');
-  svg.append('line').attr('x1', lw).attr('x2', lw).attr('y1', 0).attr('y2', H - 4).attr('stroke', C.axis);
+  const lab = r => r.agent + ' (' + (r.g === 'Other labs' ? r.family : r.g) + ')';
+  const lw = Math.min(narrow ? 170 : 260, d3.max(rows, r => textW(lab(r), fs.fig)) + 12);
+  const mr = textW('2,625', fs.tick, 700) + 10;
+  const rowH = preset === 'paper' ? 15 : 22, bh = preset === 'paper' ? 8 : 12, top = 2;
+  const plotH = rows.length * rowH;
+  const x = d3.scaleLinear().domain([0, d3.max(rows, r => r.adoptions) || 1]).nice(5).range([lw, W - mr]);
+  const svg = newSvg(box, W, 10);
+  const yAx = top + plotH + 2;
+  svg.append('line').attr('class', 'axis-line').attr('x1', lw - 0.5).attr('x2', lw - 0.5).attr('y1', top).attr('y2', yAx);
+  svg.append('line').attr('class', 'axis-line').attr('x1', lw).attr('x2', W - mr).attr('y1', yAx + 0.5).attr('y2', yAx + 0.5);
+  const xt = x.ticks(narrow ? 3 : 5);
+  svg.selectAll(null).data(xt).join('line').attr('class', 'tick-line').attr('x1', x).attr('x2', x).attr('y1', yAx).attr('y2', yAx + 3.5);
+  svg.selectAll(null).data(xt).join('text').attr('class', 'tick').attr('x', x).attr('y', yAx + 4 + fs.tick).attr('text-anchor', 'middle').text(v => int(v));
+  svg.append('text').attr('class', 'axis-title').attr('x', (lw + W - mr) / 2).attr('y', yAx + 10 + fs.tick + fs.fig).attr('text-anchor', 'middle').text('Adoptions of the agent’s coined terms by other agents');
   rows.forEach((r, i) => {
     const yy = top + i * rowH + (rowH - bh) / 2;
-    svg.append('text').attr('class', 'lbl-ink').attr('x', lw - 8).attr('y', yy + bh / 2 + 4).attr('text-anchor', 'end').text(trunc(r.agent, narrow ? 17 : 24));
-    const bar = svg.append('path').attr('d', hbar(lw, yy, x(r.adoptions) - lw, bh)).attr('fill', C.g[r.g]);
-    svg.append('text').attr('class', 'val').attr('x', x(r.adoptions) + 6).attr('y', yy + bh / 2 + 4).text(int(r.adoptions));
-    svg.append('rect').attr('class', 'hit').attr('x', 0).attr('y', top + i * rowH).attr('width', W).attr('height', rowH).attr('fill', 'transparent')
+    const t = svg.append('text').attr('class', 'lbl').attr('x', lw - 7).attr('y', yy + bh / 2 + fs.fig * 0.35).attr('text-anchor', 'end');
+    t.append('tspan').text(r.agent);
+    t.append('tspan').attr('fill', C.ink3).text(' (' + (r.g === 'Other labs' ? r.family : r.g) + ')');
+    const bar = svg.append('path').attr('d', hbar(lw, yy, x(r.adoptions) - lw, bh)).attr('fill', C.ink2);
+    svg.append('text').attr('class', 'val').attr('x', x(r.adoptions) + 5).attr('y', yy + bh / 2 + fs.tick * 0.35).text(int(r.adoptions));
+    if (screen) svg.append('rect').attr('class', 'hit').attr('x', 0).attr('y', top + i * rowH).attr('width', W).attr('height', rowH)
       .attr('tabindex', 0).attr('role', 'img').attr('aria-label', r.agent + ', ' + r.g + ': ' + int(r.adoptions) + ' adoptions of ' + r.coined + ' coined terms')
       .on('pointerenter focus', function (ev) {
-        bar.attr('fill-opacity', 0.75);
-        Tip.open().title(r.agent).row(r.g, '', C.g[r.g], 'dot').row(int(r.adoptions), 'adoptions by other agents', C.ink2)
-          .row(int(r.coined), 'adopted terms coined', C.ink2).note((r.adoptions / r.coined).toFixed(1) + ' adopters per term');
+        bar.attr('fill', C.ink);
+        Tip.open().title(r.agent).sub(r.g === 'Other labs' ? r.family : r.g).row(int(r.adoptions), 'adoptions by other agents', C.ink2)
+          .row(int(r.coined), 'adopted terms coined', null).note((r.adoptions / r.coined).toFixed(1) + ' adopters per term');
         if (ev.type === 'focus') Tip.showAt(this); else Tip.show(ev.clientX, ev.clientY);
       })
       .on('pointermove', ev => Tip.show(ev.clientX, ev.clientY))
-      .on('pointerleave blur', () => { bar.attr('fill-opacity', 1); Tip.hide(); });
+      .on('pointerleave blur', () => { bar.attr('fill', C.ink2); Tip.hide(); });
   });
-  const present = GROUPS.filter(g => rows.some(r => r.g === g));
-  legend($('#lg-orig'), present.map(g => ({ label: g, kind: 'rect', cssVar: GVAR[g] })));
+  const H = Math.ceil(yAx + 12 + fs.tick + fs.fig + 2);
+  svg.attr('height', H).attr('viewBox', '0 0 ' + W + ' ' + H);
 }
 
-/* ---------- flow matrix ---------- */
+/* ---------- Figure 7: own-lab share vs baseline ---------- */
 function flowData() {
   const F = D.ideas.flow;
   const cols = GROUPS.filter(g => F.some(f => f.to === g));
@@ -1133,103 +1005,141 @@ function flowData() {
   rows.forEach(r => { r.vals = cols.map(c => cnt(r.g, c)); r.tot = d3.sum(r.vals); r.shares = r.vals.map(v => r.tot ? v / r.tot : 0); });
   return { cols, rows };
 }
-function renderFlow() {
-  const box = $('#flow-chart');
-  const W = box.clientWidth; if (!W) return;
-  const narrow = W < 560;
+function homeData() {
   const { cols, rows } = flowData();
-  const lw = narrow ? 92 : 132, nw = narrow ? 0 : 110, headH = 28, cellH = narrow ? 36 : 40, gap = 2, sepGap = 10;
-  const cw = (W - lw - nw) / cols.length;
-  const rowTop = i => headH + i * cellH + (i > 0 ? sepGap : 0);
-  const H = rowTop(rows.length - 1) + cellH + 2;
-  const maxShare = d3.max(rows, r => d3.max(r.shares)) || 1;
-  const interp = d3.interpolateRgb(C.seqLo, C.seqHi);
-  const svg = newSvg(box, W, H);
-  cols.forEach((c, j) => {
-    const cx = lw + cw * (j + 0.5);
-    const label = narrow && c === 'Other labs' ? 'Other' : c;
-    const tw = label.length * 6.4;
-    svg.append('circle').attr('cx', cx - tw / 2 - 8).attr('cy', 13).attr('r', 4).attr('fill', C.g[c]);
-    svg.append('text').attr('class', 'lbl').attr('x', cx + 2).attr('y', 17).attr('text-anchor', 'middle').text(label);
+  const all = rows[0];
+  return LABS.filter(l => cols.includes(l) && rows.some(r => r.g === l)).map(l => {
+    const r = rows.find(x => x.g === l), j = cols.indexOf(l);
+    return { lab: l, own: r.shares[j], base: all.shares[j], ownN: r.vals[j], tot: r.tot, ci: wilson(r.vals[j], r.tot) };
   });
-  if (nw) svg.append('text').attr('class', 'tick').attr('x', W - 4).attr('y', 17).attr('text-anchor', 'end').text('adoptions');
-  rows.forEach((r, i) => {
-    const yy = rowTop(i);
-    if (r.g) {
-      if (r.g === 'Human') svg.append('circle').attr('cx', 6).attr('cy', yy + cellH / 2).attr('r', 3.5).attr('fill', C.surface).attr('stroke', C.g.Human).attr('stroke-width', 2);
-      else svg.append('circle').attr('cx', 6).attr('cy', yy + cellH / 2).attr('r', 4).attr('fill', C.g[r.g]);
+}
+function drawFlow(box, W, preset) {
+  if (!W) return;
+  const fs = sizes(box), screen = preset === 'screen', narrow = W < 560;
+  const H0 = homeData();
+  const lw = d3.max(H0, d => textW(d.lab + ' (' + int(d.tot) + ')', fs.fig)) + 14;
+  const mr = textW('+0.0 pp', fs.tick, 700) + 14;
+  const rowH = preset === 'paper' ? 20 : 30;
+  const svg = newSvg(box, W, 10);
+  const legH = svgLegend(svg, narrow ? 0 : lw, 0, narrow ? W : W - lw - mr, [{ kind: 'dot', label: 'share of the lab’s terms adopted by its own agents', color: C.ink },
+    { kind: 'line', label: 'Wilson 95% interval', color: C.ink, width: 1.2 },
+    { kind: 'dot', label: 'the lab’s share of all adoptions (baseline)', color: C.ink, hollow: true }], fs) + 6;
+  const top = legH, plotH = H0.length * rowH;
+  const maxV = d3.max(H0, d => Math.max(d.own, d.base, d.ci[1] || 0)) || 1;
+  const x = d3.scaleLinear().domain([0, Math.min(1, maxV * 1.1)]).nice(5).range([lw, W - mr]);
+  const yAx = top + plotH + 2;
+  svg.append('line').attr('class', 'axis-line').attr('x1', lw).attr('x2', W - mr).attr('y1', yAx + 0.5).attr('y2', yAx + 0.5);
+  const xt = x.ticks(narrow ? 4 : 6);
+  svg.selectAll(null).data(xt).join('line').attr('class', 'grid').attr('x1', x).attr('x2', x).attr('y1', top).attr('y2', yAx);
+  svg.selectAll(null).data(xt).join('line').attr('class', 'tick-line').attr('x1', x).attr('x2', x).attr('y1', yAx).attr('y2', yAx + 3.5);
+  svg.selectAll(null).data(xt).join('text').attr('class', 'tick').attr('x', x).attr('y', yAx + 4 + fs.tick).attr('text-anchor', 'middle').text(pct0);
+  svg.append('text').attr('class', 'axis-title').attr('x', (lw + W - mr) / 2).attr('y', yAx + 10 + fs.tick + fs.fig).attr('text-anchor', 'middle').text('Share of adoptions');
+  H0.forEach((d, i) => {
+    const cy = top + i * rowH + rowH / 2, col = C.lab[d.lab], s = LAB_SYM[d.lab];
+    const t = svg.append('text').attr('class', 'lbl').attr('x', lw - 8).attr('y', cy + fs.fig * 0.35).attr('text-anchor', 'end');
+    t.append('tspan').text(d.lab); t.append('tspan').attr('fill', C.ink3).text(' (' + int(d.tot) + ')');
+    const r = preset === 'paper' ? 3.6 : 4.6;
+    if (d.ci[0] != null) {
+      svg.append('line').attr('x1', x(d.ci[0])).attr('x2', x(d.ci[1])).attr('y1', cy).attr('y2', cy).attr('stroke', C.ink).attr('stroke-width', 1.2);
+      [d.ci[0], d.ci[1]].forEach(v => svg.append('line').attr('x1', x(v)).attr('x2', x(v)).attr('y1', cy - r * 0.9).attr('y2', cy + r * 0.9).attr('stroke', C.ink).attr('stroke-width', 1.2));
     }
-    svg.append('text').attr('class', r.g ? 'lbl-ink' : 'lbl').attr('x', r.g ? 16 : 0).attr('y', yy + cellH / 2 + 4)
-      .style('font-weight', r.g ? 400 : 600).text(narrow && r.label === 'Other labs' ? 'Other' : (narrow && !r.g ? 'All' : r.label));
-    if (nw) svg.append('text').attr('class', 'tick').attr('x', W - 4).attr('y', yy + cellH / 2 + 4).attr('text-anchor', 'end').text(int(r.tot));
-    r.shares.forEach((sh, j) => {
-      const fill = interp(sh / maxShare);
-      const xx = lw + cw * j;
-      const cell = svg.append('rect').attr('x', xx + gap / 2).attr('y', yy + gap / 2).attr('width', cw - gap).attr('height', cellH - gap).attr('rx', 3).attr('fill', fill);
-      const L = luminance(fill);
-      svg.append('text').attr('x', xx + cw / 2).attr('y', yy + cellH / 2 + 4).attr('text-anchor', 'middle')
-        .style('font-size', '12.5px').style('font-weight', 600).style('font-variant-numeric', 'tabular-nums').style('pointer-events', 'none')
-        .attr('fill', L < 0.179 ? C.onDark : C.onLight).text(pct0(sh));
-      svg.append('rect').attr('class', 'hit').attr('x', xx).attr('y', yy).attr('width', cw).attr('height', cellH).attr('fill', 'transparent')
-        .attr('tabindex', 0).attr('role', 'img').attr('aria-label', r.label + ' terms adopted by ' + cols[j] + ' agents: ' + pct0(sh))
-        .on('pointerenter focus', function (ev) {
-          cell.attr('stroke', C.ink).attr('stroke-width', 1.5);
-          Tip.open().title((r.g ? 'Terms coined by ' + (r.g === 'Human' ? 'humans' : r.g + ' agents') : 'Terms from all origins'))
-            .row(pct0(sh), 'of adoptions by ' + cols[j] + ' agents', C.g[cols[j]], 'dot').note(int(r.vals[j]) + ' of ' + int(r.tot) + ' adoptions');
-          if (ev.type === 'focus') Tip.showAt(this); else Tip.show(ev.clientX, ev.clientY);
-        })
-        .on('pointermove', ev => Tip.show(ev.clientX, ev.clientY))
-        .on('pointerleave blur', () => { cell.attr('stroke', null); Tip.hide(); });
-    });
-  });
-}
-
-/* ---------- dumbbell ---------- */
-function dumbTerms() {
-  return D.ideas.durable.concat(D.ideas.episodic).slice().sort((a, b) => b.adopters.length - a.adopters.length || b.mem - a.mem).slice(0, 18);
-}
-function renderDumbbell() {
-  const box = $('#dumb-chart');
-  const W = box.clientWidth; if (!W) return;
-  const narrow = W < 560;
-  const terms = dumbTerms();
-  const fs = narrow ? 11 : 12, lw = narrow ? 112 : 170, mr = 20, rowH = 24, top = 4;
-  const plotH = terms.length * rowH, H = top + plotH + 30;
-  const lo = Math.max(0, Math.floor((d3.min(terms, t => Math.min(t.mem, t.adopters.length)) - 2) / 5) * 5);
-  const x = d3.scaleLinear().domain([lo, d3.max(terms, t => Math.max(t.mem, t.adopters.length)) || 1]).nice().range([lw + 14, W - mr]);
-  const svg = newSvg(box, W, H);
-  const ticks = x.ticks(narrow ? 4 : 8);
-  svg.append('g').selectAll('line').data(ticks).join('line').attr('x1', x).attr('x2', x).attr('y1', top).attr('y2', top + plotH).attr('stroke', C.grid).attr('shape-rendering', 'crispEdges');
-  svg.append('g').selectAll('text').data(ticks).join('text').attr('class', 'tick').attr('x', x).attr('y', top + plotH + 16).attr('text-anchor', 'middle').text(t => t);
-  svg.append('text').attr('class', 'tick').attr('x', W - mr).attr('y', top + plotH + 28).attr('text-anchor', 'end').text('agents');
-  const maxChars = Math.floor((lw - 8) / (fs * 0.6));
-  terms.forEach((t, i) => {
-    const cy = top + i * rowH + rowH / 2, a = t.adopters.length;
-    const g = svg.append('g');
-    g.append('text').attr('class', 'mono').attr('x', 0).attr('y', cy + 4).style('font-size', fs + 'px').text(trunc(t.term, maxChars));
-    g.append('line').attr('x1', x(Math.min(a, t.mem))).attr('x2', x(Math.max(a, t.mem))).attr('y1', cy).attr('y2', cy).attr('stroke', C.axis).attr('stroke-width', 2);
-    g.append('circle').attr('cx', x(a)).attr('cy', cy).attr('r', 4).attr('fill', C.ink2).attr('stroke', C.surface).attr('stroke-width', 2);
-    g.append('circle').attr('cx', x(t.mem)).attr('cy', cy).attr('r', 3.5).attr('fill', C.surface).attr('stroke', C.ink2).attr('stroke-width', 2);
-    g.append('rect').attr('class', 'hit').attr('x', 0).attr('y', cy - rowH / 2).attr('width', W).attr('height', rowH).attr('fill', 'transparent')
-      .attr('tabindex', 0).attr('role', 'img').attr('aria-label', t.term + ': ' + a + ' adopted in chat, ' + t.mem + ' have it in memory')
+    svg.append('path').attr('transform', 'translate(' + x(d.base) + ',' + cy + ')').attr('d', symArea(s, r)).attr('fill', C.paper).attr('stroke', col).attr('stroke-width', 1.4);
+    svg.append('path').attr('transform', 'translate(' + x(d.own) + ',' + cy + ')').attr('d', symArea(s, r)).attr('fill', col).attr('stroke', C.paper).attr('stroke-width', 0.8);
+    const diff = (d.own - d.base) * 100;
+    svg.append('text').attr('class', 'val').attr('x', W - mr + 8).attr('y', cy + fs.tick * 0.35).style('font-weight', 700).text((diff >= 0 ? '+' : '−') + Math.abs(diff).toFixed(1) + ' pp');
+    if (screen) svg.append('rect').attr('class', 'hit').attr('x', 0).attr('y', cy - rowH / 2).attr('width', W).attr('height', rowH)
+      .attr('tabindex', 0).attr('role', 'img').attr('aria-label', d.lab + ': own-lab share ' + pct1(d.own) + ', baseline ' + pct1(d.base))
       .on('pointerenter focus', function (ev) {
-        Tip.open().title(t.term, true).row(String(a), 'agents adopted it in chat', C.ink2, 'dot').row(String(t.mem), 'agents have it in saved memory', C.ink2, 'ring')
-          .note('Coined by ' + t.origin + ' (' + t.og + '), ' + fmtDate(parseT(t.t0)));
+        Tip.open().title('Terms coined by ' + d.lab + ' agents').row(pct1(d.own), 'of their adoptions by ' + d.lab + ' agents', col, 'dot')
+          .row(pct1(d.base), d.lab + ' agents’ share of all adoptions', col, 'ring')
+          .note(int(d.ownN) + ' of ' + int(d.tot) + ' adoptions; Wilson 95% interval ' + pct1(d.ci[0]) + ' to ' + pct1(d.ci[1]));
         if (ev.type === 'focus') Tip.showAt(this); else Tip.show(ev.clientX, ev.clientY);
       })
       .on('pointermove', ev => Tip.show(ev.clientX, ev.clientY))
       .on('pointerleave blur', () => Tip.hide());
   });
+  const H = Math.ceil(yAx + 12 + fs.tick + fs.fig + 2);
+  svg.attr('height', H).attr('viewBox', '0 0 ' + W + ' ' + H);
 }
 
-/* ---------- static pieces: legends, tables, copy ---------- */
-function buildCascadeTable() {
+/* ---------- Figure 9: dumbbell ---------- */
+function dumbTerms() {
+  return D.ideas.durable.concat(D.ideas.episodic).slice().sort((a, b) => b.adopters.length - a.adopters.length || b.mem - a.mem).slice(0, 18);
+}
+function drawDumbbell(box, W, preset) {
+  if (!W) return;
+  const fs = sizes(box), screen = preset === 'screen', narrow = W < 560;
+  const terms = dumbTerms();
+  const lw = Math.min(narrow ? 130 : 190, d3.max(terms, t => textW(t.term, fs.tick, 400, C.mono)) + 14), mr = 14, rowH = preset === 'paper' ? 14 : 22;
+  const svg = newSvg(box, W, 10);
+  const legH = svgLegend(svg, narrow ? 0 : lw, 0, narrow ? W : W - lw - mr, [{ kind: 'dot', label: 'adopted in chat (used in 2+ messages)', color: C.ink },
+    { kind: 'dot', label: 'has the term in saved memory', color: C.ink, hollow: true }], fs) + 4;
+  const top = legH, plotH = terms.length * rowH;
+  const lo = Math.max(0, Math.floor((d3.min(terms, t => Math.min(t.mem, t.adopters.length)) - 2) / 5) * 5);
+  const x = d3.scaleLinear().domain([lo, d3.max(terms, t => Math.max(t.mem, t.adopters.length)) || 1]).nice().range([lw + 8, W - mr]);
+  const yAx = top + plotH + 2;
+  const ticks = x.ticks(narrow ? 4 : 8);
+  svg.selectAll(null).data(ticks).join('line').attr('class', 'grid').attr('x1', x).attr('x2', x).attr('y1', top).attr('y2', yAx);
+  svg.append('line').attr('class', 'axis-line').attr('x1', lw + 8).attr('x2', W - mr).attr('y1', yAx + 0.5).attr('y2', yAx + 0.5);
+  svg.selectAll(null).data(ticks).join('line').attr('class', 'tick-line').attr('x1', x).attr('x2', x).attr('y1', yAx).attr('y2', yAx + 3.5);
+  svg.selectAll(null).data(ticks).join('text').attr('class', 'tick').attr('x', x).attr('y', yAx + 4 + fs.tick).attr('text-anchor', 'middle').text(t => t);
+  svg.append('text').attr('class', 'axis-title').attr('x', (lw + 8 + W - mr) / 2).attr('y', yAx + 10 + fs.tick + fs.fig).attr('text-anchor', 'middle').text('Agents (axis starts at ' + lo + ')');
+  const r = preset === 'paper' ? 2.6 : 3.4;
+  terms.forEach((t, i) => {
+    const cy = top + i * rowH + rowH / 2, a = t.adopters.length;
+    svg.append('text').attr('class', 'lbl').attr('x', 0).attr('y', cy + fs.tick * 0.35).style('font-family', C.mono).style('font-size', fs.tick + 'px').text(fitText(t.term, fs.tick, lw - 12, C.mono));
+    svg.append('line').attr('x1', x(Math.min(a, t.mem))).attr('x2', x(Math.max(a, t.mem))).attr('y1', cy).attr('y2', cy).attr('stroke', C.ink3).attr('stroke-width', 1);
+    svg.append('circle').attr('cx', x(a)).attr('cy', cy).attr('r', r).attr('fill', C.ink).attr('stroke', C.paper).attr('stroke-width', 0.8);
+    svg.append('circle').attr('cx', x(t.mem)).attr('cy', cy).attr('r', r * 0.95).attr('fill', C.paper).attr('stroke', C.ink).attr('stroke-width', 1.2);
+    if (screen) svg.append('rect').attr('class', 'hit').attr('x', 0).attr('y', cy - rowH / 2).attr('width', W).attr('height', rowH)
+      .attr('tabindex', 0).attr('role', 'img').attr('aria-label', t.term + ': ' + a + ' adopted in chat, ' + t.mem + ' have it in memory')
+      .on('pointerenter focus', function (ev) {
+        Tip.open().title(t.term, true).row(String(a), 'agents adopted it in chat', C.ink, 'dot').row(String(t.mem), 'agents have it in saved memory', C.ink, 'ring')
+          .note('Coined by ' + t.origin + ' (' + t.og + '), ' + fmtDate(parseT(t.t0)) + ', ' + dayStr(parseT(t.t0)));
+        if (ev.type === 'focus') Tip.showAt(this); else Tip.show(ev.clientX, ev.clientY);
+      })
+      .on('pointermove', ev => Tip.show(ev.clientX, ev.clientY))
+      .on('pointerleave blur', () => Tip.hide());
+  });
+  const H = Math.ceil(yAx + 12 + fs.tick + fs.fig + 2);
+  svg.attr('height', H).attr('viewBox', '0 0 ' + W + ' ' + H);
+}
+
+/* ---------- figure registry: on-screen render + export ---------- */
+const FIGS = [
+  { id: 'fig-weekly', box: '#weekly-chart', draw: drawWeekly, name: 'idea-flow-fig1-weekly' },
+  { id: 'fig-types', box: '#types-chart', draw: drawTypes, name: 'idea-flow-fig2-goal-types' },
+  { id: 'fig-cascade', box: '#cascade-chart', draw: drawCascade, name: () => 'idea-flow-fig3-cascade-' + state.cascade },
+  { id: 'fig-curves', box: '#curves-chart', draw: drawCurves, name: () => 'idea-flow-fig4-adoption-curves-' + state.cascade },
+  { id: 'fig-quarters', box: '#quarters-chart', draw: drawQuarters, name: 'idea-flow-fig5-quarters' },
+  { id: 'fig-orig', box: '#orig-chart', draw: drawOriginators, name: 'idea-flow-fig6-originators' },
+  { id: 'fig-flow', box: '#flow-chart', draw: drawFlow, name: 'idea-flow-fig7-own-lab' },
+  { id: 'fig-mem', box: '#mem-chart', draw: drawMemory, name: 'idea-flow-fig8-memory' },
+  { id: 'fig-dumb', box: '#dumb-chart', draw: drawDumbbell, name: 'idea-flow-fig9-memory-vs-chat' }
+];
+function captionText(id) { const c = document.querySelector('#' + id + ' figcaption'); return c ? c.textContent.replace(/\s+/g, ' ').trim() : ''; }
+function setupExports() {
+  FIGS.forEach(f => {
+    const fig = document.getElementById(f.id);
+    PK.exportMenu(fig.querySelector('.exp'), {
+      draw: (host, W) => { f.draw(host, W, 'paper'); },
+      name: typeof f.name === 'function' ? f.name : () => f.name,
+      caption: () => captionText(f.id),
+      status: fig.querySelector('.status')
+    });
+  });
+}
+
+/* ---------- tables ---------- */
+function buildCascadeTables() {
   const rows = D.ideas[state.cascade];
-  makeTable($('#tbl-cascade'), [
+  const setName = state.cascade === 'durable' ? 'lasting vocabulary' : 'short-lived bursts';
+  makeTable($('#tbl-cascade'), 'Table 3: Terms in Figure 3 (' + setName + ').', [
     { label: 'Term', get: t => t.term, cls: 'code' },
     { label: 'Coined by', get: t => t.origin },
     { label: 'Lab', get: t => t.og },
     { label: 'First use', get: t => fmtDate(parseT(t.t0)) },
+    { label: 'Village day', get: t => dayOf(parseT(t.t0)), num: true },
     { label: 'Room', get: t => t.room ? '#' + t.room : '–' },
     { label: 'Present', get: t => t.present, num: true },
     { label: 'Adopters', get: t => t.adopters.length, num: true },
@@ -1237,22 +1147,21 @@ function buildCascadeTable() {
     { label: 'In memory', get: t => t.mem, num: true },
     { label: 'Messages', get: t => int(t.docs), num: true }
   ], rows);
+  const cd = curveData();
+  const within = (c, d) => c.ds.filter(v => v <= d).length;
+  makeTable($('#tbl-curves'), 'Table 4: Adopters within 7, 30 and 90 days of coinage, and the day by which half had adopted (Figure 4, ' + setName + ').', [
+    { label: 'Term', get: c => c.t.term, cls: 'code' },
+    { label: '≤ 7 days', get: c => within(c, 7), num: true },
+    { label: '≤ 30 days', get: c => within(c, 30), num: true },
+    { label: '≤ 90 days', get: c => within(c, 90), num: true },
+    { label: 'All', get: c => c.ds.length, num: true },
+    { label: 'Half by day', get: c => c.half == null ? '–' : Math.round(c.half), num: true }
+  ], cd);
 }
 function buildStatic() {
-  legend($('#lg-ribbon'), [
-    { label: 'Collaborative', kind: 'rect', cssVar: '--t-collab' },
-    { label: 'Competitive', kind: 'rect', cssVar: '--t-comp' },
-    { label: 'Individual', kind: 'rect', cssVar: '--t-indiv' },
-    { label: 'Free choice', kind: 'hrect' },
-    { sep: true },
-    { label: 'Weekly value', kind: 'line', cssVar: '--ink-2' }
-  ]);
-  legend($('#lg-dumb'), [
-    { label: 'Adopted in chat (used in 2+ messages)', kind: 'dot', cssVar: '--ink-2' },
-    { label: 'Has the term in saved memory', kind: 'ring', cssVar: '--ink-2' }
-  ]);
-  makeTable($('#tbl-weekly'), [
+  makeTable($('#tbl-weekly'), 'Table 1: Weekly values behind Figure 1.', [
     { label: 'Week of', get: r => fmtDate(r.t) },
+    { label: 'Days', get: r => dayOf(r.t) + '–' + dayOf(new Date(+r.t + 6 * DAY)) },
     { label: 'Goal', get: r => { const g = goalAt(r.tm); return (g.idx + 1) + ' · ' + TYPE_LABEL[g.type]; } },
     { label: 'Agent msgs', get: r => int(r.msgs), num: true },
     { label: 'Human msgs', get: r => int(r.human_msgs), num: true },
@@ -1262,66 +1171,50 @@ function buildStatic() {
     { label: 'Its share', get: r => pct1(r.hub_share), num: true },
     { label: 'Two-way pairs', get: r => pct1(r.reciprocity), num: true }
   ], weeks);
-  makeTable($('#tbl-types'), [
-    { label: 'Goal type', get: r => TYPE_LABEL[r.type] },
-    { label: 'Goals', get: r => r.goals, num: true }
-  ].concat(TYPE_METRICS.map(m => ({ label: m.label, get: r => m.fmt(r[m.k]), num: true }))),
-    TYPES.map(t => D.typeSummary.find(s => s.type === t)).filter(Boolean));
-  makeTable($('#tbl-network'), [
-    { label: '#', get: g => g.idx + 1, num: true },
-    { label: 'Goal', get: g => g.goal, cls: 'wrap' },
-    { label: 'Type', get: g => TYPE_LABEL[g.type] },
-    { label: 'Start', get: g => fmtDate(g.s) },
-    { label: 'End', get: g => g.open ? 'ongoing' : fmtDate(g.e) },
-    { label: 'Messages', get: g => int(g.msgs), num: true },
-    { label: 'Agents', get: g => g.agents, num: true },
-    { label: 'Name another', get: g => pct1(g.mention_rate), num: true },
-    { label: 'Two-way pairs', get: g => pct1(g.reciprocity), num: true },
-    { label: 'Most mentioned', get: g => g.hub || '–' },
-    { label: 'Its share', get: g => pct1(g.hub_share), num: true },
-    { label: '“We” share', get: g => pct1(g.we_share), num: true },
-    { label: 'Requests /100', get: g => f1(g.requests), num: true },
-    { label: 'Division /100', get: g => f1(g.division_of_labour), num: true },
-    { label: 'Competition /100', get: g => f1(g.competition), num: true }
-  ], goals);
-  buildCascadeTable();
+  const typeRows = TYPES.map(t => ({ t }));
+  const st = Object.fromEntries(TYPE_METRICS.map(m => [m.k, Object.fromEntries(typeStats(m).map(s => [s.t, s]))]));
+  makeTable($('#tbl-types'), 'Table 2: Mean over goals of each type with 95% t-interval (Figure 2).', [
+    { label: 'Goal type', get: r => TYPE_LABEL[r.t] },
+    { label: 'Goals', get: r => goals.filter(g => g.type === r.t).length, num: true }
+  ].concat(TYPE_METRICS.map(m => ({ label: m.label, num: true, get: r => { const s = st[m.k][r.t]; return m.fmt(s.mean) + ' [' + m.fmt(Math.max(0, s.lo)) + ', ' + m.fmt(s.hi) + ']'; } }))), typeRows);
+  buildCascadeTables();
   const sp = D.ideas.speed, aq = D.ideas.adoptionByQuarter;
-  makeTable($('#tbl-quarters'), [
+  makeTable($('#tbl-quarters'), 'Table 5: Spread by quarter (Figure 5).', [
     { label: 'Quarter', get: s => fq(s.quarter) + (s.quarter === lastQ && lastQPartial ? ' (partial)' : '') },
     { label: 'Terms coined', get: s => int(s.terms), num: true },
     { label: 'Agents present', get: s => f1(s.mean_present), num: true },
-    { label: 'Picked up within 14 days', get: s => pct1(s.share_any), num: true },
+    { label: 'Picked up within 14 days', get: s => { const ci = wilson(Math.round(s.share_any * s.terms), s.terms); return pct1(s.share_any) + ' [' + pct1(ci[0]) + ', ' + pct1(ci[1]) + ']'; }, num: true },
     { label: 'Mean 14-day reach', get: s => pct1(s.mean_reach), num: true },
     { label: 'Adoptions', get: s => { const a = aq.find(q => q.quarter === s.quarter); return a ? int(a.adoptions) : '–'; }, num: true },
-    { label: 'By later joiners', get: s => { const a = aq.find(q => q.quarter === s.quarter); return a ? pct1(a.newcomer / a.adoptions) : '–'; }, num: true }
+    { label: 'By later joiners', get: s => { const a = aq.find(q => q.quarter === s.quarter); if (!a) return '–'; const ci = wilson(a.newcomer, a.adoptions); return pct1(a.newcomer / a.adoptions) + ' [' + pct1(ci[0]) + ', ' + pct1(ci[1]) + ']'; }, num: true }
   ], sp);
-  makeTable($('#tbl-orig'), [
+  makeTable($('#tbl-orig'), 'Table 6: Top originators (Figure 6).', [
     { label: 'Agent', get: r => r.agent },
-    { label: 'Lab', get: r => r.g },
+    { label: 'Lab', get: r => r.g === 'Other labs' ? r.family : r.g },
     { label: 'Adopted terms coined', get: r => int(r.coined), num: true },
     { label: 'Adoptions', get: r => int(r.adoptions), num: true }
   ], D.ideas.influence);
   const fd = flowData();
-  makeTable($('#tbl-flow'), [{ label: 'Coined by', get: r => r.label }]
+  makeTable($('#tbl-flow'), 'Table 7: Who adopted each lab’s terms: share of adoptions by adopter lab (count), rows sum to 100%.', [{ label: 'Coined by', get: r => r.label }]
     .concat(fd.cols.map((c, j) => ({ label: 'Adopted by ' + c, get: r => pct1(r.shares[j]) + ' (' + int(r.vals[j]) + ')', num: true })))
     .concat([{ label: 'Adoptions', get: r => int(r.tot), num: true }]), fd.rows);
-  makeTable($('#tbl-mem'), [
+  makeTable($('#tbl-mem'), 'Table 8: Weekly memory measures behind Figure 8.', [
     { label: 'Week of', get: r => fmtDate(r.t) },
+    { label: 'Days', get: r => dayOf(r.t) + '–' + dayOf(new Date(+r.t + 6 * DAY)) },
     { label: 'Agent-days', get: r => r.agent_days, num: true },
     { label: 'Agents named', get: r => f1(r.named), num: true },
     { label: 'Share of present named', get: r => pct1(r.named_share), num: true },
     { label: 'Verbatim shared', get: r => pct1(r.shared), num: true },
     { label: 'Median chars', get: r => int(Math.round(r.median_chars)), num: true }
   ], memWeeks);
-  makeTable($('#tbl-dumb'), [
+  makeTable($('#tbl-dumb'), 'Table 9: Chat adoption and memory presence of the 18 most-adopted terms (Figure 9).', [
     { label: 'Term', get: t => t.term, cls: 'code' },
     { label: 'Coined by', get: t => t.origin },
     { label: 'Adopted in chat', get: t => t.adopters.length, num: true },
     { label: 'In saved memory', get: t => t.mem, num: true }
   ], dumbTerms());
   const hl = $('#human-line');
-  D.ideas.humanTop.slice(0, 8).forEach(h => { const c = el('code', 'chip-code', h.term); c.append(el('small', null, String(h.adopters))); hl.append(c); });
-  hl.append(el('span', 'note', '(adopters)'));
+  D.ideas.humanTop.slice(0, 8).forEach(h => { const c = el('code', null, h.term); const sp2 = el('span'); sp2.append(c, el('small', null, String(h.adopters))); hl.append(sp2); });
 }
 
 function fillCopy() {
@@ -1332,12 +1225,15 @@ function fillCopy() {
   const sp = D.ideas.speed, s0 = sp[0], sl = sp[sp.length - 1];
   const M = memWeeks;
   const roll = M.map((w, i) => i < 3 ? NaN : d3.mean(M.slice(i - 3, i + 1), r => r.shared));
-  const pk = d3.maxIndex(roll);
+  const pk = Math.max(0, d3.maxIndex(roll));  // -1 when fewer than four weeks of memory
   const all = D.ideas.durable.concat(D.ideas.episodic);
   const c = D.ideas.counts, P = D.meta.params;
+  const cd = curveData(), sel = currentTerm();
+  const halfMed = d3.median(cd.filter(x => x.half != null), x => x.half);
+  const d1 = Math.max(1, dayOf(DATA_START)), d2 = dayOf(DATA_END);
   const K = {
-    eyebrow: 'AI Village dataset · ' + D.meta.agents + ' agents · ' + D.meta.goals + ' goals · ' + fmtMonth(T0) + ' – ' + fmtMonth(parseT(D.meta.end)),
-    range: fmtMonth(T0) + ' – ' + fmtMonth(parseT(D.meta.end)),
+    eyebrow: 'AI Village dataset · ' + D.meta.agents + ' agents · ' + D.meta.goals + ' goals · Days ' + d1 + '–' + d2 + ' (' + fmtMonth(DATA_START) + ' – ' + fmtMonth(DATA_END) + ')',
+    range: 'Day ' + d1 + ' (' + fmtDate(DATA_START) + ') to Day ' + d2 + ' (' + fmtDate(DATA_END) + ')',
     agentMsgs: int(D.meta.agent_msgs), mentionRate: pct0(D.meta.mention_rate),
     hubFirst: pct0(g0.hub_share), hubFirstName: g0.hub, hubLast: pct0(gl.hub_share), hubLastName: gl.hub, hubMax: pct0(gmax.hub_share),
     newcomerShare: pct0(D.ideas.newcomerShare), newcomerN: int(c.newcomer_adoptions), adoptN: int(c.adoptions),
@@ -1355,9 +1251,15 @@ function fillCopy() {
     agentDays: int(d3.sum(M, w => w.agent_days)),
     namedFirst: String(Math.round(d3.mean(M.slice(0, 4), w => w.named))), namedShareFirst: pct0(d3.mean(M.slice(0, 4), w => w.named_share)),
     namedLast: String(Math.round(d3.mean(M.slice(-8), w => w.named))), namedShareLast: pct0(d3.mean(M.slice(-8), w => w.named_share)),
-    sharedFirst: pct1(d3.mean(M.slice(0, 8), w => w.shared)), sharedPeak: pct1(roll[pk]), sharedPeakWhen: fmtMonth(M[pk].t),
+    sharedFirst: pct1(d3.mean(M.slice(0, 8), w => w.shared)), sharedPeak: isNaN(roll[pk]) ? '–' : pct1(roll[pk]), sharedPeakWhen: fmtMonth(M[pk].t),
     sharedLast: pct1(d3.mean(M.slice(-8), w => w.shared)),
     memMore: all.filter(t => t.mem > t.adopters.length).length + ' of ' + all.length,
+    weeksN: String(weeks.length),
+    casSet: state.cascade === 'durable' ? 'lasting vocabulary' : 'short-lived bursts',
+    curvesN: String(cd.length), curvesSel: sel.term, curvesHalf: String(Math.round(halfMed)),
+    flowLead: (() => { const h = homeData(), mx = d3.max(h, d => d.own - d.base), mn = d3.min(h, d => d.own - d.base), lo = h.find(d => d.own - d.base === mn);
+      return 'Terms cross lab lines freely: no lab’s agents adopt its terms much more than their usual share (largest excess ' + (mx * 100).toFixed(1) + ' pp' + (mn < -0.02 ? '; ' + lo.lab + ' agents adopt ' + lo.lab + '-coined terms ' + Math.abs(mn * 100).toFixed(1) + ' pp less' : '') + ').'; })(),
+    curvesLead: halfMed >= 60 ? 'Terms keep gaining adopters for months after they are coined.' : 'Most terms gain the bulk of their adopters within weeks of coinage.',
     generated: D.meta.generated
   };
   if (!lastQPartial) K.partialNote = 'Terms coined in the last 14 days of the data are left out of the spread measures.';
@@ -1369,29 +1271,28 @@ function safe(fn) { try { fn(); } catch (err) { console.error(err); } }
 function renderAll() {
   readColors();
   Tip.hide();
-  [renderWeekly, renderTypes, renderNetwork, renderCascade, renderTermDetail, renderQuarters, renderOriginators, renderFlow, renderMemory, renderDumbbell].forEach(safe);
+  FIGS.forEach(f => safe(() => { const b = $(f.box); f.draw(b, b.clientWidth, 'screen'); }));
+  safe(renderTermDetail);
 }
+function setAxis(a) {
+  state.axis = a;
+  $('#ax-date').setAttribute('aria-pressed', String(a === 'date'));
+  $('#ax-day').setAttribute('aria-pressed', String(a === 'day'));
+  renderAll();
+}
+$('#ax-date').addEventListener('click', () => setAxis('date'));
+$('#ax-day').addEventListener('click', () => setAxis('day'));
+readColors();
 safe(fillCopy);
 safe(buildStatic);
-setupNetworkControls();
 setupCascadeControls();
+setupExports();
 renderAll();
 
-let raf = 0;
-const schedule = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(renderAll); };
-const main = $('main');
-let lastW = main.clientWidth, rt = 0;
-if (window.ResizeObserver) {
-  new ResizeObserver(entries => {
-    const w = main.clientWidth;
-    if (w === lastW) return;
-    lastW = w; clearTimeout(rt); rt = setTimeout(renderAll, 150);
-  }).observe(main);
-} else {
-  window.addEventListener('resize', () => { if (main.clientWidth === lastW) return; lastW = main.clientWidth; clearTimeout(rt); rt = setTimeout(renderAll, 150); });
-}
-const mq = window.matchMedia('(prefers-color-scheme: dark)');
-if (mq.addEventListener) mq.addEventListener('change', schedule); else if (mq.addListener) mq.addListener(schedule);
-new MutationObserver(schedule).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+let lastW = $('main').clientWidth, rt = 0;
+const onResize = () => { const w = $('main').clientWidth; if (w === lastW) return; lastW = w; clearTimeout(rt); rt = setTimeout(renderAll, 150); };
+if (window.ResizeObserver) new ResizeObserver(onResize).observe($('main')); else window.addEventListener('resize', onResize);
 })();
 </script>
+</body>
+</html>

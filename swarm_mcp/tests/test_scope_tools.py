@@ -596,7 +596,15 @@ def test_comm_graph_analysis_direct(store_path: Path):
 
 def test_mcp_client_roundtrip(data_dir: Path):
     app = build_server(config_for(data_dir))
-    expected = {"scope_agents", "scope_search", "scope_periods", "scope_timeline", "scope_graph"}
+    expected = {
+        "scope_agents",
+        "scope_search",
+        "scope_periods",
+        "scope_timeline",
+        "scope_graph",
+        "scope_recap",
+        "scope_moments",
+    }
 
     async def go():
         async with Client(app) as client:

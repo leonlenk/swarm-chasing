@@ -2,13 +2,22 @@
 """Build the idea-spread viewer: embed trace JSON files (format v0) into trace_viz_template.html.
 
 Usage:
-    python build_trace_viz.py [TRACE_FILES_OR_DIRS ...] -o OUT.html
+    python build_trace_viz.py [TRACE_FILES_OR_DIRS ...] -o OUT.html [--day-one YYYY-MM-DD]
 
 With no inputs it reads out/sprint_idea/traces/ and writes out/sprint_idea/idea_spread.html
 (both relative to this script). A directory is read through its index.json when present,
 otherwise every *.json in it. An index.json given as a file is expanded the same way.
 Files that are not valid JSON, or fail the basic v0 checks below, are reported and skipped;
 the page runs the full field-by-field check again in the browser.
+
+The page is self-contained: the shared paper style, PaperKit (SVG/PNG export) and d3 are
+inlined by pagekit.py, so it opens offline from file://.
+
+Village days: with --day-one the page can label time axes "Day N" (day N = the calendar date,
+in --day-tz, N-1 days after day one). With no inputs (the bundled AI Village traces) day one
+defaults to 2025-04-02, America/Los_Angeles: the AI Village dataset README and SCHEMA say
+"day 1 = 2025-04-02", and every daily summary's day number equals its Pacific date minus
+2025-04-02, plus one. For any other input the day axis is off unless --day-one is given.
 
 Email addresses in free text (snippets, quotes, evidence, labels) are replaced with [email]
 unless their domain is passed with --keep-email-domain; --keep-emails turns this off.
@@ -19,8 +28,11 @@ import argparse
 import json
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+import pagekit
 
 HERE = Path(__file__).resolve().parent
 TEMPLATE = HERE / "trace_viz_template.html"
@@ -28,6 +40,8 @@ DEFAULT_IN = HERE / "out" / "sprint_idea" / "traces"
 DEFAULT_OUT = HERE / "out" / "sprint_idea" / "idea_spread.html"
 SCHEMA = HERE / "swarmtrace" / "trace.schema.json"
 PLACEHOLDER = "__TRACE_PAYLOAD__"
+AI_VILLAGE_DAY_ONE = "2025-04-02"   # AI Village README/SCHEMA: "day 1 = 2025-04-02" (Pacific time)
+AI_VILLAGE_TZ = "America/Los_Angeles"
 KINDS = {"belief", "norm", "term"}
 LISTS = ("agents", "events", "exposures", "adoptions", "edges", "persistence", "annotations", "quotes")
 
@@ -125,6 +139,17 @@ def check(trace, name: str) -> list[str]:
     return errs
 
 
+def day_spec(day_one: str | None, tz: str, *, default_on: bool) -> dict | None:
+    """The Village-day spec embedded in the page, or None (no day axis)."""
+    if day_one is None:
+        day_one = AI_VILLAGE_DAY_ONE if default_on else None
+    if day_one is None or str(day_one).lower() in ("off", "none", ""):
+        return None
+    d = date.fromisoformat(str(day_one))
+    ZoneInfo(tz)  # raises for an unknown zone
+    return {"day_one": d.isoformat(), "tz": tz}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Embed v0 trace files into the idea-spread viewer page.")
     ap.add_argument("inputs", nargs="*", type=Path, help=f"trace files, index.json files or directories (default: {DEFAULT_IN})")
@@ -133,6 +158,10 @@ def main(argv=None) -> int:
                     help="leave addresses at this domain unredacted (repeatable), e.g. agent mailboxes")
     ap.add_argument("--keep-emails", action="store_true", help="do not redact email addresses")
     ap.add_argument("--schema", type=Path, default=SCHEMA, help="JSON Schema to bundle into the page's format section, if it exists")
+    ap.add_argument("--day-one", metavar="YYYY-MM-DD",
+                    help="date of Village day 1, so time axes can show 'Day N'; 'off' disables it. Default: "
+                         f"{AI_VILLAGE_DAY_ONE} (AI Village README/SCHEMA) when no inputs are given, otherwise off")
+    ap.add_argument("--day-tz", default=AI_VILLAGE_TZ, help=f"time zone in which Village days turn over (default {AI_VILLAGE_TZ})")
     args = ap.parse_args(argv)
 
     inputs = args.inputs or [DEFAULT_IN]
@@ -169,23 +198,25 @@ def main(argv=None) -> int:
     except ValueError:
         schema_path = str(args.schema) if schema else None
 
+    days = day_spec(args.day_one, args.day_tz, default_on=not args.inputs)
     payload = {
         "generated": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         "traces": traces,
         "schema": schema,
         "schemaPath": schema_path,
+        "days": days,
     }
     blob = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     blob = blob.replace("<", "\\u003c")  # '<' only occurs inside JSON strings; keeps </script> and <!-- inert
-    tpl = TEMPLATE.read_text()
-    if tpl.count(PLACEHOLDER) != 1:
-        print(f"error: {TEMPLATE.name} must contain {PLACEHOLDER} exactly once", file=sys.stderr)
+    try:
+        html = pagekit.build(TEMPLATE.read_text(), {PLACEHOLDER: blob})
+    except ValueError as e:
+        print(f"error: {TEMPLATE.name}: {e}", file=sys.stderr)
         return 1
-    html = tpl.replace(PLACEHOLDER, blob)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(html)
     print(f"wrote {args.out}  ({len(html) / 1e6:.2f} MB, {len(traces)} traces{', schema bundled' if schema else ''}"
-          f"{f', {failed} skipped' if failed else ''})")
+          f"{f', Day 1 = ' + days['day_one'] if days else ''}{f', {failed} skipped' if failed else ''})")
     return 0
 
 

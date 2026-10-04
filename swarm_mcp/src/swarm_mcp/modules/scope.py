@@ -29,6 +29,7 @@ from swarm_mcp import sweep
 from swarm_mcp.scope import evidence
 from swarm_mcp.scope.adapters.ai_village import goal_type
 from swarm_mcp.scope.analysis import graph as graph_analysis
+from swarm_mcp.scope.analysis import recap as recap_analysis
 from swarm_mcp.scope.analysis import timeline as timeline_analysis
 from swarm_mcp.scope.analysis.timeline import record_filters, ts_iso
 from swarm_mcp.scope.db import HUMAN, Store, label_for
@@ -38,8 +39,9 @@ from swarm_mcp.toolkit import HARD_MAX_CHARS, MIN_MAX_CHARS, ResponseBudget, Too
 NAME = "scope"
 DESCRIPTION = (
     "SwarmScope evidence store (DuckDB): search or read messages/actions chronologically, agents and agent "
-    "profiles, periods (e.g. weekly goals), activity timelines and communication graphs. Read-only; UTC; "
-    "dataset text is wrapped as untrusted. Expand any id with core_get."
+    "profiles, periods (e.g. weekly goals), activity timelines, communication graphs, recaps of a period or "
+    "window and notable moments to look into. Read-only; UTC; dataset text is wrapped as untrusted. Expand any "
+    "id with core_get."
 )
 
 
@@ -717,7 +719,9 @@ def register(mcp, ctx) -> None:
         if not rows:
             return rows
         vol = {r["evidence_id"]: r for r in s.all(_PERIOD_VOLUME_SQL, [[r["evidence_id"] for r in rows]])}
-        return [{**r, **{k: vol.get(r["evidence_id"], {}).get(k, 0) for k in ("messages", "active_agents")}} for r in rows]
+        return [
+            {**r, **{k: vol.get(r["evidence_id"], {}).get(k, 0) for k in ("messages", "active_agents")}} for r in rows
+        ]
 
     def _period_dict(r: dict[str, Any], i: int) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -995,3 +999,251 @@ def register(mcp, ctx) -> None:
             notes.append("Human authors are excluded (include_humans=true keeps them).")
         out["notes"] = notes
         return out
+
+    # ------------------------------------------------------------------ recap
+
+    @ctx.tool()
+    def recap(
+        period: Annotated[
+            str | None,
+            Field(
+                description="A period to recap: its index (from scope_periods), evidence_id, or a substring of its "
+                "label. Or give since/until instead."
+            ),
+        ] = None,
+        since: Since = None,
+        until: Until = None,
+        source: Source = None,
+        channel: Channel = None,
+        top: Annotated[int, Field(ge=1, le=50, description="Items per list (agents, pairs, terms; default 10).")] = 10,
+        max_chars: MaxChars = None,
+    ) -> dict[str, Any]:
+        """What happened during a period or window: who was active (agents' message and action counts; humans
+        and external actors counted separately), who addressed whom (the top mention pairs), which terms rose
+        against the previous window of equal length (log-odds with an informative prior; candidates to read,
+        not findings) and the busiest threads (runs of messages in one channel with gaps of at most 20 minutes),
+        each with evidence ids and a short snippet of its first message. Includes Village days when the source
+        has village goals. Read a thread with scope_search(channel=..., since=start, until=end) or core_get."""
+        if period is not None and (since or until):
+            raise ToolInputError("pass either period or since/until, not both")
+        if period is None and not (since or until):
+            raise ToolInputError(
+                "pass period (an index, evidence_id or label from scope_periods) or a since/until window"
+            )
+        cap = short_cap(max_chars)
+        with ctx.store() as s:
+            _check_source(s, source)
+            ch = s.resolve_channel(channel, source)
+            pinfo = None
+            if period is not None:
+                i, r = _find_period(s.all(f"{_PERIODS_SQL} ORDER BY idx", [source, source]), period)
+                if r["start_ts"] is None:
+                    raise ToolInputError(f"period {i} has no start time, so it cannot be recapped")
+                end = r["end_ts"] or s.scalar(
+                    "SELECT max(ts) + INTERVAL 1 MICROSECOND FROM messages WHERE source = ?", [r["source"]]
+                )
+                if end is None or end <= r["start_ts"]:
+                    raise ToolInputError(f"period {i} has no messages after its start, so there is nothing to recap")
+                lo, hi = r["start_ts"], end
+                source = source or r["source"]
+                pinfo = {"index": i, "evidence_id": r["evidence_id"], "kind": r["kind"], "label": text(r["label"], 300)}
+            else:
+                lo, hi = _window(since, until)
+            rc = recap_analysis.window_recap(
+                s, lo, hi, source=source, channel=ch, top_terms=top, top_bursts=min(top, 10), max_agents=10_000
+            )
+            bursts = rc["bursts"]
+            first = {b["first_id"] for b in bursts}
+            snip = {
+                r["evidence_id"]: r["content"]
+                for r in (
+                    s.all(
+                        "SELECT evidence_id, content FROM messages WHERE list_contains(?, evidence_id)", [list(first)]
+                    )
+                    if first
+                    else []
+                )
+            }
+        win = rc["window"]
+        agents = [a for a in rc["activity"] if a["kind"] == "agent"]
+        others: dict[str, dict[str, int]] = {}
+        for a in rc["activity"]:
+            if a["kind"] != "agent":
+                o = others.setdefault(a["kind"], {"actors": 0, "messages": 0, "actions": 0})
+                o["actors"] += 1
+                o["messages"] += a["messages"]
+                o["actions"] += a["actions"]
+        m = rc["mentions"]
+        pairs = sorted(m["rows"], key=lambda r: (-r[2], r[0], r[1]))[:top]
+        budget = ResponseBudget()
+        notes: list[str] = []
+
+        def admit(items: list[dict[str, Any]], what: str) -> list[dict[str, Any]]:
+            out = []
+            for it in items:
+                if not budget.admit(it):
+                    notes.append(budget.note(f"{what} cut at {len(out)}; lower top or max_chars"))
+                    break
+                out.append(it)
+            return out
+
+        res: dict[str, Any] = {
+            "window": {
+                k: win.get(k)
+                for k in ("since", "until", "baseline_since", "baseline_until", "day_from", "day_to", "days")
+            }
+            | {"note": "[since, until) UTC; rising terms compare it with [baseline_since, baseline_until)"},
+            "period": pinfo,
+            "filters": _filters(source=source, channel=ch),
+            "totals": rc["totals"]
+            | {"agents_active": len(agents), "humans": others.get("human"), "external": others.get("external")},
+        }
+        res["agents"] = admit(
+            [
+                {"agent": a["name"], "agent_id": a["agent_id"], "messages": a["messages"], "actions": a["actions"]}
+                for a in agents[:top]
+            ],
+            "agents",
+        )
+        res["pairs"] = admit(
+            [
+                {
+                    "from": m["names"][i],
+                    "from_id": m["agents"][i],
+                    "to": m["names"][j],
+                    "to_id": m["agents"][j],
+                    "messages": n,
+                }
+                for i, j, n in pairs
+            ],
+            "pairs",
+        )
+        res["rising_terms"] = admit(
+            [
+                {
+                    "term": text(t["term"], 80),
+                    "messages": t["n"],
+                    "messages_before": t["n_before"],
+                    "agents": t["agents"],
+                    "score": t["score"],
+                    "log_odds": t["log_odds"],
+                    "first_evidence_id": t["first_id"],
+                }
+                for t in rc["rising_terms"]
+            ],
+            "rising_terms",
+        )
+        res["threads"] = admit(
+            [
+                {
+                    "channel": b["channel"],
+                    "start": b["start"],
+                    "end": b["end"],
+                    **({"day": b["day"]} if "day" in b else {}),
+                    "messages": b["n"],
+                    "agents": b["agents"][:8],
+                    "first_snippet": text(snip.get(b["first_id"]), cap),
+                    "evidence_ids": b["ids"][:10],
+                }
+                for b in bursts
+            ],
+            "threads",
+        )
+        res["notes"] = notes + [
+            "agents: authors in the agents table; humans and external/unknown actors are summed under totals.",
+            "pairs: author -> agent named in the message text (recipient ids), self and non-agents excluded.",
+            "rising_terms are candidates: lowercased words and two-word phrases of agent messages, ranked by the "
+            "z-score of a log-odds ratio against the baseline window with an informative Dirichlet prior "
+            "(Monroe et al. 2008). Read them in context before claiming anything.",
+            "threads: runs of messages in one channel with gaps of at most 20 minutes, longest first; "
+            "evidence_ids are the first 10 messages of each.",
+        ]
+        return res
+
+    # ------------------------------------------------------------------ moments
+
+    @ctx.tool()
+    def moments(
+        since: Since = None,
+        until: Until = None,
+        source: Source = None,
+        kinds: Annotated[
+            list[Literal["burst", "silence", "partner_shift", "first_use"]] | None,
+            Field(description="Only these kinds (default all four)."),
+        ] = None,
+        limit: Annotated[int, Field(ge=1, le=100, description="Moments per page (default 20, max 100).")] = 20,
+        offset: Annotated[int, Field(ge=0, description="Skip this many moments (for paging; see next_offset).")] = 0,
+        max_chars: MaxChars = None,
+    ) -> dict[str, Any]:
+        """Where to look: a ranked list of notable moments, each with the numbers behind it and evidence ids to
+        open. Kinds: burst (an agent's or channel's messages on one day far above its previous 14 active days,
+        by z-score), silence (an active agent posts nothing for 3+ active days, then returns), partner_shift (an
+        agent's mix of mention partners changes sharply between consecutive periods, by Jensen-Shannon distance)
+        and first_use (the first use of a term that other agents picked up within 14 days). Scores are not
+        comparable across kinds, so the ranking interleaves them: the strongest of each kind first, then the
+        second of each, and so on. Read a moment with core_get(evidence_ids[0], before=5, after=5)."""
+        lo, hi = _window(since, until)
+        with ctx.store() as s:
+            _check_source(s, source)
+            page = recap_analysis.moments_page(
+                s, limit=limit, offset=offset, since=lo, until=hi, source=source, kinds=kinds
+            )
+        score_kind = {
+            "burst": "z",
+            "silence": "expected_missing_messages",
+            "partner_shift": "js_distance",
+            "first_use": "fast_adopters",
+        }
+        budget = ResponseBudget()
+        items: list[dict[str, Any]] = []
+        for k, m in enumerate(page["items"]):
+            it: dict[str, Any] = {
+                "position": offset + k + 1,
+                "kind": m["kind"],
+                "rank_in_kind": m["rank"],
+                "agent": m.get("agent"),
+                "agent_id": m.get("agent_id"),
+                "channel": m.get("channel"),
+                "time": m.get("t"),
+                "end": m.get("end"),
+                **({"day": m["day"]} if "day" in m else {}),
+                "score": m.get("score"),
+                "score_kind": score_kind[m["kind"]],
+                "reason": text(m.get("why"), max_chars or 400),
+                "evidence_ids": m.get("ids") or [],
+            }
+            if m.get("term") is not None:
+                it["term"] = text(m["term"], 80)
+            if not budget.admit(it):
+                break
+            items.append(it)
+        total = page["total"]
+        has_more = offset + len(items) < total
+        notes = []
+        if budget.exhausted:
+            notes.append(budget.note(f"continue with offset={offset + len(items)}, or lower limit"))
+        if offset and not items and total:
+            notes.append(f"offset {offset} is past the last moment ({total} total).")
+        notes += [
+            "burst: z = (x - mean) / max(sd, sqrt(mean), 1) against the previous 14 active days; x >= 20, z >= 4.",
+            "silence: >= 3 consecutive active days without a message after >= 3 messages per active day.",
+            "partner_shift: Jensen-Shannon distance (0 = same mix, 1 = disjoint) between consecutive periods "
+            "(village goals, else 14-day bins) with >= 20 mentions each.",
+            "first_use: a term first used after the first tenth of the data that >= 2 other agents used in >= 2 "
+            "messages within 14 days; ordinary words that first appear late can qualify, so read it in context.",
+            "reason and term are dataset-derived text (untrusted).",
+        ]
+        res: dict[str, Any] = {
+            "total": total,
+            "by_kind": page["by_kind"],
+            "returned": len(items),
+            "offset": offset,
+            "has_more": has_more,
+            "filters": _filters(source=source, since=_iso_param(lo), until=_iso_param(hi), kinds=kinds),
+            "days": page["days"],
+            "moments": items,
+        }
+        if has_more:
+            res["next_offset"] = offset + len(items)
+        res["notes"] = notes
+        return res

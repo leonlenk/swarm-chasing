@@ -24,6 +24,7 @@ Pre-specified (written before looking at any correlation):
   DeepSeek-V3.2 at 2026-04-24, when its API alias stopped serving V3.2.)
 
 Run: uv run --with numpy --with scipy --with matplotlib python scaling.py
+     (--plot-only redraws out/scaling/scaling_scatter.png from results.json and per_agent.csv)
 Inputs: data/ai-village/*.jsonl.gz, model_metadata.csv. Outputs: out/scaling/.
 
 model_metadata.csv (village_tools/model_metadata.csv) is NOT in git: *.csv is gitignored and
@@ -53,10 +54,13 @@ import csv
 import datetime as dt
 import json
 import re
+import sys
+from pathlib import Path
 
 import numpy as np
 from scipy.stats import rankdata, spearmanr
 
+import paperfig
 from common import OUT, ROOT, WEAK, GoalIndex, Mentions, active_windows, load_agents, load_chat, load_goals
 from cooperation import MARKERS
 
@@ -332,54 +336,152 @@ def agent_level(dm, meta, proxy, agent_filter=None):
 
 # --- figure -------------------------------------------------------------------
 
-LAB_COLORS = {"Anthropic": "#2a78d6", "OpenAI": "#eb6834", "Google": "#1baf7a", "Other": "#eda100"}
-LABELS = {"addressing": "Addressing rate (demeaned)", "reciprocity": "Reciprocity (demeaned)",
-          "prosocial": "Requests + division of labour / 100 msgs (demeaned)"}
-PROXY_LABELS = {"eci": "Epoch Capabilities Index (ECI)", "release_year": "Release date (year)"}
+MEASURE_LABELS = {"addressing": "Addressing", "reciprocity": "Reciprocity", "prosocial": "Prosocial"}
+PROXY_SHORT = {"eci": "ECI", "release_year": "release"}
 
 
 def short(name):
     return name.replace("Claude ", "").replace("Gemini ", "Gem ")
 
 
-def plot(dms, meta, path):
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+def _place_labels(ax, pts, markers, *, avoid=(), fontsize=7):
+    """Label points (x, y, text) without overlaps. For each point, try directions E, W, S, N and the
+    diagonals at growing distances; keep the first box that stays inside the axes and clears every
+    other marker, every placed label and the `avoid` artists. Far placements get a thin leader line.
+    A point with no free spot stays unlabelled (per_agent.csv lists every agent)."""
+    import math
 
-    fig, axes = plt.subplots(len(MEASURES), len(PROXIES), figsize=(13, 14))
-    for i, measure in enumerate(MEASURES):
-        dm = dms[measure]
-        for j, proxy in enumerate(PROXIES):
-            ax = axes[i, j]
-            agents = [a for a in dm if not np.isnan(meta[a][proxy])]
-            x = np.array([meta[a][proxy] for a in agents])
-            y = np.array([dm[a] for a in agents])
-            for a, xi, yi in zip(agents, x, y):
-                lab = meta[a]["lab"] if meta[a]["lab"] in LAB_COLORS else "Other"
-                ax.scatter(xi, yi, s=40, color=LAB_COLORS[lab], edgecolor="white", linewidth=1, zorder=3)
-                ax.annotate(short(a), (xi, yi), fontsize=6.5, color="#444441", xytext=(3, 2),
-                            textcoords="offset points")
-            if len(agents) >= 4:
-                b, c = np.polyfit(x, y, 1)
-                xs = np.linspace(x.min(), x.max(), 2)
-                ax.plot(xs, b * xs + c, color="#888780", linewidth=1.5, linestyle="--", zorder=2)
-                rho = spearmanr(x, y).statistic
-                ax.set_title(f"n={len(agents)}, Spearman ρ={rho:+.2f}", fontsize=9, color="#444441", loc="left")
-            ax.axhline(0, color="#d3d1c7", linewidth=1, zorder=1)
-            ax.grid(color="#eeede6", linewidth=0.6)
-            ax.set_axisbelow(True)
-            for s in ("top", "right"):
-                ax.spines[s].set_visible(False)
-            ax.set_xlabel(PROXY_LABELS[proxy], fontsize=9)
-            ax.set_ylabel(LABELS[measure], fontsize=9)
-    handles = [plt.Line2D([], [], marker="o", linestyle="", color=c, label=l) for l, c in LAB_COLORS.items()]
-    fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, 0.978), ncol=4, frameon=False, fontsize=9)
-    fig.suptitle("Per-period-demeaned cooperation vs capability and newness (each point = one agent)",
-                 y=0.995, fontsize=11)
-    fig.tight_layout(rect=(0, 0, 1, 0.955))
-    fig.savefig(path, dpi=130)
-    print(f"wrote {path}")
+    fig = ax.figure
+    fig.canvas.draw()  # settle constrained layout first, so pixel positions are final
+    rend = fig.canvas.get_renderer()
+    to_px = ax.transData.transform
+    box = ax.get_window_extent(rend)
+    pt = fig.dpi / 72
+    r_px = 2.8 * pt  # marker half-size plus a hair
+    others = [tuple(a.get_window_extent(rend).extents) for a in avoid]
+    placed = []
+    dirs = [0, 180, 270, 90, 315, 225, 45, 135]  # degrees, counter-clockwise from east
+    for x, y, text in pts:
+        obstacles = others + [(*(to_px(m) - r_px), *(to_px(m) + r_px)) for m in markers if tuple(m) != (x, y)]
+        done = False
+        for radius in (3.5, 7.0, 11.0, 15.0):
+            for deg in dirs:
+                c, sn = math.cos(math.radians(deg)), math.sin(math.radians(deg))
+                ha = "left" if c > 0.3 else "right" if c < -0.3 else "center"
+                va = "bottom" if sn > 0.3 else "top" if sn < -0.3 else "center"
+                t = ax.annotate(text, (x, y), xytext=(radius * c, radius * sn), textcoords="offset points",
+                                ha=ha, va=va, fontsize=fontsize, color=paperfig.INK,
+                                arrowprops=dict(arrowstyle="-", color=paperfig.INK3, lw=0.4, shrinkA=0,
+                                                shrinkB=2.5) if radius > 7 else None)
+                bb = t.get_window_extent(rend)
+                r = (bb.x0 - 0.5 * pt, bb.y0 - 0.5 * pt, bb.x1 + 0.5 * pt, bb.y1 + 0.5 * pt)
+                inside = box.x0 <= r[0] and r[2] <= box.x1 and box.y0 <= r[1] and r[3] <= box.y1
+                hit = any(not (r[2] < o[0] or r[0] > o[2] or r[3] < o[1] or r[1] > o[3]) for o in placed + obstacles)
+                if inside and not hit:
+                    placed.append(r)
+                    done = True
+                    break
+                t.remove()
+            if done:
+                break
+
+
+def plot(path=None):
+    """Two-panel figure from the saved outputs (results.json, per_agent.csv): no recomputation.
+
+    (a) the six pre-registered tests: within-period mean Spearman rho (filled; Holm-adjusted
+        permutation p at the right) and the naive cleaned cross-agent rho with its agent-bootstrap
+        95% CI (hollow). The period-bootstrap CI is not drawn: it ignores that the same agents
+        recur across periods and is too narrow.
+    (b) per-period-demeaned addressing rate vs ECI, one point per agent, lab by colour and marker.
+    """
+    paperfig.use()
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+
+    path = path or SCALE / "scaling_scatter.png"
+    res = json.loads((SCALE / "results.json").read_text())
+    tests = {(t["measure"], t["proxy"]): t for t in res["tests"]}
+    with open(SCALE / "per_agent.csv", newline="") as f:
+        rows = list(csv.DictReader(f))
+
+    fig = plt.figure(figsize=paperfig.size(1.0, height_in=2.6))
+    gs = fig.add_gridspec(1, 2, width_ratios=[1.1, 1.0], wspace=0.12)
+    ax, bx = fig.add_subplot(gs[0]), fig.add_subplot(gs[1])
+
+    # (a) forest plot -------------------------------------------------------------
+    ys, labels, y = [], [], 0.0
+    for m in MEASURES:
+        for pr in PROXIES:
+            ys.append(y)
+            labels.append(f"{MEASURE_LABELS[m]}, {PROXY_SHORT[pr]}")
+            y += 1.0
+        y += 0.45  # gap between measures
+    ys = np.array(ys)
+    dy = 0.17
+    ax.axvline(0, color=paperfig.RULE, lw=0.5, zorder=1)
+    k = 0
+    for m in MEASURES:
+        for pr in PROXIES:
+            t = tests[(m, pr)]
+            nv, w = t["naive_cleaned"], t["within_period"]
+            lo, hi = nv["ci95"]
+            ax.plot([lo, hi], [ys[k] + dy] * 2, color=paperfig.INK3, lw=0.8, solid_capstyle="butt", zorder=2)
+            ax.plot([nv["rho"]], [ys[k] + dy], "o", ms=3.6, mfc="white", mec=paperfig.INK3, mew=0.8, zorder=3)
+            ax.plot([w["mean_rho"]], [ys[k] - dy], "o", ms=3.8, mfc=paperfig.INK, mec=paperfig.INK, zorder=4)
+            ax.text(1.02, ys[k], f"{w['p_holm']:.2f}", transform=ax.get_yaxis_transform(), ha="left", va="center",
+                    fontsize=7, color=paperfig.INK)
+            k += 1
+    ax.text(1.02, ys[0] - 0.95, "$p_{\\mathrm{Holm}}$", transform=ax.get_yaxis_transform(), ha="left",
+            va="center", fontsize=7, color=paperfig.INK)
+    ax.set_yticks(ys, labels)
+    ax.tick_params(axis="y", length=0, pad=3)
+    ax.spines["left"].set_visible(False)
+    ax.set_ylim(ys[-1] + 0.7, ys[0] - 1.2)
+    ax.set_xlim(-0.75, 0.75)
+    ax.set_xticks([-0.6, -0.3, 0, 0.3, 0.6])
+    ax.set_xticklabels(["\u22120.6", "\u22120.3", "0", "0.3", "0.6"])
+    ax.set_xlabel("Spearman \u03c1 with ECI or release date")
+    handles = [Line2D([], [], ls="", marker="o", ms=3.8, mfc=paperfig.INK, mec=paperfig.INK,
+                      label="within period (mean)"),
+               Line2D([], [], color=paperfig.INK3, lw=0.8, marker="o", ms=3.6, mfc="white", mec=paperfig.INK3,
+                      mew=0.8, label="across agents, 95% CI")]
+    leg = ax.legend(handles=handles, loc="lower left", bbox_to_anchor=(0.0, 1.0), ncol=2, handlelength=1.4,
+                    columnspacing=0.9, borderaxespad=0.15)
+    leg.set_in_layout(False)  # it sits in the title row; keep it out of constrained layout
+    ax.set_title("(a)", loc="left", x=-0.47, pad=5, fontweight="bold")
+
+    # (b) one scatter: demeaned addressing vs ECI ------------------------------------
+    pts = [(r["agent"], r["lab"], float(r["eci"]), 100 * float(r["addressing_demeaned"]))
+           for r in rows if r.get("eci") and r.get("addressing_demeaned")]
+    x = np.array([p[2] for p in pts])
+    yv = np.array([p[3] for p in pts])
+    bx.axhline(0, color=paperfig.HAIR, lw=0.6, zorder=1)
+    slope, icpt = np.polyfit(x, yv, 1)
+    xs = np.array([x.min(), x.max()])
+    bx.plot(xs, slope * xs + icpt, color=paperfig.INK3, lw=0.8, zorder=2)
+    for lab in paperfig.LAB:
+        sel = [p for p in pts if (p[1] if p[1] in paperfig.LAB else "Other") == lab]
+        if not sel:
+            continue
+        col, mk = paperfig.LAB[lab]
+        bx.scatter([p[2] for p in sel], [p[3] for p in sel], s=13, marker=mk, color=col, edgecolor="white",
+                   linewidth=0.4, zorder=3, label=lab if lab != "Other" else "other labs")
+    agent_level = tests[("addressing", "eci")]["demeaned_agent_level"]
+    rho_txt = f"{agent_level['rho']:+.2f}".replace("-", "\u2212")
+    bx.set_title(f"Spearman \u03c1 = {rho_txt}, n = {agent_level['n_agents']} agents", loc="right", pad=5, fontsize=7)
+    bx.set_xlim(x.min() - 0.3 * (x.max() - x.min()), x.max() + 0.03 * (x.max() - x.min()))  # room for the legend
+    bx.set_xlabel("Epoch Capabilities Index (ECI)")
+    bx.set_ylabel("Addressing rate, demeaned (pp)")
+    leg = bx.legend(loc="lower left", ncol=1, handletextpad=0.1, borderaxespad=0.3, markerscale=1.0)
+    bx.set_title("(b)", loc="left", x=-0.2, pad=5, fontweight="bold")
+    order = np.argsort(yv)
+    pick = list(order[:4]) + list(order[-2:])  # the most negative and most positive agents
+    _place_labels(bx, [(x[i], yv[i], short(pts[i][0])) for i in pick], list(zip(x, yv)), avoid=(leg,))
+
+    out = paperfig.save(fig, Path(path).with_suffix(""))
+    plt.close(fig)
+    print("wrote " + ", ".join(str(o) for o in out))
 
 
 # --- main ---------------------------------------------------------------------
@@ -471,8 +573,11 @@ def main():
                         **{f"{m}_demeaned": dms[m].get(a) for m in MEASURES}})
     (SCALE / "results.json").write_text(json.dumps(results, indent=1, default=str))
     print(f"wrote {SCALE / 'results.json'}")
-    plot(dms, meta, SCALE / "scaling_scatter.png")
+    plot()
 
 
 if __name__ == "__main__":
-    main()
+    if "--plot-only" in sys.argv:  # re-render the figure from results.json + per_agent.csv
+        plot()
+    else:
+        main()
