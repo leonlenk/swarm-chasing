@@ -167,10 +167,27 @@ def _counts(res: dict[str, Any]) -> str:
     return ", ".join(f"{c.get(k, 0):,} {k}" for k in keys)
 
 
-def _next_steps(source: str) -> list[str]:
+def _db_flag(args: argparse.Namespace) -> list[str]:
+    """``--db <store>`` (absolute) when the command was given one, so printed commands use the same store."""
+    return ["--db", str(resolve_output(args.db))] if getattr(args, "db", None) else []
+
+
+def _add_cmd(args: argparse.Namespace, path: Path, mapping: Path | None = None) -> str:
+    """The ``swarm-mcp add`` command to run next, shell-quoted, with this run's --name/--db/--replace."""
+    parts = ["swarm-mcp", "add", str(path)]
+    if mapping is not None:
+        parts += ["--mapping", str(mapping)]  # the mapping names the source
+    elif args.name:
+        parts += ["--name", args.name]
+    parts += _db_flag(args) + (["--replace"] if args.replace else [])
+    return shlex.join(parts)
+
+
+def _next_steps(source: str, args: argparse.Namespace | None = None) -> list[str]:
+    info = shlex.join(["swarm-mcp", "info", *_db_flag(args)]) if args is not None else "swarm-mcp info"
     return [
         "Next:",
-        "  swarm-mcp info                       # check what is in the store",
+        f"  {info:<36} # check what is in the store",
         "  restart the 'swarm' MCP server (in Claude Code: /mcp) so the tools see the new data",
         f"  then try core_info and scope_search(source='{source}')",
     ]
@@ -223,7 +240,7 @@ def _add_village(args: argparse.Namespace, path: Path, db: Path, *, detected: bo
     res = _guarded(args, lambda replace: ingest("ai_village", path, db, progress=_say, replace=replace))
     print(f"ingested source '{res['source']}' into {res['db']}: {_counts(res)} ({res['seconds']}s)")
     print(_replaced_note(res))
-    print("\n".join(_next_steps(res["source"])))
+    print("\n".join(_next_steps(res["source"], args)))
     return 0
 
 
@@ -305,7 +322,7 @@ def _add_builtin(args: argparse.Namespace, name: str, path: Path, db: Path, *, d
     print(f"ingested source '{res['source']}' ({res['adapter']} adapter) into {res['db']}: {_counts(res)} "
           f"({res['seconds']}s)")  # fmt: skip
     print(_replaced_note(res))
-    print("\n".join(_next_steps(res["source"])))
+    print("\n".join(_next_steps(res["source"], args)))
     return 0
 
 
@@ -346,13 +363,11 @@ def _add_mapped(args: argparse.Namespace, config: Config, path: Path, db: Path) 
     if report["status"] != "pass":
         print(
             f"\nThe mapping does not pass the check, so nothing was ingested. Fix {mapping_path} "
-            f"(see the report and the TODO notes), then run:\n  swarm-mcp add {path} --mapping {mapping_path}"
+            f"(see the report and the TODO notes), then run:\n  {_add_cmd(args, path, mapping_path)}"
         )
         return 1
     if args.dry_run:
-        print(
-            f"\ndry run: the mapping passes; nothing ingested. Ingest with:\n  swarm-mcp add {path} --mapping {mapping_path}"
-        )
+        print(f"\ndry run: the mapping passes; nothing ingested. Ingest with:\n  {_add_cmd(args, path, mapping_path)}")
         return 0
     from swarm_mcp.scope.ingest import ingest_mapped
 
@@ -364,7 +379,7 @@ def _add_mapped(args: argparse.Namespace, config: Config, path: Path, db: Path) 
     )
     print(f"\ningested source '{res['source']}' into {res['db']}: {_counts(res)} ({res['seconds']}s)")
     print(f"mapping: {mapping_path} {_replaced_note(res)}")
-    print("\n".join(_next_steps(res["source"])))
+    print("\n".join(_next_steps(res["source"], args)))
     return 0
 
 
@@ -424,9 +439,9 @@ def _draft(args: argparse.Namespace, path: Path, source: str, mappings_dir: Path
         print(f"  note: {n}")
     if args.agent == "claude-code":
         print(
-            f"\nwrote {res['task_path']}. In Claude Code run:\n  /swarm-setup {source} {path}\n"
+            f"\nwrote {res['task_path']}. In Claude Code run:\n  /swarm-setup {source} {shlex.quote(str(path))}\n"
             "It refines the mapping until the check passes, then runs "
-            f"`swarm-mcp add {path} --mapping {mapping_path}`."
+            f"`{_add_cmd(args, path, mapping_path)}`."
         )
         return mapping_path, None
     if res.get("rationale"):

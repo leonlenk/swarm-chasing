@@ -455,3 +455,35 @@ def test_add_reuses_a_drafted_mapping_only_for_its_own_dataset(project: Path, ca
     (project / "mappings" / "crew.setup.json").unlink()  # no record of the dataset (e.g. a committed mapping)
     assert cli("add", "data/elsewhere/crew", "--dry-run") == 0
     assert "using existing mapping mappings/crew.json" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_add_hints_keep_db_name_and_replace(project: Path, capsys):
+    """Regression: the printed follow-up commands (dry-run 'Ingest with:', check failure 'then run:', the
+    claude-code hand-off, 'swarm-mcp info') dropped --db, so they ran against the default store; paths were
+    not shell-quoted."""
+    import shlex
+
+    make_nested_jsonl(project / "data" / "my crew")
+    store = project / "other store" / "s.duckdb"
+    store.parent.mkdir()
+    db = ["--db", str(store)]
+    mapping = project / "mappings" / "crew.json"
+    want = shlex.join(["swarm-mcp", "add", str(project / "data" / "my crew"), "--mapping", str(mapping), *db])
+    assert cli("add", "data/my crew", "--name", "crew", *db, "--dry-run") == 0
+    assert f"Ingest with:\n  {want}\n" in capsys.readouterr().out
+
+    broken = json.loads(mapping.read_text())
+    broken["records"][0]["text"] = "no_such_field"
+    mapping.write_text(json.dumps(broken))
+    assert cli("add", "data/my crew", "--name", "crew", *db, "--replace") == 1
+    assert f"then run:\n  {want} --replace\n" in capsys.readouterr().out
+
+    assert cli("add", "data/my crew", "--name", "crew2", "--agent", "claude-code", *db) == 0
+    out = capsys.readouterr().out
+    assert f"/swarm-setup crew2 {shlex.quote(str(project / 'data' / 'my crew'))}" in out
+    assert f"--mapping {project / 'mappings' / 'crew2.json'} --db '{store}'" in out
+
+    make_repo(project / "data" / "repos")
+    assert cli("add", "data/repos/rpg.git", *db) == 0
+    assert f"swarm-mcp info --db '{store}'" in capsys.readouterr().out
