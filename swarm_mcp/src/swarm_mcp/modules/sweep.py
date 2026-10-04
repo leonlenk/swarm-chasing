@@ -23,6 +23,7 @@ DESCRIPTION = (
     "ids, then hand-label a sample and get precision with a 95% CI. Real runs need ANTHROPIC_API_KEY."
 )
 DEFAULT_PROVIDER = "store"
+PREVIEW_CHARS = 1500  # the dry-run prompt preview: rubric, record header and the start of the text
 
 Rubric = Annotated[
     str,
@@ -52,6 +53,10 @@ def register(mcp, ctx) -> None:
 
     def directory() -> Path:
         return engine.sweeps_dir(config)
+
+    def masked(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Rows with their rationale masked: model output about dataset text can repeat what it masks."""
+        return [{**r, "rationale": ctx.scrub(r["rationale"])} if r.get("rationale") else r for r in rows]
 
     def resolver() -> engine.Resolver:
         """Ids resolve through the store's get_record (the same path as core_get), as standard records."""
@@ -161,6 +166,7 @@ def register(mcp, ctx) -> None:
             out = engine.run(rubric, records, None, cap=cap, dry_run=True, model=model, prices=_prices(ctx),
                              total=total, cap_note=cap_note)  # fmt: skip
             out["notes"] = notes + out["notes"] + ["call again with dry_run=false to run it"]
+            out["preview"]["prompt"] = ctx.untrusted(out["preview"]["prompt"], PREVIEW_CHARS)
         else:
             out = engine.run(
                 rubric,
@@ -176,6 +182,7 @@ def register(mcp, ctx) -> None:
                 cap_note=cap_note,
             )
             out["notes"] = notes + out.get("notes", [])
+            out["verdicts"] = masked(out["verdicts"])
         out["unresolved"] = errors
         if errors:
             out["notes"].append(f"{len(errors)} id(s) could not be resolved and were skipped (see unresolved)")
@@ -216,7 +223,7 @@ def register(mcp, ctx) -> None:
             "total_matches": len(rows),
             "returned": len(page),
             "has_more": offset + len(page) < len(rows),
-            "verdicts": [engine._public(r) for r in page],
+            "verdicts": masked([engine._public(r) for r in page]),
             "notes": [n for n in [note] if n],
         }
 
@@ -262,7 +269,7 @@ def register(mcp, ctx) -> None:
             items += drawn["items"]
         out: dict[str, Any] = {
             "sweep_id": sweep_id,
-            "to_label": items,
+            "to_label": masked(items),
             "pending_from_earlier": min(len(pending), n),
             "newly_drawn": drawn["sampled"] if drawn else 0,
             "precision": engine.precision(sweep_id, d),
