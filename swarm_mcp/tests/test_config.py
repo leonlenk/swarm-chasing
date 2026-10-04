@@ -122,7 +122,7 @@ def test_relative_data_dir_resolves_against_project_root(tmp_path: Path):
 
 def test_server_and_cli_resolve_the_same_store(tmp_path: Path):
     """Regression: .mcp.json always set SWARM_DATA_DIR=data for the MCP server, which overrides swarm.toml's
-    [data] dir, so the server and the CLI used different stores."""
+    [data] dir, so the server, the CLI and the Stop hook used different stores."""
     import os
 
     repo = Path(__file__).resolve().parents[2]
@@ -138,3 +138,17 @@ def test_server_and_cli_resolve_the_same_store(tmp_path: Path):
     assert Config.load(env=env, cwd=project / workdir).store_path == want  # the MCP server
     assert Config.load(env=env, cwd=project).store_path == want  # the CLI from the repo root
     assert Config.load(env={**env, "SWARM_DATA_DIR": ""}, cwd=project / workdir).store_path == want  # empty: toml
+
+    # the Stop hook's check stage (it gets Claude Code's env, never .mcp.json's) checks against the same store
+    import subprocess
+    import sys
+
+    (project / "findings").mkdir()
+    (project / "findings" / "findings.jsonl").write_text("")
+    hook_env = {k: v for k, v in env.items() if not k.startswith("CLAUDE_")} | {"CLAUDE_PROJECT_DIR": str(project)}
+    r = subprocess.run(
+        [sys.executable, str(repo / "hooks" / "require_evidence.py"), "--check"],
+        input="{}", env=hook_env, capture_output=True, text=True, timeout=60,
+    )  # fmt: skip
+    line = next(ln for ln in r.stdout.splitlines() if ln.startswith("@@require_evidence-result@@ "))
+    assert Path(json.loads(line.split(" ", 1)[1])["db_path"]).resolve() == want
