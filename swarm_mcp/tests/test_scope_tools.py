@@ -687,6 +687,32 @@ def test_periods_kind_filter_keeps_global_index(many_periods_app):
     assert call(many_periods_app, "scope_periods", kind="nope")["total"] == 0
 
 
+def test_period_index_is_store_wide_across_sources(data_dir: Path):
+    """An index listed under scope_periods(source=...) must name the same period everywhere."""
+    con = duckdb.connect(str(data_dir / "swarmscope.duckdb"))
+    try:  # a second source that sorts before 'village', with two periods
+        con.execute(
+            "INSERT INTO periods VALUES ('aaa:period:p1', 'aaa', 'pull_request', 'PR one', "
+            "TIMESTAMP '2026-01-05', TIMESTAMP '2026-01-06', '{}'), ('aaa:period:p2', 'aaa', 'pull_request', "
+            "'PR two', TIMESTAMP '2026-01-06', TIMESTAMP '2026-01-07', '{}')"
+        )
+    finally:
+        con.close()
+    app = build_server(config_for(data_dir))
+    listed = call(app, "scope_periods", source="village")["periods"]
+    assert [p["index"] for p in listed] == [3, 4, 5]
+    for p in listed:
+        i = str(p["index"])
+        assert call(app, "scope_periods", name=i)["evidence_id"] == p["evidence_id"]
+        assert call(app, "scope_periods", name=i, source="village")["evidence_id"] == p["evidence_id"]
+        assert call(app, "scope_recap", period=i)["period"]["evidence_id"] == p["evidence_id"]
+        assert call(app, "scope_recap", period=i, source="village")["period"]["index"] == p["index"]
+    assert [p["index"] for p in call(app, "scope_periods")["periods"]] == [1, 2, 3, 4, 5]
+    assert "belongs to source 'aaa'" in call_error(app, "scope_recap", period="1", source="village")
+    assert "out of range 1..5" in call_error(app, "scope_periods", name="9")
+    assert call(app, "scope_periods", name="charity", source="village")["index"] == 3
+
+
 def test_periods_counts_match_and_use_few_queries(many_periods_app, store_path: Path, monkeypatch):
     calls = []
     for meth in ("all", "scalar"):

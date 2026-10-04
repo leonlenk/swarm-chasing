@@ -690,11 +690,14 @@ def register(mcp, ctx) -> None:
 
     # ------------------------------------------------------------------ periods
 
-    # every period of a source with its 1-based list index (stable across kind filters and pages)
+    # every period with its 1-based index in the store-wide list; numbered before any filter, so an
+    # index means the same period with or without source/kind filters, pages, or in scope_recap
     _PERIODS_SQL = """
-    SELECT evidence_id, source, kind, label, start_ts, end_ts, meta,
-           row_number() OVER (ORDER BY source, start_ts NULLS LAST, evidence_id) AS idx
-    FROM periods
+    SELECT * FROM (
+        SELECT evidence_id, source, kind, label, start_ts, end_ts, meta,
+               row_number() OVER (ORDER BY source, start_ts NULLS LAST, evidence_id) AS idx
+        FROM periods
+    )
     WHERE (CAST(? AS TEXT) IS NULL OR source = ?)
     """
     # chat volume of a set of periods (by evidence_id) in one GROUP BY
@@ -744,21 +747,28 @@ def register(mcp, ctx) -> None:
         )
         return d
 
-    def _find_period(rows: list[dict[str, Any]], name: str) -> tuple[int, dict[str, Any]]:
+    def _find_period(s: Store, name: str, source: str | None) -> tuple[int, dict[str, Any]]:
+        """(store-wide index, row) of a period given by index, evidence_id or label substring."""
         q = name.strip()
         if q.isdigit():
             i = int(q)
-            if 1 <= i <= len(rows):
-                return i, rows[i - 1]
-            raise ToolInputError(f"period index {i} out of range 1..{len(rows)}; call scope_periods() to list them")
-        hits = [
-            (i, r) for i, r in enumerate(rows, 1) if r["evidence_id"] == q or q.lower() in (r["label"] or "").lower()
-        ]
+            r = s.one(f"{_PERIODS_SQL} AND idx = ?", [None, None, i])
+            if r is None:
+                n = s.scalar("SELECT count(*) FROM periods") or 0
+                raise ToolInputError(f"period index {i} out of range 1..{n}; call scope_periods() to list them")
+            if source and r["source"] != source:
+                raise ToolInputError(
+                    f"period {i} belongs to source {r['source']!r}, not {source!r}; indexes are store-wide "
+                    "(see scope_periods), so drop source or pass an index listed for that source"
+                )
+            return i, r
+        rows = s.all(f"{_PERIODS_SQL} ORDER BY idx", [source, source])
+        hits = [r for r in rows if r["evidence_id"] == q or q.lower() in (r["label"] or "").lower()]
         if len(hits) == 1:
-            return hits[0]
+            return hits[0]["idx"], hits[0]
         if not hits:
             raise ToolInputError(f"No period matches {name!r}. Call scope_periods() to list them.")
-        opts = "; ".join(f"{i}: {(r['label'] or '')[:60]}" for i, r in hits[:10])
+        opts = "; ".join(f"{r['idx']}: {(r['label'] or '')[:60]}" for r in hits[:10])
         raise ToolInputError(f"{name!r} matches {len(hits)} periods; pass the index. Candidates: {opts}")
 
     @ctx.tool()
@@ -789,13 +799,13 @@ def register(mcp, ctx) -> None:
         Without `name`: one page of periods (total, has_more, next_offset), each with its index, evidence_id,
         label, kind, start/end (UTC), duration, chat volume (messages, active agents) and, for AI Village goals,
         a heuristic goal type (holiday, self_directed, competitive, collaborative, individual, assigned_individual,
-        open_task). `kind` filters the list; indexes stay those of the unfiltered list.
+        open_task). Indexes are store-wide: `source` and `kind` filter the list but keep each period's index.
         With `name`: one period's activity: top speakers, channels, busiest day, human messages and action counts.
         Use start/end as since/until for scope_search, scope_timeline and scope_graph."""
         with ctx.store() as s:
             _check_source(s, source)
             if name is not None and name.strip():
-                i, r = _find_period(s.all(f"{_PERIODS_SQL} ORDER BY idx", [source, source]), name)
+                i, r = _find_period(s, name, source)
                 r = _with_volume(s, [r])[0]
                 window = "source = ? AND ts >= ? AND (? IS NULL OR ts < ?)"
                 params = [r["source"], r["start_ts"], r["end_ts"], r["end_ts"]]
@@ -1036,7 +1046,7 @@ def register(mcp, ctx) -> None:
             ch = s.resolve_channel(channel, source)
             pinfo = None
             if period is not None:
-                i, r = _find_period(s.all(f"{_PERIODS_SQL} ORDER BY idx", [source, source]), period)
+                i, r = _find_period(s, period, source)
                 if r["start_ts"] is None:
                     raise ToolInputError(f"period {i} has no start time, so it cannot be recapped")
                 end = r["end_ts"] or s.scalar(
