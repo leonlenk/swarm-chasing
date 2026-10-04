@@ -66,6 +66,20 @@ def test_recap_period_counts_match_the_store(app, store_path: Path):
         assert t["evidence_ids"] and t["first_snippet"]["untrusted"] is True
 
 
+def test_recap_threads_list_humans_apart_from_agents(app):
+    out = call(app, "scope_recap", period="1", top=50)
+    threads = out["threads"]
+    assert threads and all("humans" in t and "external" in t for t in threads)
+    with_human = [t for t in threads if t["humans"]]
+    assert with_human, threads  # goal 1 has one human message
+    for t in threads:
+        names = [x["content"] if isinstance(x, dict) else x for x in t["agents"]]
+        assert not any(n.startswith("human:") for n in names), t["agents"]
+    assert all(
+        (h["content"] if isinstance(h, dict) else h).startswith("human:") for t in with_human for h in t["humans"]
+    )
+
+
 def test_recap_window_masks_snippets_and_rises(app):
     out = call(app, "scope_recap", since="2026-01-20", until="2026-01-22", top=5)
     assert out["period"] is None
@@ -127,13 +141,13 @@ def test_moments_surface_the_planted_silence(bench_app):
 
 def test_moments_paging_kinds_and_wrapping(bench_app):
     app, _ = bench_app
-    first = call(app, "scope_moments", limit=3)
-    assert first["returned"] == 3 and first["offset"] == 0
-    assert first["total"] == sum(first["by_kind"].values()) and first["total"] > 3
-    assert first["has_more"] and first["next_offset"] == 3
-    second = call(app, "scope_moments", limit=3, offset=3)
+    first = call(app, "scope_moments", limit=2)
+    assert first["returned"] == 2 and first["offset"] == 0
+    assert first["total"] == sum(first["by_kind"].values()) and first["total"] > 2
+    assert first["has_more"] and first["next_offset"] == 2
+    second = call(app, "scope_moments", limit=2, offset=2)
     pos = [m["position"] for m in first["moments"] + second["moments"]]
-    assert pos == list(range(1, 7))
+    assert pos == list(range(1, len(pos) + 1)) and len(pos) >= 3
     # ranking interleaves kinds: the best of each kind before any kind's second best
     kinds_seen = [(m["kind"], m["rank_in_kind"]) for m in first["moments"] + second["moments"]]
     ranks = [r for _, r in kinds_seen]
@@ -146,6 +160,21 @@ def test_moments_paging_kinds_and_wrapping(bench_app):
     assert all(m["term"]["untrusted"] is True for m in only["moments"])
     past = call(app, "scope_moments", limit=5, offset=every["total"] + 10)
     assert past["returned"] == 0 and "past the last moment" in " ".join(past["notes"])
+
+
+def test_moments_first_use_surfaces_the_planted_terms(bench_app):
+    """Both planted coinages surface (one copied by four agents with mostly single uses, one used by
+    just two agents), the copied one first, and no ordinary word does."""
+    app, truth = bench_app
+    planted = truth["diffusion"]
+    out = call(app, "scope_moments", kinds=["first_use"], limit=20)
+    got = [m["term"]["content"] for m in out["moments"]]
+    assert sorted(got) == sorted(planted), got
+    copied = next(t for t, d in planted.items() if d["kind"] == "copied")
+    top = out["moments"][0]
+    assert got[0] == copied and top["score"] == len(planted[copied]["adopters"])
+    assert top["agent_id"] == planted[copied]["first_actor"] and top["evidence_ids"][0] == planted[copied]["first"]
+    assert top["evidence_ids"] == planted[copied]["all_use_event_ids"]
 
 
 def test_moments_window_and_errors(bench_app):

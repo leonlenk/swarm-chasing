@@ -736,7 +736,9 @@ def register(mcp, ctx) -> None:
             try:
                 client = llm.get_client(ctx.config)
             except llm.LLMUnavailable as e:
-                raise ToolInputError(str(e)) from None
+                raise ToolInputError(
+                    f"{e} Without a key, name it yourself: subtasks_name(subtask_id, name=...)."
+                ) from None
             res = naming.generate(
                 client, inf, [(method, level, k)], store, unit_noun=c.unit_noun, scrub=ctx.scrub, cap=1, force=True
             )

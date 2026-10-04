@@ -55,8 +55,15 @@ def register(mcp, ctx) -> None:
         return engine.sweeps_dir(config)
 
     def masked(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Rows with their rationale masked: model output about dataset text can repeat what it masks."""
-        return [{**r, "rationale": ctx.scrub(r["rationale"])} if r.get("rationale") else r for r in rows]
+        """Verdicts for the caller: the rationale (model output about dataset text, which can repeat what
+        the record said) is masked and wrapped as ``{content, untrusted}`` like any other dataset text."""
+        out = []
+        for r in rows:
+            row = {k: v for k, v in r.items() if k != "untrusted"}
+            if "rationale" in row:
+                row["rationale"] = ctx.untrusted(row["rationale"])
+            out.append(row)
+        return out
 
     def resolver() -> engine.Resolver:
         """Ids resolve through the store's get_record (the same path as core_get), as standard records."""
@@ -72,9 +79,11 @@ def register(mcp, ctx) -> None:
     def gather(ids: list[str] | None, filters: dict[str, Any] | None, limit: int):
         """Records for a sweep, plus resolution errors, notes, the provider used, how many records matched
         in all and the note to show if the cap leaves some unsent."""
-        if ids and filters is not None:
+        if ids is not None and filters is not None:
             raise ToolInputError("Pass either ids or filters, not both.")
-        if ids:
+        if ids is not None:
+            if not ids:
+                raise ToolInputError("ids is empty: pass at least one record id, or use filters instead.")
             if len(ids) > engine.MAX_CAP * 4:
                 raise ToolInputError(f"At most {engine.MAX_CAP * 4} ids per call (got {len(ids)}).")
             records, errors = engine.resolve_ids(resolver(), ids, max_chars)
@@ -152,7 +161,9 @@ def register(mcp, ctx) -> None:
             try:
                 client = llm.get_client(config)  # before any work: no key, nothing happens
             except llm.LLMUnavailable as e:
-                raise ToolInputError(str(e)) from None
+                raise ToolInputError(
+                    f"{e} Dry runs (dry_run=true, the default) and cost estimates work without a key."
+                ) from None
         records, errors, notes, provider, total, cap_note = gather(ids, filters, cap)
         if not records:
             if errors:
@@ -250,22 +261,27 @@ def register(mcp, ctx) -> None:
         draw of new ones, recorded in the sweep's label file) plus the current precision. Read each item with
         core_get, decide whether the verdict is right, then call again with labels=[{event_id, correct}].
         With labels: records them (the latest label for an event wins) and returns the updated precision of the
-        'yes' verdicts with a Wilson 95% CI."""
+        'yes' verdicts with a Wilson 95% CI. labels=[] records nothing and draws nothing: it only returns the
+        current precision (omit labels to get items)."""
         d = directory()
-        if labels:
+        if labels is not None:
             engine.check_labels(sweep_id, [lb.event_id for lb in labels], d)  # all or nothing
             recorded = [engine.label(sweep_id, lb.event_id, lb.correct, d, note=lb.note) for lb in labels]
-            return {
+            out = {
                 "sweep_id": sweep_id,
                 "recorded": len(recorded),
                 "labels": recorded,
                 "precision": engine.precision(sweep_id, d),
             }
+            if not labels:
+                out["notes"] = ["labels is empty, so nothing was recorded; omit labels to get items to label"]
+            return out
         pending = engine.pending_labels(sweep_id, d)
         items = pending[:n]
         drawn = None
         if len(items) < n:
-            drawn = engine.sample_for_labeling(sweep_id, n - len(items), seed, d, tuple(verdicts or ("yes",)))
+            wanted = ("yes",) if verdicts is None else tuple(verdicts)
+            drawn = engine.sample_for_labeling(sweep_id, n - len(items), seed, d, wanted)
             items += drawn["items"]
         out: dict[str, Any] = {
             "sweep_id": sweep_id,

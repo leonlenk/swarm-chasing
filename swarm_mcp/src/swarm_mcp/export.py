@@ -1,7 +1,7 @@
 """Export a filtered, redacted subset of standard event records for sharing.
 
-    swarm-mcp export --out DIR [--source S] [--kind K] [--channel C] [--author A]
-                     [--since T] [--until T] [--query Q] [--with-agents] [--keep-ips] [--no-check]
+    swarm-mcp export --out DIR [--source S] [--kind K] [--type T] [--channel C] [--author A]
+                     [--since T] [--until T] [--query Q] [--with-agents] [--keep-ips] [--no-check] [--json]
 
 The command reads from the SwarmScope store (``scope.records.export_store``) and
 runs ``check`` on the result unless ``--no-check``. This module is the library.
@@ -123,10 +123,14 @@ def export(
     place only once everything succeeded. A failed export (a bad record, or a lazy store
     provider raising on an unknown source or a missing store) leaves an existing export
     untouched and removes the directories it created.
+
+    ``out_dir`` must be new, empty, or a previous export (only export files, with its manifest): anything else
+    is refused before writing, since the check would fail on every file the manifest does not list.
     """
     out = Path(out_dir)
     if out.exists() and not out.is_dir():
         raise ExportError(f"--out {out} exists and is not a directory")
+    _usable_out_dir(out)
     created = _missing_dirs(out)
     try:
         out.mkdir(parents=True, exist_ok=True)
@@ -153,6 +157,27 @@ def export(
                 break
         raise
     return manifest
+
+
+def _usable_out_dir(out: Path) -> None:
+    """Raise unless ``out`` does not exist, is empty, or holds only a previous export (its manifest included)."""
+    if not out.is_dir():
+        return
+    names = sorted(p.name for p in out.iterdir())
+    if not names:
+        return
+    other = [n for n in names if n not in (EVENTS_FILE, AGENTS_FILE, MANIFEST_FILE)]
+    try:
+        manifest = json.loads((out / MANIFEST_FILE).read_text(encoding="utf-8"))
+        is_export = isinstance(manifest, dict) and manifest.get("format") == EXPORT_FORMAT
+    except (OSError, ValueError, UnicodeDecodeError):
+        is_export = False
+    if other or not is_export:
+        shown = ", ".join(other[:5] or names[:5]) + (" ..." if len(other or names) > 5 else "")
+        raise ExportError(
+            f"--out {out} is not empty and is not a previous export (it holds {shown}); "
+            "pass a new or empty folder (nothing was written)"
+        )
 
 
 def _missing_dirs(path: Path) -> list[Path]:

@@ -235,8 +235,8 @@ tests, and `get_client(config)`, which refuses to build a client without
 
 `subtasks` (Rigel's) reads only the store: units are periods that records point at (pull
 requests, runs), else per-actor sessions; handoffs come from touches. Its tools are
-`subtasks_corpora`, `subtasks_list`, `subtasks_get`, `subtasks_trace_pair` and
-`subtasks_locate`. For git data, a repo is a bare clone with every PR head fetched:
+`subtasks_corpora`, `subtasks_list`, `subtasks_get`, `subtasks_trace_pair`,
+`subtasks_locate`, `subtasks_graph` and `subtasks_name`. For git data, a repo is a bare clone with every PR head fetched:
 
 ```bash
 git clone --bare https://github.com/ai-village-agents/rpg-game data/ai-village/repos/rpg-game.git

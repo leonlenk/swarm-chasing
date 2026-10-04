@@ -205,6 +205,21 @@ def test_store_backed_modules_read_it(bench, tmp_path: Path):
     batch = call(app, "core_get", ids=ids)
     assert batch["errors"] in ({}, []) and batch["returned"] == batch["requested"] == len(ids)
     assert [r["evidence_id"] for r in batch["results"]] == ids
+    # Regression: the bench docs named scope_trace_diffusion etc., tools that never existed.
+    # Every tool name the bench sources mention is one this server registers.
+    import re
+
+    from swarm_mcp import bench as bench_pkg
+    from swarm_mcp import sdk
+
+    tools = sdk.snapshot(app)["tools"]
+    tool_re = re.compile(r"\b(?:core|scope|sweep|findings|subtasks)_[a-z_]+\b|\bvillage_[a-z_]+(?=\()")
+    named = {
+        m.group()
+        for f in Path(bench_pkg.__file__).parent.glob("*.py")
+        for m in tool_re.finditer(f.read_text())
+    }
+    assert {"scope_search", "scope_moments"} <= named and named <= tools, sorted(named - tools)
 
 
 def test_scope_adapter_smoke_ingest(bench):

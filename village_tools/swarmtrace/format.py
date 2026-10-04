@@ -236,16 +236,32 @@ def dumps(obj):
 # --- PII scrubbing -------------------------------------------------------------------------------
 
 # Boundaries are ASCII (Python's \w is Unicode, so a CJK or accented letter next to an address or number used to hide
-# it). The email local part takes letters of scripts written with spaces (jöhn, иван) but not Han, kana, Hangul, Thai
-# and the like, so in "連絡はbob@example.comまで" the address starts at "bob".
+# it). The email local part takes letters of scripts written with spaces (jöhn, иван) and inner apostrophes
+# (o'neil), but not Han, kana, Hangul, Thai and the like, so in "連絡はbob@example.comまで" the address starts at "bob".
+# Domain labels take the same letters (пример.рф, münchen.de); the TLD is an xn-- punycode label, ASCII letters or
+# letters of one non-ASCII script, so "bob@example.comé" and "联系bob@example.com谢谢" stop after "com". Domains in
+# scripts written without spaces (例子.中国) are not caught in that form; their xn-- form is.
+# TWIN: swarm_mcp/src/swarm_mcp/redact.py _EMAIL uses the same pattern text; change both together.
 _NO_SPACE_SCRIPTS = "\u0e00-\u0eff\u1000-\u109f\u1780-\u17ff\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff66-\uff9f"
 _LOCAL = f"(?:[^\\W{_NO_SPACE_SCRIPTS}]|[.%+-])"
-EMAIL_RX = re.compile(rf"(?<!{_LOCAL}){_LOCAL}+@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{{2,}})(?![A-Za-z0-9-])")
-# Phone-like: 3-3-4 digit groups with separators (optionally +country / (area)), or +country followed by 2-4
-# separated groups. Separators are required so dates, versions, IPs, ids and hashes don't match.
-PHONE_RX = re.compile(r"(?<![A-Za-z0-9_.+/-])(?:\+\d{1,3}[\s.-]?)?(?:\(\d{3}\)\s?|\d{3}[\s.-])\d{3}[\s.-]\d{4}"
-                      r"(?![A-Za-z0-9_.-]*\d)"
-                      r"|(?<![A-Za-z0-9_+])\+\d{1,3}(?:[\s.-]\d{2,4}){2,4}(?![A-Za-z0-9_-])")
+_LABEL = f"(?:[^\\W_{_NO_SPACE_SCRIPTS}]|-)"
+_TLD = (f"(?:xn--[A-Za-z0-9-]+(?![A-Za-z0-9-])|[A-Za-z]{{2,}}(?![A-Za-z0-9])"
+        f"|[^\\W\\d_A-Za-z{_NO_SPACE_SCRIPTS}]{{2,}}(?![^\\W{_NO_SPACE_SCRIPTS}]))")
+EMAIL_RX = re.compile(rf"(?<!{_LOCAL}){_LOCAL}(?:{_LOCAL}|')*@((?:{_LABEL}+\.)+{_TLD})")
+# Phone-like: '+' then 8-15 digits with at most two separators between digits (not a plain decimal such as
+# +3.14159265), or North American 3-3-4 with separators (optional leading 1). 3-3-4 needs separators, so dates,
+# times, versions, IPs, money, ids and hashes don't match. A match takes the whole digit run or nothing: the '+'
+# number is possessive and no digit may follow later in the same token, so a failed check can't backtrack and leave
+# digits behind ("+44 20 7946 0958x" -> "[phone]x", never "[phone] 0958x"); letters may follow ("0134-ish").
+# TWIN: swarm_mcp/src/swarm_mcp/redact.py _PHONE uses the same pattern text; change both together.
+PHONE_RX = re.compile(
+    r"(?<![A-Za-z0-9_/.#@+-])(?:"
+    r"\+(?![0-9]+\.[0-9]+(?![0-9]|[ \t\u00a0\u202f.()-]{1,2}[0-9]))"
+    r"[1-9](?:[ \t\u00a0\u202f.()-]{0,2}[0-9]){7,14}+(?![ \t\u00a0\u202f.()-]{0,2}[0-9])"
+    r"|(?:1[ \t\u00a0\u202f.-])?(?:\([0-9]{3}\)[ \t\u00a0\u202f.-]?|[0-9]{3}[ \t\u00a0\u202f.-])"
+    r"[0-9]{3}[ \t\u00a0\u202f.-][0-9]{4}"
+    r")(?![A-Za-z0-9_.-]*[0-9])"
+)
 # Free-text fields that can carry raw agent/human content.
 _TEXT_FIELDS = {"events": ("snippet",), "quotes": ("text", "note"), "edges": ("evidence",), "annotations": ("label",)}
 _TEXT_LIMITS = {("events", "snippet"): SNIPPET_MAX, ("quotes", "text"): QUOTE_MAX}
@@ -450,7 +466,7 @@ def _validate(trace, max_bytes):
         err.at(k, "missing")
     for k in sorted(trace.keys() - _TOP):
         err.at(k, "unknown field")
-    if trace.get("version") != VERSION:
+    if trace.get("version") != VERSION or isinstance(trace.get("version"), bool):     # false == 0 in Python
         err.at("version", f"expected {VERSION}, got {trace.get('version')!r}")
     if not (isinstance(trace.get("id"), str) and _SLUG_RX.match(trace["id"])):
         err.at("id", f"not a lowercase slug: {trace.get('id')!r}")
@@ -505,7 +521,7 @@ def _validate(trace, max_bytes):
 
     ids = set()
     for p, e in items("events"):
-        if not isinstance(e.get("id"), str) or not e.get("id"):
+        if not isinstance(e.get("id"), str) or not e["id"].strip():
             err.at(f"{p}.id", "expected a non-empty string")
         else:
             if e["id"] in ids:
@@ -591,7 +607,7 @@ def validate_index(index):
     err = _Errors()
     if not isinstance(index, dict):
         return ["index: expected an object"]
-    if index.get("version") != VERSION:
+    if index.get("version") != VERSION or isinstance(index.get("version"), bool):
         err.at("version", f"expected {VERSION}, got {index.get('version')!r}")
     err.time("generated", index.get("generated"))
     tr = index.get("traces")

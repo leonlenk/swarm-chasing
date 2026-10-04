@@ -225,6 +225,34 @@ def test_reexport_without_agents_removes_stale_file(exported):
     assert manifest["records"]["agents"] is None and check(out).ok
 
 
+def test_export_refuses_a_folder_that_is_not_empty_or_an_export(exported, tmp_path):
+    """Regression: exporting into a folder with other files wrote the export, then failed the check on them."""
+    folder = tmp_path / "busy"
+    folder.mkdir()
+    (folder / "notes.txt").write_text("mine\n")
+    with pytest.raises(ExportError, match="not empty and is not a previous export .*notes.txt"):
+        export(records(), folder, Redactor())
+    assert sorted(p.name for p in folder.iterdir()) == ["notes.txt"]  # nothing written
+    (folder / "notes.txt").unlink()
+    (folder / MANIFEST_FILE).write_text('{"name": "not an export"}')
+    with pytest.raises(ExportError, match="not a previous export"):
+        export(records(), folder, Redactor())
+
+    out, _ = exported  # a previous export is replaced; with a stray file in it, it is refused
+    before = snapshot(out)
+    (out / "notes.txt").write_text("mine\n")
+    with pytest.raises(ExportError, match="notes.txt"):
+        export(records()[:1], out, Redactor())
+    (out / "notes.txt").unlink()
+    assert snapshot(out) == before
+    export(records()[:1], out, Redactor(allow_email_domains=["agentvillage.org"]))
+    assert check(out).ok
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    export(records(), empty, Redactor(allow_email_domains=["agentvillage.org"]))
+    assert check(empty).ok
+
+
 def test_bad_records_are_rejected(tmp_path):
     with pytest.raises(ExportError, match="record 2: Malformed evidence id"):
         export([records()[0], {"text": "no id"}], tmp_path / "x", Redactor())

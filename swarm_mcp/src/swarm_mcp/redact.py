@@ -381,15 +381,24 @@ def _r_keyword_secret(m: re.Match[str], r: Redactor) -> str | None:
 # --------------------------------------------------------------------------- email
 
 # The email pattern record-level masking (toolkit.Scrubber, via mask_text) and exports share.
-# Local part: ASCII plus letters of scripts written with spaces (jöhn, иван). Scripts written
-# without spaces (Han, kana, Hangul, Thai, ...) are excluded, so in "連絡はbob@example.comまで"
-# the address starts at "bob". The lookahead is ASCII-only. Both boundaries used Python's
-# Unicode \w, so a CJK character or an accented letter next to an address used to hide it.
+# TWIN: village_tools/swarmtrace/format.py EMAIL_RX uses the same pattern text; change both together.
+# Local part: ASCII plus letters of scripts written with spaces (jöhn, иван) and inner
+# apostrophes (o'neil). Scripts written without spaces (Han, kana, Hangul, Thai, ...) are
+# excluded, so in "連絡はbob@example.comまで" the address starts at "bob". Domain labels take the
+# same letters (пример.рф, münchen.de); the TLD is an xn-- punycode label, ASCII letters or
+# letters of one non-ASCII script, so "bob@example.comé" and "联系bob@example.com谢谢" stop after
+# "com". Boundaries used Python's Unicode \w, so a CJK character or an accented letter next to an
+# address used to hide it.
 _NO_SPACE_SCRIPTS = (
     "\u0e00-\u0eff\u1000-\u109f\u1780-\u17ff\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff66-\uff9f"
 )
 _EMAIL_LOCAL = f"(?:[^\\W{_NO_SPACE_SCRIPTS}]|[.%+-])"
-_EMAIL = re.compile(rf"(?<!{_EMAIL_LOCAL}){_EMAIL_LOCAL}+@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{{2,}})(?![A-Za-z0-9-])")
+_EMAIL_LABEL = f"(?:[^\\W_{_NO_SPACE_SCRIPTS}]|-)"
+_EMAIL_TLD = (
+    f"(?:xn--[A-Za-z0-9-]+(?![A-Za-z0-9-])|[A-Za-z]{{2,}}(?![A-Za-z0-9])"
+    f"|[^\\W\\d_A-Za-z{_NO_SPACE_SCRIPTS}]{{2,}}(?![^\\W{_NO_SPACE_SCRIPTS}]))"
+)
+_EMAIL = re.compile(rf"(?<!{_EMAIL_LOCAL}){_EMAIL_LOCAL}(?:{_EMAIL_LOCAL}|')*@((?:{_EMAIL_LABEL}+\.)+{_EMAIL_TLD})")
 
 
 def _r_email(m: re.Match[str], r: Redactor) -> str | None:
@@ -399,9 +408,10 @@ def _r_email(m: re.Match[str], r: Redactor) -> str | None:
     ``help@agentvillage.org`` and ``x@mail.agentvillage.org``, but not
     ``x@notagentvillage.org`` or ``x@agentvillage.org.evil.com``.
     False negatives: obfuscated addresses ("bob at example dot com"), addresses
-    without a TLD (``root@localhost``), non-ASCII (IDN) domains, and local parts in
-    scripts written without spaces (Han, kana, Thai...). False positives: ``name@2x.png``-style
-    asset names whose "TLD" is alphabetic (e.g. ``icon@retina.png``).
+    without a TLD (``root@localhost``, ``a@b``), and local parts or Unicode domains in
+    scripts written without spaces (Han, kana, Thai...; their ``xn--`` form is caught).
+    False positives: ``name@2x.png``-style asset names whose "TLD" is alphabetic
+    (e.g. ``icon@retina.png``).
     VCS service users (``git@github.com:org/repo.git``, ``ssh://hg@host``) are kept:
     they are not people and repo remotes are common research evidence.
     """
@@ -417,15 +427,24 @@ _VCS_USERS = frozenset({"git", "hg", "svn"})
 
 # --------------------------------------------------------------------------- phone
 
+# TWIN: village_tools/swarmtrace/format.py PHONE_RX uses the same pattern text; change both together.
+# Separators: space, tab, no-break spaces (U+00A0, U+202F), '.', '-', and '(' ')' in '+' numbers.
 _PHONE = re.compile(
-    r"(?<![A-Za-z0-9_/.:#=@+-])(?:"  # ASCII boundaries: '電話+81 ...です' is still a phone number
-    # international: '+', then 8-15 digits with at most two separators between digits
-    r"\+[1-9](?:[ .()-]{0,2}[0-9]){7,14}"
+    r"(?<![A-Za-z0-9_/.#@+-])(?:"  # ASCII boundaries: '電話+81 ...です' is still a phone number
+    # international: '+', then 8-15 digits with at most two separators between digits, not a
+    # plain decimal (+3.14159265). Possessive, and no digit may follow, so the match takes the
+    # whole digit run or nothing: a failed boundary check can't backtrack into the number and
+    # leave its tail behind ('+44 20 7946 0958x' -> '[phone]x', never '[phone] 0958x').
+    r"\+(?![0-9]+\.[0-9]+(?![0-9]|[ \t\u00a0\u202f.()-]{1,2}[0-9]))"
+    r"[1-9](?:[ \t\u00a0\u202f.()-]{0,2}[0-9]){7,14}+(?![ \t\u00a0\u202f.()-]{0,2}[0-9])"
     # North American 3-3-4: optional leading 1, separators required. Any digits are accepted
     # (not just valid NANP area codes/exchanges), keeping the recall of the old regex-only
     # toolkit.Scrubber, which masked placeholder-style numbers such as 555-123-4567 too.
-    r"|(?:1[ .-])?(?:\([0-9]{3}\)[ .-]?|[0-9]{3}[ .-])[0-9]{3}[ .-][0-9]{4}"
-    r")(?![A-Za-z0-9_-]|\.[0-9])"
+    r"|(?:1[ \t\u00a0\u202f.-])?(?:\([0-9]{3}\)[ \t\u00a0\u202f.-]?|[0-9]{3}[ \t\u00a0\u202f.-])"
+    r"[0-9]{3}[ \t\u00a0\u202f.-][0-9]{4}"
+    # end of the digit run: letters may follow ('0134x', '0134-ish' are masked), but no digit
+    # later in the same token ('415-555-0134.5', '123-456-7890ab1' look like ids and are kept)
+    r")(?![A-Za-z0-9_.-]*[0-9])"
 )
 
 

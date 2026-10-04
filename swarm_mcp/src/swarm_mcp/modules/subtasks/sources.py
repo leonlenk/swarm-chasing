@@ -26,7 +26,7 @@ from typing import Any
 
 from swarm_mcp.modules.subtasks.infer import PR_RX, Action, Change, ChatMsg, Inference, Unit, infer
 from swarm_mcp.scope.db import Store, norm
-from swarm_mcp.toolkit import TS_FORMAT
+from swarm_mcp.toolkit import TS_FORMAT, safe_label
 
 SESSION_GAP = 30 * 60
 
@@ -86,10 +86,11 @@ def identity_map(s: Store, source: str) -> tuple[dict[str, str], dict[str, list[
             continue
         own = [r["display_name"], *(r["aliases"] or [])]
         matches = set().union(*(keys.get(norm(n), set()) for n in own if n))
-        name = next(iter(matches)) if len(matches) == 1 else r["display_name"]
+        raw = next(iter(matches)) if len(matches) == 1 else r["display_name"]
+        name = safe_label(raw)  # shown bare in results
         out[r["agent_id"]] = name
         aliases[name].extend(n for n in own if n)
-        aliases[name].extend(sorted(other_aliases.get(name, ())))
+        aliases[name].extend(sorted(other_aliases.get(raw, ())))
     return out, dict(aliases)
 
 
@@ -270,7 +271,7 @@ def load_corpus(s: Store, source: str, session_gap: int = SESSION_GAP) -> Corpus
         for r in rows:
             nums = sorted({int(a or b) for a, b in PR_RX.findall(r["content"] or "")} & set(numbers))
             if nums:
-                actor = names.get(r["author_id"], r["author_id"])
+                actor = safe_label(names.get(r["author_id"], r["author_id"]))
                 chat.append(
                     ChatMsg(r["evidence_id"], _ts(r["ts"]), actor, r["content"] or "", [numbers[n] for n in nums])
                 )
