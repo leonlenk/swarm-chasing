@@ -310,7 +310,7 @@ RULES = [
      r"search[_ ]history|searched (the )?(history|transcript)"),
     ("R06", "ext_memory", "Externalise memory: keep important info in a repo/file and a pointer in memory",
      "G02;G03;G05;G12;WELCOME;G00(operator)", "2025-12-08",
-     "operator worksheet (2026-06-09) tells newcomers to work from a file 'rather than from memory'",
+     "operator worksheet (2026-06-09) tells newcomers to work from a file instead of relying on memory",
      r"external memory|pointer (to|in) (it|memory)|memory (system|tier)|three-tier|3-tier|bootloader|rather than from memory"),
     ("R07", "handoff", "Write handoff notes / session logs so successors (and future you) can pick up",
      "G01;G02;G03;G04;G05", "2025-04-24", "partly: memory-consolidation prompts (2025-04-15, 2025-10-14, 2026-03-26) shape what agents save",
@@ -327,11 +327,11 @@ RULES = [
      r"\bdid not\b|\bdidn'?t\b.{0,20}\b(verify|check|post|send)|honest(ly)?|uncertain|overclaim|no fake work"),
     ("R11", "short_msgs", "Keep chat messages short; don't spam or double-post",
      "G01;G08", "2025-04-24",
-     "prompt changes 2025-05-04 (double-chatting), 2025-05-16 (chat spam), 2026-05-22 (message length, computer-use prompt), 2026-05-28 ('keep messages short', text-only prompt)",
+     "prompt changes 2025-05-04 (double-chatting), 2025-05-16 (chat spam), 2026-05-22 (message length, computer-use prompt), 2026-05-28 (shorter messages, text-only prompt)",
      r"keep (it|this|messages|updates) (short|brief|concise)|double[- ]?(post|send)|avoid (spam|flooding)"),
     ("R12", "no_idle", "Don't idle or wait when blocked; pick up other useful work",
      "G01;G08", "2025-04-30",
-     "prompt 2025-08-01 ('keep going'), 2025-10-22 ('keep working until the end'), 2025-12-04 ('don't do nothing'); auto-nudger 2026-02-10",
+     "prompt 2025-08-01 (don't stop), 2025-10-22 (work to the end of the day), 2025-12-04 (avoid idling); auto-nudger 2026-02-10",
      r"pause[- ]loop|while (I'?m )?(blocked|waiting)|don'?t (just )?(wait|idle)|instead of waiting"),
     ("R13", "credit", "Acknowledge and attribute others' contributions",
      "G05;G10;WELCOME", "2026-02-18", "",
@@ -340,7 +340,7 @@ RULES = [
      "G01;G09;G10;WELCOME", "2025-04-24", "",
      r"independent(ly)? (verif|review|check|audit)|peer review|second pair of eyes|please (audit|review|verify)|non-self review"),
     ("R15", "privacy", "Protect secrets and personal data; never fabricate personal info",
-     "G06;G10", "2026-03-23", "prompt 2025-07-07 (don't say/remember sensitive personal info); PII redaction of screenshots 2025-07-03",
+     "G06;G10", "2026-03-23", "prompt 2025-07-07 (no repeating or storing sensitive personal details); PII redaction of screenshots 2025-07-03",
      r"\bPII\b|private key|secret|personal (info|data)|redact"),
     ("R16", "use_cli", "Use the CLI (git / gh / glab) rather than the browser for repo work",
      "G03;G04;G10;G00(operator)", "2026-02-18",
@@ -387,7 +387,7 @@ HANDCHECK = {"I0121/R11": 1, "I0022/R12": 0, "I0119/R12": 1, "I0121/R15": 1, "I0
 CHANGE_DATES = {"R05": ["2025-09-05", "2025-12-12", "2026-06-11"], "R09": ["2026-04-14"], "R11": ["2025-05-16", "2026-05-22", "2026-05-28"],
                 "R12": ["2025-10-22", "2025-12-04", "2026-02-10"], "R15": ["2025-07-07"], "R16": ["2026-01-12", "2026-06-29"],
                 "R06": ["2026-06-09"], "R07": ["2025-10-14", "2026-03-26"]}
-GUIDE_ANY = re.compile("|".join(f"(?:{g[2]})" for g in GUIDES) + r"|handbook|onboarding (guide|doc)|welcome (packet|kit)|tip from the village", re.I)
+GUIDE_ANY = re.compile("|".join(f"(?:{g[2]})" for g in GUIDES) + r"|handbook|onboarding (guide|doc)|welcome (packet|kit)|\btip\W+from\b.{0,6}\bvillage\b", re.I)
 
 
 def load_labels():
@@ -581,7 +581,7 @@ def stage_analyze():
                      "uptake_before": {r_: sum(lab[i].get(r_) in UPTAKE for i in before) for r_ in rids},
                      "uptake_after": {r_: sum(lab[i].get(r_) in UPTAKE for i in after) for r_ in rids}})
     res["tips"] = tips
-    # the "lane" idiom: picked up by newcomers from established agents, then passed on as a "tip from the village"
+    # the "lane" idiom: picked up by newcomers from established agents, then passed on as a village tip
     lane = re.compile(r"\blanes?\b", re.I)
     lane_first = {}
     for n in newc:
