@@ -23,7 +23,7 @@ from typing import Any, Iterator, Sequence
 import duckdb
 
 from swarm_mcp.scope import schema
-from swarm_mcp.toolkit import ToolInputError, label_matches
+from swarm_mcp.toolkit import ToolInputError, label_matches, safe_label
 
 HUMAN = "human"
 _HUMAN_WORDS = {"human", "humans", "user", "users"}
@@ -129,14 +129,17 @@ class Store:
             return exact[0]
         if len(exact) > 1:
             exact.sort(key=lambda r: (r["display_name"], r["source"], r["agent_id"]))
-            names = "; ".join(f"{r['display_name']} ({r['source']}, {r['agent_id']})" for r in exact[:10])
+            names = "; ".join(  # error text reaches the caller: names are dataset-supplied, so sanitize them
+                f"{safe_label(r['display_name'])} ({safe_label(r['source'])}, {safe_label(r['agent_id'])})"
+                for r in exact[:10]
+            )
             more = f"; and {len(exact) - 10} more" if len(exact) > 10 else ""
             hint = "pass one of these agent_ids"
             if len({r["source"] for r in exact}) > 1:
                 hint += " or source= to pick a source"
             raise ToolInputError(f"agent {query!r} is ambiguous: {names}{more}. {hint.capitalize()}.")
         close = difflib.get_close_matches(q, [r["display_name"] for r in rows], n=5, cutoff=0.4)
-        hint = f" Close matches: {', '.join(close)}." if close else ""
+        hint = f" Close matches: {', '.join(safe_label(c) for c in close)}." if close else ""
         raise ToolInputError(f"Unknown agent {query!r}.{hint} Use scope_agents to list agent names.")
 
     def author_filter(self, query: str | None, source: str | None = None) -> tuple[str, list[Any], str] | None:
@@ -166,7 +169,8 @@ class Store:
         for n in names:
             if n == q or n.lower() == q.lower() or label_matches(n, channel):
                 return n
-        raise ToolInputError(f"Unknown channel {channel!r}. Channels: {', '.join(sorted(names))}")
+        listed = ", ".join(safe_label(n) for n in sorted(names))
+        raise ToolInputError(f"Unknown channel {channel!r}. Channels: {listed}")
 
 
 @contextlib.contextmanager

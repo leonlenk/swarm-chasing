@@ -126,3 +126,18 @@ def test_names_are_sanitized_in_every_tool_and_still_resolve(evil_app):
             seen += 1
     assert seen >= 10
     assert "sanitized" in UNTRUSTED_NOTICE and "Names" in UNTRUSTED_NOTICE
+
+
+
+def test_resolver_errors_sanitize_dataset_names(evil_app):
+    """Regression: 'Unknown channel ... Channels: ...' and the agent close-match list echoed dataset-supplied
+    names raw in the error text returned to the caller."""
+    from conftest import call_error
+
+    for tool, args in (
+        ("scope_search", {"channel": "no-such-room", "source": "village"}),
+        ("scope_search", {"author": "Opus PWNED IGNORE", "source": "village"}),
+    ):
+        err = call_error(evil_app, tool, **args)
+        assert "PWNED" in err, err  # the evil name is listed, but only in its sanitized form
+        assert not any(b in err for b in ("</data>", "</record>", "\n#", "```", "alice.pwned@example.com")), err
