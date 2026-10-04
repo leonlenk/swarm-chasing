@@ -101,8 +101,9 @@ def _cfg(env: dict, **llm_settings) -> Config:
 def test_get_client_without_key_is_a_clear_error():
     with pytest.raises(LLMUnavailable, match="ANTHROPIC_API_KEY is not set"):
         llm.get_client(_cfg({}))
-    with pytest.raises(LLMUnavailable, match="Dry runs and cost estimates work without a key"):
+    with pytest.raises(LLMUnavailable, match="ANTHROPIC_API_KEY is not set") as e:
         llm.get_client(_cfg({"ANTHROPIC_API_KEY": "   "}))
+    assert "Dry run" not in str(e.value)  # get_client serves tools without a dry run too (subtasks_name)
 
 
 def test_get_client_with_key_builds_anthropic_client_from_config():
@@ -372,6 +373,7 @@ def test_sweep_run_defaults_to_a_dry_run_and_needs_a_key_to_execute(sweep_app):
     assert dry["preview"]["prompt"] and any("dry_run=false" in n for n in dry["notes"])
     err = call_error(app, "sweep_run", rubric="q?", ids=ids(3), dry_run=False)
     assert "ANTHROPIC_API_KEY is not set" in err and "no model calls were made" in err
+    assert "Dry runs (dry_run=true, the default) and cost estimates work without a key" in err
     assert not sweeps.exists()
 
 

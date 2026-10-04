@@ -161,7 +161,9 @@ def register(mcp, ctx) -> None:
             try:
                 client = llm.get_client(config)  # before any work: no key, nothing happens
             except llm.LLMUnavailable as e:
-                raise ToolInputError(str(e)) from None
+                raise ToolInputError(
+                    f"{e} Dry runs (dry_run=true, the default) and cost estimates work without a key."
+                ) from None
         records, errors, notes, provider, total, cap_note = gather(ids, filters, cap)
         if not records:
             if errors:

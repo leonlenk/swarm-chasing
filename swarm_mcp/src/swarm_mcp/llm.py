@@ -200,8 +200,7 @@ def get_client(config: "Config | None" = None) -> LLMClient:
     if not config.api_key:
         raise LLMUnavailable(
             "No LLM configured: ANTHROPIC_API_KEY is not set in the server's environment, so no model calls "
-            "were made. Set it (e.g. in .mcp.json's env block or your shell) and restart the server. "
-            "Dry runs and cost estimates work without a key."
+            "were made. Set it (e.g. in .mcp.json's env block or your shell) and restart the server."
         )
     try:
         import anthropic  # noqa: F401
