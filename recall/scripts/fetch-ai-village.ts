@@ -16,7 +16,8 @@
 // Small tables are cached in .hf/ (gitignored). computer_use_turns (~2.5 GB) is streamed once per
 // run and only the rows for the selected sessions are kept (cached as .hf/turns-slice-<hash>.jsonl).
 
-import { createReadStream, createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -25,10 +26,11 @@ import { pipeline } from 'node:stream/promises';
 import { createGunzip } from 'node:zlib';
 import {
   adaptAiVillageWindow, classifyTurn, hfTime, urlsIn, CLAIM_RE, rawCommand, INTERESTING_CMD,
-  type HfAgent, type HfChat, type HfEvent, type HfSession, type HfTurn,
+  type HfAgent, type HfChat, type HfEvent, type HfSession, type HfTurn, type HfTurnLite, refsIn,
 } from '../src/adapters/aiVillageHf';
 import { reconstruct } from '../src/engine/reconstruct';
 import { runMonitors } from '../src/engine/monitors';
+import { splitWindow } from '../src/adapters/splitWindow';
 
 type Row = Record<string, unknown>;
 const REPO = 'aidigestorg/ai-village';
@@ -272,6 +274,60 @@ async function findCandidates(verdicts: HfTurn[]): Promise<Candidate[]> {
   return out;
 }
 
+// ---------------------------------------------------------------- session-complete actions
+
+const SESSION_TURNS = join(CACHE, 'session-turns.jsonl');
+const EVENT_CAP = 1200;
+
+/** First non-comment line(s) of a command, joined and clipped (never the output). */
+function commandText(cmd: string): string {
+  const lines = cmd.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+  const t = lines.slice(0, 2).join(' ⏎ ');
+  return t.length > 240 ? `${t.slice(0, 239)}…` : t;
+}
+
+/**
+ * Every turn of the selected sessions inside any planned window, as lightweight records
+ * (command or computer action + output hash; no output body). One local pass, cached by plan.
+ */
+async function sessionTurnIndex(key: string, sessionIds: Set<string>, inRange: (raw: string) => boolean): Promise<HfTurnLite[]> {
+  if (existsSync(SESSION_TURNS) && !has('refresh')) {
+    const [head, ...rows] = readFileSync(SESSION_TURNS, 'utf8').split('\n').filter(Boolean);
+    if (JSON.parse(head).key === key) {
+      log(`  session turns: ${rows.length.toLocaleString()} from cache`);
+      return rows.map((r) => JSON.parse(r) as HfTurnLite);
+    }
+  }
+  const local = join(CACHE, 'computer_use_turns.jsonl.gz');
+  if (!existsSync(local)) fail('Session-complete actions need the local turns table: run `npm run data:download` first.');
+  log('→ extracting every turn of in-window sessions (one local pass)…');
+  const SID = /"session_id":\s*"([^"]+)"/;
+  const out: HfTurnLite[] = [];
+  let n = 0;
+  for await (const l of lines(local)) {
+    if (++n % 250000 === 0) process.stdout.write(`\r  scanned ${n.toLocaleString()} turns, kept ${out.length.toLocaleString()}`);
+    const sid = SID.exec(l.slice(0, 400))?.[1] ?? SID.exec(l)?.[1];
+    if (!sid || !sessionIds.has(sid)) continue;
+    const ts = RAW_TS.exec(l)?.[1];
+    if (!ts || !inRange(ts)) continue;
+    const r = JSON.parse(l) as HfTurn;
+    const a = (r.agent_action ?? null) as Record<string, unknown> | null;
+    const cmd = typeof a?.command === 'string' ? a.command : null;
+    const kind: HfTurnLite['kind'] = !a ? 'none' : cmd ? 'command' : 'computer';
+    const desc = [a?.action, a?.description, typeof a?.text === 'string' ? `"${String(a.text).slice(0, 60)}"` : null].filter(Boolean).join(' · ');
+    out.push({
+      id: r.id, session_id: r.session_id, created_at: r.created_at, kind,
+      ...(cmd ? { command: commandText(cmd), commandHash: createHash('sha1').update(cmd).digest('hex').slice(0, 12) } : {}), ...(kind === 'computer' ? { computerAction: desc.slice(0, 200) } : {}),
+      outputHash: createHash('sha1').update(`${r.output ?? ''}\u0000${r.error ?? ''}`).digest('hex').slice(0, 12),
+      ...(() => { const refs = refsIn(`${cmd ?? ''}\n${r.output ?? ''}`); return refs.length ? { refs } : {}; })(),
+      emptyOutput: !(r.output ?? '').trim() && !(r.error ?? '').trim(),
+    });
+  }
+  writeFileSync(SESSION_TURNS, [JSON.stringify({ key }), ...out.map((x) => JSON.stringify(x))].join('\n'));
+  log(`\r  scanned ${n.toLocaleString()} turns; ${out.length.toLocaleString()} in-window session turns → .hf/session-turns.jsonl`);
+  return out;
+}
+
 // ---------------------------------------------------------------- main
 
 async function main() {
@@ -356,18 +412,22 @@ async function main() {
   const chats: HfChat[] = [];
   for await (const l of lines(await cached('chat_messages.jsonl.gz'))) {
     const ts = RAW_TS.exec(l)?.[1];
-    if (ts && ts >= lo && ts < hi && inAny(ts, false)) chats.push(JSON.parse(l));
+    if (ts && ts >= lo && ts < hi && inAny(ts, true)) chats.push(JSON.parse(l)); // lookback kept for reference_seen
   }
   log(`  ${chats.length} chat messages`);
 
   const wanted = new Set(sessions.map((s) => s.id));
   const turns = verdicts.filter((t) => wanted.has(t.session_id));
   log(`→ ${turns.length} verdict-bearing turns in selected sessions (from local index)`);
+  const planKey = createHash('sha1').update(JSON.stringify(['v4-lookback', ...plans.map((p) => [p.id, p.from, p.to])])).digest('hex').slice(0, 12);
+  const sessionTurns = await sessionTurnIndex(planKey, wanted, (raw) => inAny(raw, true)); // lookback turns feed reference_seen only
 
-  // ---- build + validate each window
+  // ---- build each window, split into parts of <= EVENT_CAP events, validate and index every part
   mkdirSync(OUT, { recursive: true });
+  for (const f of readdirSync(OUT)) if (f.endsWith('.json')) rmSync(join(OUT, f)); // generated files only
   const generatedAt = new Date().toISOString();
   const index: Row[] = [];
+  const summary: string[] = [];
   for (const p of plans) {
     const fromIso = new Date(p.from).toISOString(); const toIso = new Date(p.to).toISOString();
     const pFrom = rawTs(p.from - LOOKBACK_MS); const pTo = rawTs(p.to);
@@ -381,56 +441,67 @@ async function main() {
       agents,
       sessions: ses,
       boundaries: boundaries.filter((b) => b.created_at >= pFrom && b.created_at < pTo),
-      chats: chats.filter((c) => c.created_at >= rawTs(p.from) && c.created_at < pTo),
+      chats: chats.filter((c) => c.created_at >= rawTs(p.from) && c.created_at < pTo), // window only; lookback feeds reference_seen
       turns: turns.filter((t) => sid.has(t.session_id)),
+      actions: sessionTurns.filter((t) => sid.has(t.session_id)),
+      maxEvents: Number.POSITIVE_INFINITY, // the cap is enforced by splitting, never by thinning
       generatedAt,
       rows: {} as Record<string, number>,
     };
     input.rows = {
       computer_use_sessions: input.sessions.length, events: input.boundaries.length,
-      chat_messages: input.chats.length, computer_use_turns: input.turns.length,
+      chat_messages: input.chats.length, computer_use_turns: input.turns.length, session_turns: input.actions.length,
     };
-    const doc = adaptAiVillageWindow(input);
-    const last = doc.events.length ? doc.events[doc.events.length - 1].sequence : 0;
-    const ws = reconstruct({ events: doc.events, withheld: new Set(), agents: doc.agents }, last);
-    const findings = runMonitors(ws);
-    writeFileSync(join(OUT, `${p.id}.json`), JSON.stringify(doc));
-    const counts = {
-      events: doc.events.length,
-      tasks: ws.tasks.size,
-      agents: doc.agents.length,
-      claims: ws.claims.size,
-      toolResults: doc.events.filter((e) => e.type === 'tool_result').length,
-      findingsActive: findings.filter((f) => f.state === 'active').length,
-      findingsTotal: findings.length,
-    };
-    // Highlights must describe what the analysis actually found in this build, not what we expected.
-    const active = findings.filter((f) => f.state === 'active');
-    const highlight = findings.length
-      ? `${findings.length} finding${findings.length > 1 ? 's' : ''}${active.length ? ` (${active.length} active)` : ', all resolved'}: ${(active[0] ?? findings[0]).summary}`
-      : p.why.startsWith('auto') ? 'No findings with the current rules.' : p.highlight;
+    const whole = adaptAiVillageWindow(input);
+    const actionsAdded = whole.events.filter((e) => e.type === 'action').length;
+    const wholeWs = reconstruct({ events: whole.events, withheld: new Set(), agents: whole.agents, referencesSeen: whole.referencesSeen }, whole.events.length);
+    const wholeFindings = runMonitors(wholeWs);
     // Auto-picked windows are named after what they contain, not just the village goal.
-    const subjectHost = (f: (typeof findings)[number]) => {
-      const a = ws.claims.get(f.claimId)?.subject?.artifact ?? '';
+    const subjectHost = (f: (typeof wholeFindings)[number]) => {
+      const a = wholeWs.claims.get(f.claimId)?.subject?.artifact ?? '';
       return a.replace(/^https?:\/\//, '').split('/')[0].split('.')[0].replace(/-[0-9a-f]{6}$/, '');
     };
-    const label = p.why.startsWith('auto') && findings.length
-      ? `${new Date(p.from).toUTCString().slice(5, 16)} · "Live" announcements vs checks (${subjectHost(active[0] ?? findings[0])})`
+    const wActive = wholeFindings.filter((f) => f.state === 'active');
+    const windowLabel = p.why.startsWith('auto') && wholeFindings.length
+      ? `${new Date(p.from).toUTCString().slice(5, 16)} · "Live" announcements vs checks (${subjectHost(wActive[0] ?? wholeFindings[0])})`
       : input.label;
-    index.push({ id: p.id, file: `${p.id}.json`, label, goal: p.goal, window: input.window, counts, highlight });
-    if (label !== input.label) {
-      doc.label = label;
-      writeFileSync(join(OUT, `${p.id}.json`), JSON.stringify(doc));
-    }
-    log(`\n✓ ${p.id}: ${counts.events} events · ${counts.tasks} tasks · ${counts.agents} agents · ${counts.claims} claims · ${counts.toolResults} verdicts · findings ${counts.findingsTotal} (${counts.findingsActive} active)`);
-    for (const f of findings) {
-      const claimEv = ws.byId.get(f.evidence.find((x) => x.role.startsWith('Completion'))?.eventId ?? f.detectedEventId);
-      const failEv = ws.byId.get(f.evidence[0]?.eventId ?? '');
-      log(`  [${f.monitor} · ${f.state}] ${f.summary}`);
-      if (claimEv) log(`     claim  ${claimEv.id} @ ${claimEv.timestamp.slice(11, 19)}: ${claimEv.text.slice(0, 160).replace(/\n/g, ' ')}`);
-      if (failEv && failEv.type === 'tool_result') log(`     check  ${failEv.id} @ ${failEv.timestamp.slice(11, 19)}: ${failEv.text.slice(0, 160)}`);
-    }
+    whole.label = windowLabel;
+
+    // reference_seen from the 12 h lookback: refs in chat and session turns before the window opens.
+    const lbFrom = rawTs(p.from - LOOKBACK_MS); const lbTo = rawTs(p.from);
+    const lookbackRefs = [
+      ...chats.filter((c) => c.created_at >= lbFrom && c.created_at < lbTo).flatMap((c) => refsIn(c.content ?? '').map((ref) => ({ ref, sourceEventId: `chat/${c.id}` }))),
+      ...sessionTurns.filter((t) => t.created_at >= lbFrom && t.created_at < lbTo).flatMap((t) => (t.refs ?? []).map((ref) => ({ ref, sourceEventId: `act/${t.id}` }))),
+    ];
+    const parts = splitWindow(whole, EVENT_CAP, lookbackRefs);
+    log(`\n✓ ${p.id}: ${whole.events.length} events (${actionsAdded} session actions added) → ${parts.length} part${parts.length > 1 ? 's' : ''} of ≤${EVENT_CAP} in-range · ${lookbackRefs.length} lookback references`);
+    summary.push(`${p.id.padEnd(24)} actions +${String(actionsAdded).padStart(5)} · ${String(whole.events.length).padStart(5)} events → ${parts.length} parts · carried per part ${parts.map((x) => x.meta?.part?.carried ?? 0).join('/')}`);
+    parts.forEach((part, k) => {
+      const stem = parts.length > 1 ? `${p.id}-p${k + 1}` : p.id;
+      const ws = reconstruct({ events: part.events, withheld: new Set(), agents: part.agents, referencesSeen: part.referencesSeen }, part.events.length);
+      const findings = runMonitors(ws);
+      const active = findings.filter((f) => f.state === 'active');
+      const counts = {
+        events: part.events.length, carried: part.meta?.part?.carried ?? 0, tasks: ws.tasks.size, agents: part.agents.length,
+        claims: ws.claims.size, actions: part.events.filter((e) => e.type === 'action').length,
+        toolResults: part.events.filter((e) => e.type === 'tool_result').length,
+        findingsActive: active.length, findingsTotal: findings.length,
+      };
+      // Highlights describe what this part actually contains, never what we expected.
+      const highlight = findings.length
+        ? `${findings.length} finding${findings.length > 1 ? 's' : ''}${active.length ? ` (${active.length} active)` : ', all resolved'}: ${(active[0] ?? findings[0]).summary}`
+        : p.why.startsWith('auto') ? 'No findings in this part with the current rules.' : p.highlight;
+      writeFileSync(join(OUT, `${stem}.json`), JSON.stringify(part));
+      const range = part.meta?.window;
+      index.push({
+        id: stem, file: `${stem}.json`, goal: p.goal, counts, highlight,
+        label: parts.length > 1 ? `${windowLabel} · part ${k + 1}/${parts.length} · ${range?.from.slice(11, 16)}–${range?.to.slice(11, 16)}` : windowLabel,
+        window: range ?? input.window, parent: p.id, parentLabel: windowLabel, part: k + 1, parts: parts.length,
+      });
+      log(`  ${stem}: ${counts.events} events (${counts.carried} carried) · ${counts.actions} actions · ${counts.claims} claims · ${counts.toolResults} verdicts · findings ${counts.findingsTotal} (${counts.findingsActive} active)`);
+    });
   }
+  log(`\nSession-complete actions per window:\n  ${summary.join('\n  ')}`);
   // Most informative first: active findings, then any findings; curated order otherwise (stable sort).
   const score = (r: Row) => { const c = r.counts as Record<string, number>; return c.findingsActive * 1000 + c.findingsTotal; };
   index.sort((a, b) => score(b) - score(a));

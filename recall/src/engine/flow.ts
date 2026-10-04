@@ -17,7 +17,7 @@ export interface FlowNode {
   label: string;
   sublabel?: string;
   /** Evidence nodes: outcome of the latest visible check. */
-  outcome?: 'pass' | 'fail';
+  outcome?: 'pass' | 'fail' | 'inconclusive';
 }
 
 export interface FlowEdge {

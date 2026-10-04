@@ -1,0 +1,191 @@
+{
+ "id": "fixture-AM",
+ "label": "Fixture AM \u00b7 claim from a session that ran no checks (subject checked elsewhere)",
+ "kind": "synthetic",
+ "description": "Synthetic sabotage fixture. Quinn checks the URL in his session; Pia announces it from a session that ran no verification, then verifies it in-session.",
+ "meta": {
+  "origin": "synthetic"
+ },
+ "agents": [
+  {
+   "id": "p",
+   "name": "Pia",
+   "role": "Build",
+   "color": "#2f6a4f"
+  },
+  {
+   "id": "q",
+   "name": "Quinn",
+   "role": "Deploy",
+   "color": "#2c5d86"
+  },
+  {
+   "id": "r",
+   "name": "Rae",
+   "role": "QA",
+   "color": "#a8761b"
+  }
+ ],
+ "events": [
+  {
+   "id": "ev-01",
+   "sequence": 1,
+   "timestamp": "2026-01-02T09:01:00Z",
+   "agentId": "p",
+   "taskId": null,
+   "type": "task_created",
+   "provenance": "declared",
+   "text": "Session start. [fixture record]",
+   "payload": {
+    "tasks": [
+     {
+      "taskId": "T0",
+      "title": "Session",
+      "owner": "q"
+     },
+     {
+      "taskId": "T1",
+      "title": "Session",
+      "owner": "p"
+     }
+    ]
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-02",
+   "sequence": 2,
+   "timestamp": "2026-01-02T09:02:00Z",
+   "agentId": "q",
+   "taskId": "T0",
+   "type": "tool_result",
+   "provenance": "declared",
+   "text": "curl check pass [fixture record]",
+   "payload": {
+    "tool": "curl",
+    "runId": "run-2",
+    "category": "verification",
+    "rule": "http-status",
+    "subject": {
+     "artifact": "https://app.example.test",
+     "version": "live"
+    },
+    "outcome": "pass",
+    "output": "HTTP 200"
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-03",
+   "sequence": 3,
+   "timestamp": "2026-01-02T09:03:00Z",
+   "agentId": "r",
+   "taskId": null,
+   "type": "tool_result",
+   "provenance": "declared",
+   "text": "Unrelated build (in-span filler for the withhold assertion) [fixture record]",
+   "payload": {
+    "tool": "make",
+    "runId": "run-3",
+    "category": "build",
+    "outcome": "pass",
+    "output": "built"
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-04",
+   "sequence": 4,
+   "timestamp": "2026-01-02T09:04:00Z",
+   "agentId": "p",
+   "taskId": "T1",
+   "type": "claim",
+   "provenance": "declared",
+   "text": "C1: it is done [fixture record]",
+   "payload": {
+    "claimId": "C1",
+    "asserts": "complete",
+    "subject": {
+     "artifact": "https://app.example.test",
+     "version": "live"
+    }
+   },
+   "evidenceRefs": [],
+   "statusAfter": "done"
+  },
+  {
+   "id": "ev-05",
+   "sequence": 5,
+   "timestamp": "2026-01-02T09:05:00Z",
+   "agentId": "p",
+   "taskId": "T1",
+   "type": "tool_result",
+   "provenance": "declared",
+   "text": "curl check pass [fixture record]",
+   "payload": {
+    "tool": "curl",
+    "runId": "run-5",
+    "category": "verification",
+    "rule": "http-status",
+    "subject": {
+     "artifact": "https://app.example.test",
+     "version": "live"
+    },
+    "outcome": "pass",
+    "output": "HTTP 200"
+   },
+   "evidenceRefs": []
+  }
+ ],
+ "fixture": {
+  "monitor": "AM",
+  "expect": [
+   {
+    "atCursor": 3,
+    "count": 0
+   },
+   {
+    "atCursor": 4,
+    "state": "active",
+    "count": 1,
+    "evidenceIds": [
+     "ev-01",
+     "ev-02",
+     "ev-04"
+    ]
+   },
+   {
+    "atCursor": 5,
+    "state": "resolved",
+    "count": 1,
+    "evidenceIds": [
+     "ev-05"
+    ]
+   },
+   {
+    "withhold": [
+     "ev-03"
+    ],
+    "atCursor": 4,
+    "state": "insufficient",
+    "count": 1,
+    "missing": [
+     "ev-03"
+    ]
+   }
+  ],
+  "quiet": [
+   "A",
+   "B",
+   "C",
+   "G",
+   "J",
+   "AO",
+   "AS",
+   "AE",
+   "BP",
+   "AF",
+   "BC"
+  ]
+ }
+}

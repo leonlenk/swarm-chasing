@@ -19,7 +19,8 @@ export function Timeline({ compact = false }: { compact?: boolean }) {
 
   // Sparse logs show every event; dense logs show notable events only (claims, results, corrections, actions).
   const ticks = useMemo(() => dense
-    ? events.filter((e) => e.type !== 'message' && e.type !== 'status_updated' && e.type !== 'task_created')
+    ? events.filter((e) => e.type !== 'message' && e.type !== 'status_updated' && e.type !== 'task_created' &&
+        !(e.type === 'action' && !e.payload.referencesClaims.length) && !e.carried)
     : events, [events, dense]);
   const labels = useMemo(() => {
     if (!events.length) return [];

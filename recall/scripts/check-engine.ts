@@ -12,6 +12,7 @@ import { parseRecallDocument } from '../src/adapters/syntheticAdapter';
 import { reconstruct } from '../src/engine/reconstruct';
 import { assertFinding, findingProblems, register, registry, runMonitors, type Finding, type MonitorDef } from '../src/engine/monitors';
 import type { FixtureBlock, FixtureExpect } from '../src/data/fixtures';
+import { goalChurn } from '../src/engine/meta';
 import type { DataSource } from '../src/model/types';
 
 const ROOT = join(import.meta.dirname, '..');
@@ -22,7 +23,7 @@ const record = (suite: string, name: string, ok: boolean | 'skip', detail?: stri
 const load = (p: string) => JSON.parse(readFileSync(join(ROOT, p), 'utf8')) as DataSource & { fixture?: FixtureBlock };
 
 function world(doc: DataSource, cursor: number, withhold: string[] = []) {
-  return reconstruct({ events: doc.events, withheld: new Set(withhold), agents: doc.agents }, cursor);
+  return reconstruct({ events: doc.events, withheld: new Set(withhold), agents: doc.agents, referencesSeen: doc.referencesSeen }, cursor);
 }
 
 /** Runs monitors, turning assertFinding violations into a failed assertion instead of a crash. */
@@ -45,6 +46,7 @@ function checkExpect(doc: DataSource, monitor: string, x: FixtureExpect): string
   const evidence = new Set(findings.flatMap((f) => f.evidence.map((e) => e.eventId)));
   for (const id of x.evidenceIds ?? []) if (!evidence.has(id)) problems.push(`evidence[] lacks ${id}`);
   for (const id of x.missing ?? []) if (!findings.some((f) => f.missing.some((m) => m.includes(id)))) problems.push(`missing[] does not name ${id}`);
+  for (const a of x.attributes ?? []) for (const f of findings) if (!f.attributes?.includes(a)) problems.push(`${f.id} lacks attribute "${a}"`);
   return problems;
 }
 
@@ -74,8 +76,8 @@ function runFixture(suite: string, path: string, doc0: DataSource & { fixture?: 
     }
     record(suite, `quiet    ${fx.quiet.join(', ')} produce nothing at any cursor`, noisy.length === 0, [...new Set(noisy)].slice(0, 4).join('; '));
   }
-  const live = fx.expect.some((x) => (x.monitor ?? fx.monitor) === fx.monitor && x.state === 'active' && !x.withhold?.length && (x.count ?? 1) > 0);
-  record(suite, `live     ${fx.monitor} has an active expectation (not vacuous)`, live, live ? undefined : 'fixture never expects an active finding');
+  const live = fx.expect.some((x) => (x.monitor ?? fx.monitor) === fx.monitor && (x.state === 'active' || (fx.neverActive && x.state === 'insufficient')) && !x.withhold?.length && (x.count ?? 1) > 0);
+  record(suite, `live     ${fx.monitor} has an ${fx.neverActive ? 'insufficient (never-active by ruling)' : 'active'} expectation (not vacuous)`, live, live ? undefined : 'fixture never expects an active finding');
 }
 
 // ---------------------------------------------------------------- 1. registry
@@ -107,7 +109,7 @@ refuses('a fixture without an expect block', () => register([fake('A')], { A: { 
   rejects('a withheld record not named in missing[]', { ...base, state: 'insufficient', evidence: [...base.evidence, { eventId: 'ev-05', role: 'check' }] });
   rejects('evidence after the cursor (future leakage)', { ...base, evidence: [...base.evidence, { eventId: 'ev-14', role: 'later' }] });
   rejects('a finding with no linked evidence', { ...base, evidence: [] });
-  rejects('"insufficient" with nothing unavailable', { ...base, state: 'insufficient' });
+  rejects('"insufficient" that names nothing in missing[]', { ...base, state: 'insufficient' });
   rejects('"resolved" without a resolution record', { ...base, state: 'resolved' });
   rejects('a state outside the three', { ...base, state: 'maybe' as Finding['state'] });
   // Production mode never drops: a violating finding becomes insufficient, naming each failed check.
@@ -125,31 +127,65 @@ refuses('a fixture without an expect block', () => register([fake('A')], { A: { 
 // ---------------------------------------------------------------- 2. fixtures
 for (const m of registry) if (existsSync(join(ROOT, m.fixture))) runFixture(`fixture ${m.id}`, m.fixture, load(m.fixture));
 
+// ---------------------------------------------------------------- 2b. meta (BG goal churn)
+{
+  const mk = (goals: string[], claim = false): DataSource => ({
+    id: 'meta-bg', label: 'meta BG', kind: 'synthetic', description: 'synthetic', agents: [{ id: 'p', name: 'Pia', role: 'x', color: '#000' }],
+    events: [
+      ...goals.map((g, n) => ({ id: `s${n + 1}`, sequence: n + 1, timestamp: '2026-01-02T09:00:00Z', agentId: 'p', taskId: null, type: 'task_created', provenance: 'declared', text: '',
+        payload: { tasks: [{ taskId: `T${n + 1}`, title: g, owner: 'p', goalKey: g }] }, evidenceRefs: [] })),
+      ...(claim ? [{ id: 'c1', sequence: 99, timestamp: '2026-01-02T10:00:00Z', agentId: 'p', taskId: 'T1', type: 'claim', provenance: 'declared', text: '', payload: { claimId: 'C1', asserts: 'complete' }, evidenceRefs: [] }] : []),
+    ],
+  }) as unknown as DataSource;
+  const distinct = ['deploy the site', 'write release notes', 'fix login bug', 'tidy the wiki', 'email the donors'];
+  const at = (d: DataSource) => goalChurn(world(parseRecallDocument(d), 999)).length;
+  record('meta BG', 'fires: 5 pairwise-distinct goals, no verdicts, no claims → 1 agent', at(mk(distinct)) === 1);
+  record('meta BG', 'quiet: 4 distinct goals (below 5)', at(mk(distinct.slice(0, 4))) === 0);
+  record('meta BG', 'quiet: overlapping goals (Jaccard >= 0.3) are not churn', at(mk(['deploy the site', 'deploy the site again', 'deploy site now', 'tidy the wiki', 'email the donors'])) === 0);
+  record('meta BG', 'quiet: the agent made a claim in the window', at(mk(distinct, true)) === 0);
+}
+
 // ---------------------------------------------------------------- 3. integration
 runFixture('integration', 'src/data/synthetic-release.json', load('src/data/synthetic-release.json'));
 
 // ---------------------------------------------------------------- 4. regression
-interface RegCase { name: string; slice: string; monitor?: string; claimId?: string; claimEventId?: string; subject?: string; state: 'active' | 'resolved' | 'insufficient' | 'none' }
+interface RegCase { name: string; slice: string; monitor?: string; claimId?: string; claimEventId?: string; subject?: string; monitors?: string[]; state: 'active' | 'resolved' | 'insufficient' | 'none' }
 const reg = JSON.parse(readFileSync(join(ROOT, 'src/data/regression.json'), 'utf8')) as { cases: RegCase[] };
 // Skip only when no data has been built at all. Once public/data exists, a missing pinned slice is a failure:
 // it means the window plan or the build changed underneath a validated finding.
-const dataBuilt = existsSync(join(ROOT, 'public/data'));
+// A pinned slice is a WINDOW: it may be split into parts (index entries with parent = slice). The window's verdict
+// for a claim is its state in the last part that contains the finding (the most complete record).
+const dataDir = join(ROOT, 'public/data');
+const dataBuilt = existsSync(dataDir);
+const indexEntries: { id: string; file: string; parent?: string; part?: number }[] =
+  dataBuilt && existsSync(join(dataDir, 'index.json')) ? JSON.parse(readFileSync(join(dataDir, 'index.json'), 'utf8')).sources : [];
 for (const c of reg.cases) {
-  const file = join(ROOT, 'public/data', `${c.slice}.json`);
   if (!dataBuilt) { record('regression', c.name, 'skip', 'public/data/ not built (npm run data:build)'); continue; }
-  if (!existsSync(file)) { record('regression', c.name, false, `public/data exists but ${c.slice}.json is missing: the pinned slice was not built`); continue; }
-  const doc = parseRecallDocument(JSON.parse(readFileSync(file, 'utf8')));
-  const last = doc.events[doc.events.length - 1]?.sequence ?? 0;
-  const { findings, error } = findingsOf(doc, last, []);
-  if (error) { record('regression', c.name, false, error); continue; }
-  if (c.state === 'none') {
-    const ws = world(doc, last);
-    const hits = findings.filter((f) => ws.claims.get(f.claimId)?.subject?.artifact === c.subject);
-    record('regression', c.name, hits.length === 0, hits.map((f) => `${f.id}[${f.state}]`).join(', '));
+  const parts = indexEntries.filter((e) => e.id === c.slice || e.parent === c.slice).sort((x, y) => (x.part ?? 1) - (y.part ?? 1));
+  if (!parts.length || parts.some((e) => !existsSync(join(dataDir, e.file)))) {
+    record('regression', c.name, false, `public/data exists but window ${c.slice} is missing or incomplete: the pinned slice was not built`);
     continue;
   }
-  const hit = findings.find((f) => f.monitor === c.monitor && (f.claimId === c.claimId || f.detectedEventId === c.claimEventId));
-  record('regression', c.name, !!hit && hit.state === c.state, hit ? `got "${hit.state}"` : `no ${c.monitor} finding for ${c.claimId}`);
+  const perPart = parts.map((e) => {
+    const doc = parseRecallDocument(JSON.parse(readFileSync(join(dataDir, e.file), 'utf8')));
+    const last = doc.events[doc.events.length - 1]?.sequence ?? 0;
+    return { id: e.id, doc, last, ...findingsOf(doc, last, []) };
+  });
+  const broken = perPart.find((x) => x.error);
+  if (broken) { record('regression', c.name, false, `${broken.id}: ${broken.error}`); continue; }
+  if (c.state === 'none') {
+    const hits = perPart.flatMap((x) => {
+      const ws = world(x.doc, x.last);
+      return x.findings.filter((f) => (!c.monitors || c.monitors.includes(f.monitor)) && ws.claims.get(f.claimId)?.subject?.artifact === c.subject).map((f) => `${x.id}:${f.id}[${f.state}]`);
+    });
+    record('regression', c.name, hits.length === 0, hits.slice(0, 3).join(', '));
+    continue;
+  }
+  const containing = perPart.filter((x) => x.findings.some((f) => f.monitor === c.monitor && (f.claimId === c.claimId || f.detectedEventId === c.claimEventId)));
+  const lastPart = containing[containing.length - 1];
+  const hit = lastPart?.findings.find((f) => f.monitor === c.monitor && (f.claimId === c.claimId || f.detectedEventId === c.claimEventId));
+  record('regression', c.name, !!hit && hit.state === c.state,
+    hit ? `got "${hit.state}" in ${lastPart.id} (${containing.length} part${containing.length > 1 ? 's' : ''} contain it)` : `no ${c.monitor} finding for ${c.claimId} in any of ${parts.length} part(s)`);
 }
 
 // ---------------------------------------------------------------- report

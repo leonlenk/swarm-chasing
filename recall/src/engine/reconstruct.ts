@@ -2,7 +2,7 @@
 // Pure: takes the prefix of the log, never consults later events.
 
 import type {
-  ArtifactRef, EventOf, EvidenceStatus, Provenance, RecallEvent, TaskStatus,
+  ArtifactRef, EventOf, EvidenceStatus, Provenance, RecallEvent, TaskStatus, EventType, ReferenceSeen,
 } from '../model/types';
 
 export interface StatusChange {
@@ -63,12 +63,20 @@ export interface AnalysisInput {
   withheld: ReadonlySet<string>;
   /** Display names, so monitors can phrase findings from WorldState alone. */
   agents?: ReadonlyArray<{ id: string; name: string }>;
+  /** reference_seen records carried from earlier in the window (see DataSource.referencesSeen). */
+  referencesSeen?: ReadonlyArray<ReferenceSeen>;
 }
 
 export interface WorldState {
   cursor: number;
   /** Ids withheld from this analysis whose time has already passed. Their content is not retained. */
   withheld: string[];
+  /** Position (sequence) of each withheld record at or before the cursor. Positions only, never content. */
+  withheldSeqs: Map<string, number>;
+  /** Event type of each withheld record (type only, never content), so monitors degrade only on types they read. */
+  withheldTypes: Map<string, EventType>;
+  /** reference_seen records at or before the cursor. */
+  referencesSeen: ReadonlyArray<ReferenceSeen>;
   refStatus: (id: string) => RefStatus;
   /** Agent display name (falls back to the id). */
   agentName: (id: string) => string;
@@ -197,6 +205,10 @@ export function reconstruct(input: AnalysisInput, cursor: number): WorldState {
   // Only sequence numbers are kept for the full log, so withheld/future content can't leak.
   const seqOf = new Map(events.map((e) => [e.id, e.sequence] as const));
   const withheld = [...hidden].filter((id) => (seqOf.get(id) ?? Infinity) <= cursor);
+  const withheldSeqs = new Map(withheld.map((id) => [id, seqOf.get(id)!] as const));
+  const typeOf = new Map(events.map((e) => [e.id, e.type] as const));
+  const withheldTypes = new Map(withheld.map((id) => [id, typeOf.get(id)!] as const));
+  const referencesSeen = (input.referencesSeen ?? []).filter((r) => r.sequence <= cursor);
   const refStatus = (id: string): RefStatus => {
     if (byId.has(id)) return 'available';
     const seq = seqOf.get(id);
@@ -250,7 +262,7 @@ export function reconstruct(input: AnalysisInput, cursor: number): WorldState {
   const claims = new Map<string, ClaimState>();
   for (const e of visible) if (e.type === 'claim') claims.set(e.payload.claimId, evaluateClaim(e, visible, refStatus));
 
-  const partial = { cursor, withheld, refStatus, agentName, visible, byId, edges, claims };
+  const partial = { cursor, withheld, withheldSeqs, withheldTypes, referencesSeen, refStatus, agentName, visible, byId, edges, claims };
   for (const t of tasks.values()) {
     const [status, reason] = evidenceForTask(t, partial);
     t.evidenceStatus = status;

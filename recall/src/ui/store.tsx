@@ -8,7 +8,7 @@ import { runMonitors } from '../engine/monitors';
 
 const synthetic = loadSyntheticRelease();
 const SYNTHETIC_ENTRY: SourceEntry = {
-  id: synthetic.id, label: 'Synthetic release demo', group: 'Demo', description: synthetic.description,
+  id: synthetic.id, label: 'Synthetic release demo', group: 'Demo', origin: 'synthetic', description: synthetic.description,
   counts: { events: synthetic.events.length }, load: async () => synthetic,
 };
 const DATA_BASE = `${import.meta.env.BASE_URL}data/`;
@@ -98,7 +98,9 @@ export function RecallProvider({ children }: { children: ReactNode }) {
         if (res.ok) {
           const idx = (await res.json()) as HfIndex;
           hf = idx.sources.map((s) => ({
-            id: s.id, label: s.label, group: 'AI Village · Hugging Face' as const, description: s.goal,
+            id: s.id, label: s.parts && s.parts > 1 ? `Part ${s.part}/${s.parts} · ${s.window?.from.slice(11, 16) ?? ''}–${s.window?.to.slice(11, 16) ?? ''}` : s.label,
+            group: s.parentLabel ?? 'AI Village · Hugging Face', origin: 'huggingface' as const, description: s.goal,
+            part: s.parts && s.parts > 1 ? { index: s.part ?? 1, count: s.parts, parent: s.parent ?? s.id } : undefined,
             window: s.window, counts: s.counts, highlight: s.highlight,
             load: async () => {
               const r = await fetch(`${DATA_BASE}${s.file}`);
@@ -146,15 +148,28 @@ export function RecallProvider({ children }: { children: ReactNode }) {
   const events = useMemo(() => source?.events ?? [], [source]);
   const minSeq = events[0]?.sequence ?? 0;
   const maxSeq = events[events.length - 1]?.sequence ?? 0;
-  const seek = useCallback((seq: number) => { setPlaying(false); setCursor(Math.max(minSeq, Math.min(maxSeq, seq))); }, [minSeq, maxSeq]);
+  // Window parts keep original sequence numbers, so sequences can have gaps: snap to a record that exists,
+  // in the direction of travel.
+  const seqs = useMemo(() => events.map((e) => e.sequence), [events]);
+  const snap = useCallback((target: number, from: number) => {
+    if (!seqs.length) return 0;
+    const t = Math.max(minSeq, Math.min(maxSeq, target));
+    if (t >= from) return seqs.find((q) => q >= t) ?? maxSeq;
+    for (let k = seqs.length - 1; k >= 0; k--) if (seqs[k] <= t) return seqs[k];
+    return minSeq;
+  }, [seqs, minSeq, maxSeq]);
+  const seek = useCallback((seq: number) => { setPlaying(false); setCursor((c) => snap(seq, c)); }, [snap]);
 
   const isPlaying = playing && cursor < maxSeq;
   useEffect(() => {
     if (!isPlaying) return;
     const step = Math.max(1, Math.round(events.length / 120));
-    const t = setTimeout(() => setCursor((c) => Math.min(maxSeq, c + step)), events.length > 60 ? 160 : PLAY_MS);
+    const t = setTimeout(() => setCursor((c) => {
+      const k = seqs.findIndex((q) => q > c);
+      return k < 0 ? maxSeq : seqs[Math.min(seqs.length - 1, k + step - 1)];
+    }), events.length > 60 ? 160 : PLAY_MS);
     return () => clearTimeout(t);
-  }, [isPlaying, cursor, maxSeq, events.length]);
+  }, [isPlaying, cursor, maxSeq, events.length, seqs]);
   const togglePlay = useCallback(() => {
     if (!isPlaying && cursor >= maxSeq) setCursor(minSeq);
     setPlaying(!isPlaying);
@@ -166,6 +181,7 @@ export function RecallProvider({ children }: { children: ReactNode }) {
     events,
     withheld: experimentActive ? new Set(source!.experiment!.withhold) : NO_WITHHELD,
     agents: source?.agents ?? [],
+    referencesSeen: source?.referencesSeen,
   }), [events, experimentActive, source]);
 
   const agents = useMemo(() => new Map((source?.agents ?? []).map((a) => [a.id, a])), [source]);
@@ -185,7 +201,7 @@ export function RecallProvider({ children }: { children: ReactNode }) {
       const doc = rows.length === 1 && rows[0].__recallDocument;
       const s = doc ? parseRecallDocument(doc) : adaptAiVillage(rows, file.name);
       if (!s.events.length) throw new Error('No usable records found in this file.');
-      const entry: SourceEntry = { id: s.id, label: s.label, group: 'Imported', description: s.description, counts: { events: s.events.length }, load: async () => s };
+      const entry: SourceEntry = { id: s.id, label: s.label, group: 'Imported', origin: 'file', description: s.description, counts: { events: s.events.length }, load: async () => s };
       setSources((prev) => [...prev.filter((p) => p.id !== s.id), entry]);
       await loadEntry(entry);
     } catch (e) {

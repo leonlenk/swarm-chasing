@@ -1,10 +1,12 @@
 import type { Finding } from '../engine/monitors';
 import type { WorldState } from '../engine/reconstruct';
 import type { View } from './context';
+import { monitorById } from '../engine/monitors';
 
 /** Plain-language incident names, used consistently across views. */
 export function findingLabel(f: Finding): string {
   if (f.monitor === 'B') return 'Withdrawn claim used after correction';
+  if (f.monitor !== 'A') return monitorById(f.monitor)?.title ?? f.monitor;
   if (f.state === 'insufficient') return 'Completion claim cannot be verified';
   return f.title.startsWith('Claimed live') ? 'Claimed live after a failed check' : 'Completion claimed despite failed check';
 }

@@ -90,7 +90,8 @@ src/model/types.ts          typed event format: id, timestamp, sequence, agentId
                             evidenceRefs, provenance (observed | declared | inferred), statusAfter, mentions
 src/adapters/               synthetic validator · AI Village window adapter · generic file import
 src/engine/reconstruct.ts   pure: state from events with sequence ≤ cursor; reported vs evidence status
-src/engine/monitors.ts      deterministic monitors A and B
+src/engine/monitors/        one file per monitor (19 registered) + registry, invariants, shared accessors
+src/engine/meta.ts          meta counts shown in the Monitors view: BT, BU, BG goal churn, BC without a claim
 src/engine/lineage.ts       a claim's life: introduced → repeated/used/checked → correction → after
 src/engine/flow.ts          agent ↔ evidence transmission from explicit references only
 src/engine/difference.ts    conflict / insufficient / agree
@@ -100,6 +101,14 @@ scripts/                    data:download · data:build (fetch-ai-village.ts) ·
 
 - **A · Unsupported completion:** a claim asserts something passed or is complete, there was an earlier *failed verification* of the exact same subject, and no passing verification existed before the claim. It is *resolved* by a correction or a later passing check. It is *insufficient* if the claim cites a record the analysis can't see. Build results don't count as verification.
 - **B · Superseded claim reused:** an action explicitly cites a claim that an earlier correction withdrew. An agent only counts as having seen the correction if **it** recorded an acknowledgement; an @-mention is not receipt.
+- **Milestone 2 monitors** (each with a fixture, a quiet list of neighbours, and a withhold assertion). The rule string shown in the Monitors view is the brief's row verbatim; owner rulings appear under it, separately.
+  - Claim–evidence: **C** claim never checked (carries `session ran no checks` when the announcing session ran none) · **G** stale after failure · **J** split evidence · **AM** announced from a session that checked nothing (disjoint from C: fires only when the subject was checked elsewhere first) · **AO** cited a stale pass · **AS** flaky evidence asserted as settled.
+  - Swarm and propagation: **AE** adopted without own check · **AF** checking concentration (≥ 3 checks of others' claims, all by one agent, ≥ 2 claimants) · **BP** consensus without any check · **AW** correction delay strip.
+  - Process and session: **X** step repetition (hash of the full command plus output hash) · **Z** phantom reference (never active: always `insufficient` with the reference in `missing`; references seen earlier in the window or the 12 h lookback are carried as `referencesSeen`) · **U** repeated goal, repeated failure · **V** concurrent duplicate goal · **BC** verify-goal, no verification (tightened lexicon; an incident only when the session claimed something) · **BD** ended on failure (end = STOP, CONSOLIDATE or the agent's next START, recorded as an attribute).
+  - Human: **AH** human question unanswered.
+  - Meta counts, not incidents: **BG** goal churn (≥ 5 pairwise-distinct goals by token Jaccard < 0.3, zero verdicts, zero claims), BC sessions without a claim, **BT** unverifiable by construction.
+- **Withheld records:** a withheld record inside a finding's evidence span turns that finding `insufficient` only if its event type is one the monitor reads. Unrelated withheld chat does not blanket every finding.
+- **Window parts:** a 4-hour window over the 1,200-record cap is split into parts. Each part holds 1,200 in-range records plus every claim, check, correction, acknowledgement, quote and session boundary from **earlier** in the window, marked *carried*. Carried records keep their original sequence numbers and pass through the same `sequence ≤ cursor` filter, so a part never sees a later record. The context header reads "1,200 in-range · N carried".
 - **Lineage:** "retellings" are explicit uses plus later claims about the **identical subject**. Links made by subject are drawn dashed and tagged *Same subject*.
 - **What it never does:** no confidence scores, no inferring causality from timing, no assuming a correction was seen, and no showing dependency reach as proven damage.
 - **Evidence visibility experiment:** removes the records listed in a source's `experiment.withhold` from the analysis input *before* reconstruction. Withheld records are shown as placeholders with no content. Records that are absent from the source are labelled *not in dataset*.
@@ -115,8 +124,9 @@ npm run check -- --trace [--withhold]  # also print the synthetic state + findin
 `npm run check` runs, in order:
 1. **Registry:** every monitor in `src/engine/monitors/` has a fixture `src/data/fixtures/<id>.json` that targets it. Negative tests confirm the registry *refuses* a monitor without one, and that `assertFinding()` rejects rule-breaking findings (active with withheld evidence, future leakage, no evidence, and so on).
 2. **Fixtures:** each fixture's `expect` block asserts that the monitor **fires** (exact state, count and evidence ids at a cursor), that the monitors in `quiet` stay **quiet** at every cursor, and that **withholding** a decisive record degrades the finding to `insufficient` and names it in `missing[]`.
+   Fixtures name the neighbours that must stay quiet. Where a neighbour fires by design (G and AW share a correction, BP implies C and AE), the fixture's `note` explains it. A BG meta test checks goal churn fires and its three quiet cases.
 3. **Integration:** `synthetic-release.json` is checked against its own `expect` block.
-4. **Regression:** validated real findings pinned in `src/data/regression.json` (ch4817 active, ch4770 resolved, and the 27 Apr signal-cartographer non-finding). These are skipped, not failed, when `public/data` hasn't been built.
+4. **Regression:** validated real findings pinned in `src/data/regression.json` (ch4817 active, ch4770 resolved, and the 27 Apr signal-cartographer non-finding). A window split into parts takes its verdict from the last part containing the finding. These are skipped, not failed, when `public/data` hasn't been built.
 
 **Adding a monitor:** create `src/engine/monitors/<ID>.ts` exporting a `MonitorDef`, write `src/data/fixtures/<ID>.json` with an `expect` block, register both (`monitors/index.ts`, `fixtures/index.ts`), and run `npm run check`. The Monitors and Incidents views pick it up from the registry.
 

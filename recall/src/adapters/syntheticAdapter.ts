@@ -29,6 +29,7 @@ export function parseRecallDocument(doc: unknown): DataSource {
     agents: d.agents,
     events,
     experiment: d.experiment,
+    referencesSeen: d.referencesSeen,
     meta: d.meta ?? { origin: 'synthetic' },
   };
 }

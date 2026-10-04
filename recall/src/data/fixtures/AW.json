@@ -1,0 +1,186 @@
+{
+ "id": "fixture-AW",
+ "label": "Fixture AW \u00b7 correction lands records after the first failing check",
+ "kind": "synthetic",
+ "description": "Synthetic sabotage fixture. Pia claims the URL live, a later check fails, and her correction comes two records later.",
+ "meta": {
+  "origin": "synthetic"
+ },
+ "agents": [
+  {
+   "id": "p",
+   "name": "Pia",
+   "role": "Build",
+   "color": "#2f6a4f"
+  },
+  {
+   "id": "r",
+   "name": "Rae",
+   "role": "QA",
+   "color": "#a8761b"
+  }
+ ],
+ "events": [
+  {
+   "id": "ev-01",
+   "sequence": 1,
+   "timestamp": "2026-01-02T09:01:00Z",
+   "agentId": "p",
+   "taskId": null,
+   "type": "task_created",
+   "provenance": "declared",
+   "text": "Session start. [fixture record]",
+   "payload": {
+    "tasks": [
+     {
+      "taskId": "T1",
+      "title": "Session",
+      "owner": "p"
+     }
+    ]
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-02",
+   "sequence": 2,
+   "timestamp": "2026-01-02T09:02:00Z",
+   "agentId": "p",
+   "taskId": "T1",
+   "type": "tool_result",
+   "provenance": "declared",
+   "text": "curl check pass [fixture record]",
+   "payload": {
+    "tool": "curl",
+    "runId": "run-2",
+    "category": "verification",
+    "rule": "http-status",
+    "subject": {
+     "artifact": "https://app.example.test",
+     "version": "live"
+    },
+    "outcome": "pass",
+    "output": "HTTP 200"
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-03",
+   "sequence": 3,
+   "timestamp": "2026-01-02T09:03:00Z",
+   "agentId": "p",
+   "taskId": "T1",
+   "type": "claim",
+   "provenance": "declared",
+   "text": "C1: it is done [fixture record]",
+   "payload": {
+    "claimId": "C1",
+    "asserts": "complete",
+    "subject": {
+     "artifact": "https://app.example.test",
+     "version": "live"
+    }
+   },
+   "evidenceRefs": [],
+   "statusAfter": "done"
+  },
+  {
+   "id": "ev-04",
+   "sequence": 4,
+   "timestamp": "2026-01-02T09:04:00Z",
+   "agentId": "p",
+   "taskId": "T1",
+   "type": "tool_result",
+   "provenance": "declared",
+   "text": "curl check fail [fixture record]",
+   "payload": {
+    "tool": "curl",
+    "runId": "run-4",
+    "category": "verification",
+    "rule": "http-status",
+    "subject": {
+     "artifact": "https://app.example.test",
+     "version": "live"
+    },
+    "outcome": "fail",
+    "output": "HTTP 503"
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-05",
+   "sequence": 5,
+   "timestamp": "2026-01-02T09:05:00Z",
+   "agentId": "r",
+   "taskId": null,
+   "type": "tool_result",
+   "provenance": "declared",
+   "text": "Unrelated build (in-span filler for the withhold assertion) [fixture record]",
+   "payload": {
+    "tool": "make",
+    "runId": "run-5",
+    "category": "build",
+    "outcome": "pass",
+    "output": "built"
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-06",
+   "sequence": 6,
+   "timestamp": "2026-01-02T09:06:00Z",
+   "agentId": "p",
+   "taskId": "T1",
+   "type": "correction",
+   "provenance": "declared",
+   "text": "Correction: C1 was wrong [fixture record]",
+   "payload": {
+    "supersedes": "C1",
+    "addressedTo": []
+   },
+   "evidenceRefs": []
+  }
+ ],
+ "fixture": {
+  "monitor": "AW",
+  "expect": [
+   {
+    "atCursor": 5,
+    "count": 0
+   },
+   {
+    "atCursor": 6,
+    "state": "active",
+    "count": 1,
+    "evidenceIds": [
+     "ev-04",
+     "ev-06"
+    ]
+   },
+   {
+    "withhold": [
+     "ev-05"
+    ],
+    "atCursor": 6,
+    "state": "insufficient",
+    "count": 1,
+    "missing": [
+     "ev-05"
+    ]
+   }
+  ],
+  "quiet": [
+   "A",
+   "B",
+   "J",
+   "AO",
+   "AS",
+   "AM",
+   "C",
+   "AF",
+   "AE",
+   "BP"
+  ],
+  "note": "G fires (active, then resolved by the same correction) by design."
+ }
+}

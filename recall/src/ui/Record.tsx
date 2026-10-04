@@ -60,6 +60,7 @@ export function Record({ event, agent, role, cursor, active, refStatus, onJump, 
       <header>
         <span className={`rec-type tone-${eventTone(event)}`}>{TYPE_LABEL[event.type]}</span>
         <span className="rec-agent" style={{ color: agent?.color }}>{agent?.name ?? event.agentId}</span>
+        {event.carried && <span className="tag" title="Carried into this part from earlier in the same window, as context for records in this part">carried</span>}
         <span className="rec-meta mono">#{event.sequence} · {time(event.timestamp)} UTC</span>
       </header>
       <p className="rec-text">{event.text}</p>

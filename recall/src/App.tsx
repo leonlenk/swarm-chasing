@@ -54,7 +54,7 @@ function Screen() {
         {error && <div className="error-banner">{error}</div>}
         {source.meta?.origin === 'synthetic' && (
           <div className="demo-banner"><span className="tag demo">Synthetic demonstration</span>Hand-written fixture for illustration. Not an AI Village incident; no deployments or publications were executed.
-            {!sources.some((x) => x.group === 'AI Village · Hugging Face') && <span className="muted"> · Real AI Village slices appear in the source menu after <span className="mono">npm run fetch:ai-village</span>.</span>}
+            {!sources.some((x) => x.origin === 'huggingface') && <span className="muted"> · Real AI Village slices appear in the source menu after <span className="mono">npm run fetch:ai-village</span>.</span>}
           </div>
         )}
         {experimentOn && source.experiment && (

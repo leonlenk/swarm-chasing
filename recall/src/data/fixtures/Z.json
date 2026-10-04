@@ -1,0 +1,167 @@
+{
+ "id": "fixture-Z",
+ "label": "Fixture Z \u00b7 chat names a path no output has shown",
+ "kind": "synthetic",
+ "description": "Synthetic sabotage fixture. Pia names /srv/app/build.log before any output contains it (insufficient, never active); it later appears in a turn's output. /srv/app/old.log was seen in the 12 h lookback (carried reference_seen) and must not fire.",
+ "meta": {
+  "origin": "synthetic"
+ },
+ "agents": [
+  {
+   "id": "p",
+   "name": "Pia",
+   "role": "Build",
+   "color": "#2f6a4f"
+  },
+  {
+   "id": "q",
+   "name": "Quinn",
+   "role": "Deploy",
+   "color": "#2c5d86"
+  }
+ ],
+ "events": [
+  {
+   "id": "ev-01",
+   "sequence": 1,
+   "timestamp": "2026-01-02T09:01:00Z",
+   "agentId": "p",
+   "taskId": null,
+   "type": "task_created",
+   "provenance": "declared",
+   "text": "Session start. [fixture record]",
+   "payload": {
+    "tasks": [
+     {
+      "taskId": "T1",
+      "title": "Session",
+      "owner": "p"
+     }
+    ]
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-02",
+   "sequence": 2,
+   "timestamp": "2026-01-02T09:02:00Z",
+   "agentId": "p",
+   "taskId": null,
+   "type": "message",
+   "provenance": "declared",
+   "text": "message [fixture record]",
+   "payload": {},
+   "evidenceRefs": [],
+   "refs": [
+    "/srv/app/old.log"
+   ],
+   "room": "#general"
+  },
+  {
+   "id": "ev-03",
+   "sequence": 3,
+   "timestamp": "2026-01-02T09:03:00Z",
+   "agentId": "p",
+   "taskId": null,
+   "type": "message",
+   "provenance": "declared",
+   "text": "message [fixture record]",
+   "payload": {},
+   "evidenceRefs": [],
+   "refs": [
+    "/srv/app/build.log"
+   ],
+   "room": "#general"
+  },
+  {
+   "id": "ev-04",
+   "sequence": 4,
+   "timestamp": "2026-01-02T09:04:00Z",
+   "agentId": "q",
+   "taskId": null,
+   "type": "message",
+   "provenance": "declared",
+   "text": "message [fixture record]",
+   "payload": {},
+   "evidenceRefs": [],
+   "room": "#general"
+  },
+  {
+   "id": "ev-05",
+   "sequence": 5,
+   "timestamp": "2026-01-02T09:05:00Z",
+   "agentId": "p",
+   "taskId": "T1",
+   "type": "action",
+   "provenance": "declared",
+   "text": "tail [fixture record]",
+   "payload": {
+    "action": "tail log",
+    "referencesClaims": [],
+    "command": "tail /srv/app/build.log",
+    "turnId": "t5",
+    "kind": "command",
+    "commandHash": "h-tail",
+    "outputHash": "o-tail"
+   },
+   "evidenceRefs": [],
+   "refs": [
+    "/srv/app/build.log"
+   ]
+  }
+ ],
+ "fixture": {
+  "monitor": "Z",
+  "expect": [
+   {
+    "atCursor": 2,
+    "count": 0
+   },
+   {
+    "atCursor": 3,
+    "state": "insufficient",
+    "count": 1,
+    "missing": [
+     "/srv/app/build.log"
+    ],
+    "evidenceIds": [
+     "ev-03"
+    ]
+   },
+   {
+    "atCursor": 5,
+    "state": "resolved",
+    "count": 1,
+    "evidenceIds": [
+     "ev-05"
+    ]
+   },
+   {
+    "withhold": [
+     "ev-04"
+    ],
+    "atCursor": 5,
+    "state": "insufficient",
+    "count": 1,
+    "missing": [
+     "ev-04"
+    ]
+   }
+  ],
+  "quiet": [
+   "A",
+   "B",
+   "AH",
+   "X",
+   "C"
+  ],
+  "neverActive": true
+ },
+ "referencesSeen": [
+  {
+   "ref": "/srv/app/old.log",
+   "sourceEventId": "lookback-0001",
+   "sequence": 0
+  }
+ ]
+}

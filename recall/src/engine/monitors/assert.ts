@@ -64,8 +64,8 @@ export function invariantProblems(f: Finding, ws: WorldState, def?: MonitorDef):
   if (unavailable.length && f.state !== 'insufficient') {
     add('partial-is-insufficient', `state is "${f.state}" while ${unavailable.join(', ')} ${unavailable.length > 1 ? 'are' : 'is'} unavailable`);
   }
-  if (f.state === 'insufficient' && !unavailable.length && !f.missing.some((m) => m.startsWith(INVARIANT_PREFIX))) {
-    add('insufficient-needs-unavailable', 'state is "insufficient" but no linked record is withheld or missing');
+  if (f.state === 'insufficient' && !f.missing.length) {
+    add('insufficient-needs-unavailable', 'state is "insufficient" but missing[] does not name what is missing');
   }
   if (f.resolution) {
     if (f.state !== 'resolved') add('resolution-matches-state', 'has a resolution but state is not "resolved"');

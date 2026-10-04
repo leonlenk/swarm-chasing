@@ -21,7 +21,21 @@
       "name": "27 Apr signal-cartographer: backed by a passing check, no finding",
       "slice": "interactive-worlds",
       "subject": "https://ai-village-agents.github.io/signal-cartographer",
-      "state": "none"
+      "state": "none",
+      "monitors": [
+        "A",
+        "B",
+        "C",
+        "G",
+        "J",
+        "AO",
+        "AS",
+        "AE",
+        "AF",
+        "BP",
+        "AW"
+      ],
+      "note": "Pinned in Milestone 1 against A: the claim is backed by a passing check. Scoped (Milestone 2) to the monitors a passing check speaks to. AM is excluded on purpose: later Day 391 claims about this URL come from sessions that ran no verification of their own, which AM reports by ruling."
     }
   ]
 }

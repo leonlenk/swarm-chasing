@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { useRecall } from '../context';
 import { isInvariantFailure, needsMet, registry } from '../../engine/monitors';
+import { goalChurn, unverifiableByConstruction, verifyGoalNoClaim } from '../../engine/meta';
 import { TYPE_LABEL } from '../format';
 import type { EventType } from '../../model/types';
 
@@ -28,6 +29,10 @@ export function Monitors() {
     return [...m];
   }, [source]);
   const total = source?.events.length || 1;
+  const typeCount = useMemo(() => { const m = new Map<string, number>(); source?.events.forEach((e) => m.set(e.type, (m.get(e.type) ?? 0) + 1)); return m; }, [source]);
+  const churn = useMemo(() => goalChurn(ws), [ws]);
+  const bcNoClaim = useMemo(() => verifyGoalNoClaim(ws), [ws]);
+  const bt = useMemo(() => unverifiableByConstruction(ws), [ws]);
   const meta = source?.meta;
 
   return (
@@ -64,6 +69,7 @@ export function Monitors() {
                 </button>
               )}
               <pre className="rule" style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{m.rule}</pre>
+              {m.ruling && <p className="ruling"><b>Owner ruling (2026-10-03):</b> {m.ruling}</p>}
               <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>
                 <span className="muted xs">Needs</span>
                 {m.needs.map((n) => <span key={n} className={`filter ${app.unmet.includes(n) ? '' : 'on'}`} style={{ height: 24, fontSize: 12 }}>{NEED_LABEL(n)}</span>)}
@@ -72,12 +78,27 @@ export function Monitors() {
               </div>
               {!app.met
                 ? <span className="muted small">This source has no {app.unmet.map(NEED_LABEL).join(' or ')}, so the monitor cannot apply. Zero findings here is not a clean bill.</span>
+                : all.length === 0 ? (
+                  <span className="small"><span className="tag">0 on this source</span> <span className="muted">Coverage: this source records {[...new Set([...m.needs, ...(m.reads ?? [])])].filter((n) => n !== 'subject' && n !== 'dependency').map((n) => `${typeCount.get(n) ?? 0} ${NEED_LABEL(n).toLowerCase()}`).join(' · ')}.</span></span>
+                )
                 : last ? <button className="link" onClick={() => navigate('incidents', last.id)}>Latest: {last.title} (#{last.detectedAt}) →</button>
                   : <span className="muted small">Not fired at this point in time.</span>}
             </section>
           );
         })}
       </div>
+
+      <section className="card monitor-card">
+        <div className="row"><h3>Meta counts</h3><span className="spacer" /><span className="muted small">Shown here, not as incidents · at #{ws.cursor}</span></div>
+        <div className="meta-grid">
+          <div><span className="tag">BG</span> <b>Goal churn</b><p className="muted small">Agents with ≥ 5 sessions whose goals are pairwise distinct (token Jaccard &lt; 0.3), and zero verdicts and zero claims.</p>
+            <p className="meta-count">{churn.length}</p>{churn.slice(0, 6).map((r) => <button key={r.agentId} className="link small" onClick={() => navigate('agents', r.agentId)}>{ws.agentName(r.agentId)} · {r.sessionIds.length} sessions</button>)}</div>
+          <div><span className="tag">BC</span> <b>Verify-goal sessions without a claim</b><p className="muted small">Ended with zero verification verdicts and no claim (BC is an incident only when the session claimed something).</p>
+            <p className="meta-count">{bcNoClaim.length}</p>{bcNoClaim.slice(0, 6).map((r) => <button key={r.taskId} className="link small" onClick={() => navigate('tasks', r.taskId)}>{r.taskId}</button>)}</div>
+          <div><span className="tag">BT</span> <b>Unverifiable by construction</b><p className="muted small">Claims whose subject type no verdict rule produces in this source.</p>
+            <p className="meta-count">{bt.reduce((n, r) => n + r.claimIds.length, 0)}</p>{bt.slice(0, 6).map((r) => <button key={r.agentId} className="link small" onClick={() => navigate('agents', r.agentId)}>{ws.agentName(r.agentId)} · {r.claimIds.length}</button>)}</div>
+        </div>
+      </section>
 
       <section className="card monitor-card">
         <div className="row">

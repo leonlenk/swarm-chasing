@@ -111,6 +111,21 @@ function SourceMenu() {
   );
 }
 
+/** States the slice's approximation: in-range vs carried records, so no view implies more than the records support. */
+function ContextHeader() {
+  const { source, ws } = useRecall();
+  const part = source?.meta?.part;
+  if (!source) return null;
+  const inRange = part?.inRange ?? source.events.length;
+  return (
+    <span className="context-header mono" title="Records in this part's time range, plus window facts (claims, checks, corrections, session boundaries) carried from earlier in the 4-hour window with their original sequence numbers. Timestamps are parsed as UTC without zone.">
+      {part && part.count > 1 && <>part {part.index}/{part.count} · </>}
+      {inRange.toLocaleString()} in-range · {(part?.carried ?? 0).toLocaleString()} carried
+      {ws.withheld.length > 0 && <> · {ws.withheld.length} withheld</>}
+    </span>
+  );
+}
+
 export function TopBar({ crumb }: { crumb?: string }) {
   const { view, navigate, setPaletteOpen } = useRecall();
   return (
@@ -122,6 +137,7 @@ export function TopBar({ crumb }: { crumb?: string }) {
         {crumb && <><span className="sep">›</span><span className="current mono">{crumb}</span></>}
       </div>
       <SourceMenu />
+      <ContextHeader />
       <div className="topbar-right">
         <button className="search-btn" onClick={() => setPaletteOpen(true)} aria-label="Search or run a command">
           <ISearch size={17} /><span className="kbd">⌘K</span><span>Search or run a command…</span>

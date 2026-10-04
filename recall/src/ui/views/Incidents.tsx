@@ -130,6 +130,7 @@ export function Incidents() {
                   <div className="muted small">{MONITOR_LABEL[current.monitor]} · detected #{current.detectedAt}</div>
                   <h2 style={{ fontSize: 22, fontWeight: 500, letterSpacing: '-0.01em', marginTop: 4 }}>{findingLabel(current)}</h2>
                   <div className="muted small" style={{ marginTop: 4, wordBreak: 'break-all' }}>{current.title}</div>
+                  {current.attributes?.length ? <div className="row" style={{ marginTop: 6, flexWrap: 'wrap' }}>{current.attributes.map((a) => <span key={a} className="tag disputed">{a}</span>)}</div> : null}
                 </div>
                 <span className="spacer" />
                 <StatePill state={current.state} reviewed={reviewed.has(current.id)} />

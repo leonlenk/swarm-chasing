@@ -9,7 +9,7 @@ import { initials } from './labels';
 import { ICheck, IDoc, IX } from './icons';
 
 type AgentData = { name: string; role?: string; color: string; warn: boolean; dim: boolean };
-type EvData = { label: string; sub?: string; outcome?: 'pass' | 'fail'; dim: boolean };
+type EvData = { label: string; sub?: string; outcome?: 'pass' | 'fail' | 'inconclusive'; dim: boolean };
 
 function AgentFlowNode({ data }: NodeProps<Node<AgentData>>) {
   return (
@@ -31,7 +31,7 @@ function EvidenceFlowNode({ data }: NodeProps<Node<EvData>>) {
       <Handle type="target" position={Position.Left} />
       <IDoc size={20} />
       <div className="txt"><b>{data.label}</b>{data.sub && <span>{data.sub}</span>}</div>
-      {data.outcome && <span className={`ev-badge ${data.outcome}`} title={data.outcome === 'pass' ? 'Passed' : 'Failed'}>{data.outcome === 'pass' ? <ICheck size={11} /> : <IX size={11} />}</span>}
+      {data.outcome && <span className={`ev-badge ${data.outcome}`} title={data.outcome === 'pass' ? 'Passed' : data.outcome === 'fail' ? 'Failed' : 'Inconclusive (empty output)'}>{data.outcome === 'pass' ? <ICheck size={11} /> : data.outcome === 'fail' ? <IX size={11} /> : '?'}</span>}
       <Handle type="source" position={Position.Right} />
     </div>
   );

@@ -22,7 +22,7 @@ const COLUMN: Record<StepKind, number> = { evidence: -1, introduced: 0, used: 1,
 const PHASE: Record<number, string> = { 0: 'Claim introduced', 1: 'Repeated, used & checked', 2: 'Correction received', 3: 'After correction' };
 const COL_W = 246;
 
-type CardData = { step: LineageStep; name: string; color?: string; selected: boolean; outcome?: 'pass' | 'fail'; cites?: { id: string; label: string; outcome: 'pass' | 'fail' }[]; count?: number; passed?: number; failed?: number };
+type CardData = { step: LineageStep; name: string; color?: string; selected: boolean; outcome?: 'pass' | 'fail' | 'inconclusive'; cites?: { id: string; label: string; outcome: 'pass' | 'fail' | 'inconclusive' }[]; count?: number; passed?: number; failed?: number };
 type HeadData = { label: string; phase: string };
 
 function LineageCard({ data }: NodeProps<Node<CardData>>) {
@@ -94,7 +94,7 @@ export function Propagation() {
     const cites = lineage.steps.filter((s) => s.kind === 'evidence').map((s) => {
       const ev = ws.byId.get(s.eventId);
       return ev?.type === 'tool_result' ? { id: ev.id, label: ev.payload.runId, outcome: ev.payload.outcome } : null;
-    }).filter((x): x is { id: string; label: string; outcome: 'pass' | 'fail' } => !!x);
+    }).filter((x): x is { id: string; label: string; outcome: 'pass' | 'fail' | 'inconclusive' } => !!x);
     // Progressive disclosure: same-subject repeats collapse per agent, checks collapse per column.
     const groups = new Map<string, LineageStep[]>();
     for (const st of shown) {

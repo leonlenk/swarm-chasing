@@ -26,6 +26,22 @@ export interface HfTurn {
   agent_action?: Record<string, unknown> | null; output?: string | null; error?: string | null;
 }
 
+/** Lightweight record of one computer-use turn (no output body), for session-complete actions. */
+export interface HfTurnLite {
+  id: string; session_id: string; created_at: string;
+  /** URLs and file paths in the command and output (rule 'refs'); the output body itself is not kept. */
+  refs?: string[];
+  kind: 'command' | 'computer' | 'none';
+  /** First meaningful line(s) of the bash command, clipped. */
+  command?: string;
+  /** Computer action name plus target description, e.g. "left_click · Publish button". */
+  computerAction?: string;
+  outputHash: string;
+  /** Hash of the full command text (commands are displayed clipped). */
+  commandHash?: string;
+  emptyOutput: boolean;
+}
+
 export interface HfWindowInput {
   id: string;
   label: string;
@@ -38,6 +54,8 @@ export interface HfWindowInput {
   boundaries: HfEvent[];
   /** chat_messages rows in [from, to]. */
   chats: HfChat[];
+  /** Every turn of the chosen sessions (lightweight), for session-complete actions. */
+  actions?: HfTurnLite[];
   /** computer_use_turns rows for the selected sessions (any; non-verdict turns are ignored). */
   turns: HfTurn[];
   generatedAt: string;
@@ -62,11 +80,22 @@ const FUTURE_RE = /\b(will (?:be|go)|once\b|soon\b|going to|planning|plan to|abo
  * and that paragraph must not be future/conditional or report a failure.
  */
 export function claimedUrls(content: string, urls: string[]): string[] {
-  const paragraphs = content.split(/\n\s*\n|\n(?=\s*[-*•]|\s*\*\*)/);
-  return urls.filter((u) => paragraphs.some((p) => {
-    const inP = urlsIn(p).includes(u);
-    return inP && CLAIM_RE.test(p) && !FUTURE_RE.test(p) && !NEGATIVE_RE.test(p);
-  }));
+  const sentences = sentencesOf(content);
+  const isClaim = (s: string) => CLAIM_RE.test(s) && !FUTURE_RE.test(s) && !NEGATIVE_RE.test(s);
+  // Rule 'claim-sentence+bare-url': a URL standing in a bare sentence (<= 4 words once URLs and @mentions are
+  // removed) inherits the claim of a claim sentence in the same message that names no URL itself
+  // ("Ch4817 is LIVE. … https://…/chapter-4817.html — @GPT-5 open for byte-game.").
+  const urllessClaim = sentences.some((s) => isClaim(s) && urlsIn(s).length === 0);
+  const bare = (s: string) => s.replace(/https?:\/\/\S+/g, ' ').replace(/@\S+/g, ' ').split(/\s+/).filter((w) => /[a-z0-9]/i.test(w)).length <= 4;
+  return urls.filter((u) => sentences.some((s) => urlsIn(s).includes(u) && (isClaim(s) || (urllessClaim && bare(s)))));
+}
+
+/**
+ * Sentences (rule 'claim-sentence'): split at line breaks, bullets, and at . ! ? followed by whitespace.
+ * A URL's own dots never split (no whitespace follows them inside the URL). Linear.
+ */
+export function sentencesOf(content: string): string[] {
+  return content.split(/\n+|(?<=[.!?])\s+/).map((x) => x.trim()).filter(Boolean);
 }
 
 const CORRECTION_RE =
@@ -102,9 +131,78 @@ const firstLine = (s: string) => s.split('\n').find((l) => l.trim() && !l.trim()
 export interface Verdict {
   rule: 'http-status' | 'test-summary' | 'git-push' | 'traceback';
   category: 'verification' | 'execution';
-  outcome: 'pass' | 'fail';
+  /** 'inconclusive' only for verdicts whose output is empty: such a verdict is never 'pass'. */
+  outcome: 'pass' | 'fail' | 'inconclusive';
   subject?: { artifact: string; version: string };
   summary: string;
+  /** http-status: URL after redirects, only when observable (Location chain, url_effective, or no 3xx). */
+  finalUrl?: string;
+  /** test-summary: 'partial' for -k, ::node ids, a single test file, or deselected/skipped > 0. */
+  scope?: 'full' | 'partial';
+  /** Command contains an error-suppression idiom, so the check could not fail. */
+  suppressed?: true;
+  /** Neither stdout nor stderr printed anything. */
+  emptyOutput?: true;
+}
+
+/** File paths named in text: absolute, ./ or ~/ prefixed, or dir/file.ext. Linear, capped. */
+const PATH_RE = /(?:^|[\s"'`(=:])((?:~?\/|\.\.?\/)?(?:[\w.-]+\/)+[\w.-]+\.[a-z0-9]{1,6})(?=$|[\s"'`),;:]|\.(?:\s|$))/gi;
+/** Adapter rule 'refs': normalized URLs plus file paths named in the text (at most 20). */
+export function refsIn(text: string): string[] {
+  const t = text.length > 200_000 ? text.slice(0, 200_000) : text;
+  const out = new Set<string>(urlsIn(t));
+  for (const m of t.matchAll(PATH_RE)) {
+    const p = m[1];
+    if (p.length <= 200 && !/^https?:/i.test(p) && !p.includes('//')) out.add(p.replace(/^\.\//, ''));
+    if (out.size >= 20) break;
+  }
+  return [...out].slice(0, 20);
+}
+/** Adapter rule 'goal-key': lowercase alphanumeric words of the short goal. */
+export const goalKeyOf = (goal: string) => goal.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+/** Adapter rule 'verify-goal': the brief's verify lexicon. */
+const VERIFY_WORD_RE = /\b(verif\w*|validat\w*|confirm\w*|check\w*)\b/i;
+const VERIFY_SUBJECT_RE = /\b(urls?|deploy\w*|live|builds?|tests?|pages|prs?|pull requests?)\b/i;
+const TEST_RUN_RE = /\b(run(?:ning)? (?:the )?tests|test suite|pytest|npm test|vitest)\b/i;
+const NOT_VERIFY_RE = /\bcheck\w*\s+(?:my |the |for |new |all )?(?:e-?mails?|messages?|chat|inbox|dashboards?)\b/i;
+/** Adapter rule 'verify-goal' (tightened per owner ruling): a verify word with a subject word, or an explicit test run; never "check email/messages/chat/inbox/dashboard". */
+export function verifyGoalOf(goal: string): boolean {
+  if (NOT_VERIFY_RE.test(goal)) return false;
+  return TEST_RUN_RE.test(goal) || (VERIFY_WORD_RE.test(goal) && VERIFY_SUBJECT_RE.test(goal));
+}
+
+/** Error-suppression idioms (BJ). Plain alternation, linear. */
+const SUPPRESS_RE = /\|\|\s*true\b|2>\s*\/dev\/null|\|\|\s*echo\b|\bset \+e\b|;\s*true\b/;
+
+/** Final URL after redirects, read line by line from headers / -w output. Undefined when not observable. */
+function finalUrlOf(cmd: string, text: string, start: string, statuses: number[]): string | undefined {
+  let current = start;
+  let sawLocation = false;
+  for (const line of text.split('\n')) {
+    const t = line.trim();
+    if (t.length > 2048) continue;
+    if (/^location:\s*/i.test(t)) {
+      const loc = t.replace(/^location:\s*/i, '');
+      try { current = normUrl(new URL(loc, current).toString()); sawLocation = true; } catch { /* unparsable */ }
+    }
+  }
+  if (cmd.includes('%{url_effective}')) {
+    const eff = text.split('\n').map((l) => l.trim()).filter((l) => /^https?:\/\/\S+$/.test(l) && l.length < 2048).pop();
+    if (eff) return normUrl(eff);
+  }
+  if (sawLocation) return current;
+  return statuses.some((s) => s >= 300 && s < 400) ? undefined : start;
+}
+
+/** pytest/jest/vitest run scope: partial when the command or summary shows a subset ran. */
+function testScope(cmd: string, text: string): 'full' | 'partial' {
+  if (/\s-k\s|::|\s--lf\b|\s--last-failed\b|\s-t\s|--testNamePattern/.test(cmd)) return 'partial';
+  if (/\b(pytest|jest|vitest|mocha)\b[^|;&\n]*\s[\w./-]*(test|spec)[\w./-]*\.(py|js|ts|tsx|mjs|cjs)\b/.test(cmd)) return 'partial';
+  for (const line of text.split('\n')) {
+    if (line.length > 300) continue;
+    if (/\b[1-9]\d* deselected\b/.test(line) || /\b[1-9]\d* skipped\b/.test(line)) return 'partial';
+  }
+  return 'full';
 }
 
 /** Deterministic verdict for a bash turn, or null when the output carries no unambiguous signal. */
@@ -129,6 +227,18 @@ export function testSummary(text: string): { failed: number; passed: number } | 
 }
 
 export function classifyTurn(t: Pick<HfTurn, 'agent_action' | 'output' | 'error'>): Verdict | null {
+  const v = baseVerdict(t);
+  if (!v) return null;
+  const cmd = String(t.agent_action?.command ?? '');
+  if (SUPPRESS_RE.test(cmd)) v.suppressed = true;
+  if (!(t.output ?? '').trim() && !(t.error ?? '').trim()) {
+    v.emptyOutput = true;
+    if (v.outcome === 'pass') v.outcome = 'inconclusive';
+  }
+  return v;
+}
+
+function baseVerdict(t: Pick<HfTurn, 'agent_action' | 'output' | 'error'>): Verdict | null {
   const cmd = typeof t.agent_action?.command === 'string' ? (t.agent_action.command as string) : null;
   if (!cmd) return null;
   const out = t.output ?? '';
@@ -149,6 +259,7 @@ export function classifyTurn(t: Pick<HfTurn, 'agent_action' | 'output' | 'error'
         rule: 'http-status', category: 'verification', outcome: code < 400 ? 'pass' : 'fail',
         subject: { artifact: urls[0], version: 'live' },
         summary: `HTTP ${code} from ${urls[0]}`,
+        finalUrl: finalUrlOf(cmd, text, urls[0], statuses),
       };
     }
   }
@@ -161,6 +272,7 @@ export function classifyTurn(t: Pick<HfTurn, 'agent_action' | 'output' | 'error'
       rule: 'test-summary', category: 'verification', outcome: failed > 0 ? 'fail' : 'pass',
       subject: { artifact: `tests:${repo}`, version: 'working-tree' },
       summary: `${failed} failed, ${passed} passed (${repo})`,
+      scope: testScope(cmd, text),
     };
   }
 
@@ -260,14 +372,15 @@ export function adaptAiVillageWindow(input: HfWindowInput): DataSource {
     .map((e) => ({ ...e, at: hfTime(e.created_at), type: String(e.data.actionType), agent: String(e.data.agentId ?? '') }))
     .sort((a, b) => a.at.localeCompare(b.at) || a.event_index - b.event_index);
 
-  const chosen: (typeof sessions[number] & { end?: { at: string; stop?: typeof boundaries[number] } })[] = [];
+  const chosen: (typeof sessions[number] & { end?: { at: string; stop?: typeof boundaries[number]; reason: "stop" | "consolidate" | "next-start" } })[] = [];
   for (const [agentId, list] of byAgent) {
     const before = list.filter((s) => Date.parse(s.at) < from).pop();
     const inside = list.filter((s) => inWindow(s.at));
     for (const s of [...(before ? [before] : []), ...inside]) {
       const next = boundaries.find((b) => b.agent === agentId && b.at > s.at &&
         (b.type === 'STOP_USING_COMPUTER' || b.data.computerUseSessionId !== s.id));
-      const end = next && Date.parse(next.at) < to ? { at: next.at, stop: next.type === 'STOP_USING_COMPUTER' ? next : undefined } : undefined;
+      const endReason = next?.type === 'STOP_USING_COMPUTER' ? 'stop' as const : next?.type === 'CONSOLIDATE' ? 'consolidate' as const : 'next-start' as const;
+      const end = next && Date.parse(next.at) < to ? { at: next.at, stop: next.type === 'STOP_USING_COMPUTER' ? next : undefined, reason: endReason } : undefined;
       if (before === s && end && Date.parse(end.at) < from) continue; // closed before the window opened
       chosen.push({ ...s, end });
     }
@@ -290,7 +403,7 @@ export function adaptAiVillageWindow(input: HfWindowInput): DataSource {
       id: `session/${s.id}`, timestamp: s.at, agentId: s.agent_id, taskId: null, type: 'task_created',
       provenance: 'observed', evidenceRefs: [],
       text: `Computer-use session started${startedBefore ? ' (before this window)' : ''}. Goal: ${clip(goal || title, 600)}`,
-      payload: { tasks: [{ taskId: tid, title, owner: s.agent_id }] },
+      payload: { tasks: [{ taskId: tid, title, owner: s.agent_id, goalKey: goalKeyOf(title), verifyGoal: verifyGoalOf(title) }] },
     });
     push(s.at, 1, {
       id: `session/${s.id}#start`, timestamp: s.at, agentId: s.agent_id, taskId: tid, type: 'status_updated',
@@ -310,9 +423,10 @@ export function adaptAiVillageWindow(input: HfWindowInput): DataSource {
       push(s.end.at, 3, {
         id: `session/${s.id}#end`, timestamp: s.end.at, agentId: s.agent_id, taskId: tid, type: 'status_updated',
         provenance: 'observed', evidenceRefs: [],
-        text: stop ? 'Session stopped by the agent. Ending a session does not mean its goal was achieved.'
-          : 'Session replaced by the agent\'s next session (memory consolidation or new start).',
-        payload: { status: 'ended' as TaskStatus }, statusAfter: 'ended',
+        text: s.end.reason === 'stop' ? 'Session stopped by the agent (STOP). Ending a session does not mean its goal was achieved.'
+          : s.end.reason === 'consolidate' ? 'Session ended by memory consolidation (CONSOLIDATE); a new session follows.'
+            : 'Session ended by the agent\'s next START.',
+        payload: { status: 'ended' as TaskStatus, endReason: s.end.reason }, statusAfter: 'ended',
       });
     }
   }
@@ -344,10 +458,34 @@ export function adaptAiVillageWindow(input: HfWindowInput): DataSource {
     activeAgents.add(s.agent_id);
     push(at, 4, {
       id: `turn/${t.id}`, timestamp: at, agentId: s.agent_id, taskId: taskIdOf.get(s.id)!, type: 'tool_result',
-      provenance: 'observed', evidenceRefs: [],
+      provenance: 'observed', evidenceRefs: [], ...(() => { const r = refsIn(`${cmd}\n${t.output ?? ''}`); return r.length ? { refs: r } : {}; })(),
       text: `${clip(firstLine(cmd), 120)} → ${v.summary}`,
       payload: { tool: 'bash', runId: `turn ${t.id.slice(0, 8)}`, category: v.category, rule: v.rule,
-        subject: v.subject, outcome: v.outcome, output },
+        subject: v.subject, outcome: v.outcome, output,
+        ...(v.finalUrl ? { finalUrl: v.finalUrl } : {}), ...(v.scope ? { scope: v.scope } : {}),
+        ...(v.suppressed ? { suppressed: true as const } : {}), ...(v.emptyOutput ? { emptyOutput: true as const } : {}) },
+    });
+  }
+
+  // --- every turn of every chosen session → action (command text + output hash; no output body).
+  let actionCount = 0;
+  for (const t of input.actions ?? []) {
+    const s = sessionOf.get(t.session_id);
+    if (!s) continue;
+    const at = hfTime(t.created_at);
+    if (!inWindow(at)) continue;
+    actionCount++;
+    activeAgents.add(s.agent_id);
+    const label = t.kind === 'command' ? `$ ${clip(t.command ?? '', 160)}` : t.kind === 'computer' ? clip(t.computerAction ?? 'computer action', 160) : '(turn without a tool action)';
+    push(at, 3, {
+      id: `act/${t.id}`, timestamp: at, agentId: s.agent_id, taskId: taskIdOf.get(s.id)!, type: 'action',
+      provenance: 'observed', evidenceRefs: [], text: label, ...(t.refs?.length ? { refs: t.refs } : {}),
+      payload: {
+        action: label, referencesClaims: [], kind: t.kind, turnId: t.id, outputHash: t.outputHash,
+        ...(t.commandHash ? { commandHash: t.commandHash } : {}),
+        ...(t.command ? { command: t.command } : {}), ...(t.computerAction ? { computerAction: t.computerAction } : {}),
+        ...(t.emptyOutput ? { emptyOutput: true as const } : {}),
+      },
     });
   }
 
@@ -369,7 +507,9 @@ export function adaptAiVillageWindow(input: HfWindowInput): DataSource {
       humanCount++;
       push(c.at, 5, {
         id: `chat/${c.id}`, timestamp: c.at, agentId: HUMAN_ID, taskId: null, type: 'message',
-        provenance: 'observed', evidenceRefs: [], payload: {}, text: clip(content, 1200),
+        provenance: 'observed', evidenceRefs: [], text: clip(content, 1200),
+        room: c.room_id ?? undefined, refs: refsIn(content),
+        payload: { isHuman: true, isQuestion: content.trimEnd().endsWith('?') },
       });
       continue;
     }
@@ -380,7 +520,9 @@ export function adaptAiVillageWindow(input: HfWindowInput): DataSource {
     const mentions = names
       .filter((a) => a.id !== speaker && (normContent.includes(`@${a.norm}`) || (a.norm.length >= 6 && new RegExp(`(^|[^\\w-])${a.norm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`).test(normContent))))
       .map((a) => a.id);
-    const base = { timestamp: c.at, agentId: speaker, taskId, text: clip(content, 1600), mentions: mentions.length ? mentions : undefined };
+    const chatRefs = refsIn(content);
+    const base = { timestamp: c.at, agentId: speaker, taskId, text: clip(content, 1600), mentions: mentions.length ? mentions : undefined,
+      room: c.room_id ?? undefined, refs: chatRefs.length ? chatRefs : undefined };
     const urls = urlsIn(content);
     const pageUrls = urls.filter((u) => !NOT_A_PAGE.test(u));
 
@@ -410,7 +552,7 @@ export function adaptAiVillageWindow(input: HfWindowInput): DataSource {
       claimsBy.set(speaker, prior);
       continue;
     }
-    push(c.at, 5, { ...base, id: `chat/${c.id}`, type: 'message', provenance: 'observed', evidenceRefs: [], payload: {} });
+    push(c.at, 5, { ...base, id: `chat/${c.id}`, type: 'message', provenance: 'observed', evidenceRefs: [], payload: { isHuman: false, isQuestion: content.trimEnd().endsWith('?') } });
   }
 
   // --- order, cap volume, sequence.
@@ -459,7 +601,8 @@ export function adaptAiVillageWindow(input: HfWindowInput): DataSource {
     'Tasks are computer-use sessions; start/stop are observed system records. "Session ended" makes no claim the goal was met.',
     'Chat messages are attached to the speaker\'s open session by time (inferred attachment).',
     `Claims (${claimCount}) are inferred: an agent message with completion phrasing that names a URL. Corrections (${correctionCount}) are inferred: the same agent, explicit correction phrasing, same URL.`,
-    `Tool verdicts (${turnsWithVerdict}) come only from deterministic output patterns: http-status, test-summary, git-push, traceback. Other turns are not shown.`,
+    `Tool verdicts (${turnsWithVerdict}) come only from deterministic output patterns: http-status, test-summary, git-push, traceback.`,
+    input.actions ? `Session-complete actions: every turn of every in-window session is an action (${actionCount}), with command text and an output hash; output bodies are not stored.` : 'Only verdict-bearing turns are shown.',
     '@-mentions are matched against agent display names (inferred).',
   );
   if (humanCount) notes.push(`${humanCount} human chat messages are grouped under "Human participants"; usernames are omitted.`);

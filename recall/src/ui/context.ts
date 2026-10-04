@@ -9,7 +9,10 @@ export const VIEWS: View[] = ['overview', 'propagation', 'tasks', 'agents', 'inc
 export interface SourceEntry {
   id: string;
   label: string;
-  group: 'AI Village · Hugging Face' | 'Demo' | 'Imported';
+  /** Source-menu group: the parent window label for split AI Village parts, or 'Demo' / 'Imported'. */
+  group: string;
+  origin: 'huggingface' | 'synthetic' | 'file';
+  part?: { index: number; count: number; parent: string };
   description?: string;
   window?: { from: string; to: string };
   counts?: Record<string, number>;
@@ -20,7 +23,11 @@ export interface SourceEntry {
 export interface HfIndex {
   generatedAt: string;
   dataset: string;
-  sources: { id: string; file: string; label: string; goal?: string; window?: { from: string; to: string }; counts?: Record<string, number>; highlight?: string }[];
+  sources: {
+    id: string; file: string; label: string; goal?: string; window?: { from: string; to: string };
+    counts?: Record<string, number>; highlight?: string;
+    parent?: string; parentLabel?: string; part?: number; parts?: number;
+  }[];
 }
 
 export interface RecallState {

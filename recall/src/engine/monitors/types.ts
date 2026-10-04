@@ -32,6 +32,8 @@ export interface Finding {
   /** insufficient = the analysis lacks a record it needs to confirm or clear the finding. */
   state: FindingState;
   resolution?: { eventId: string; text: string };
+  /** Typed facts about the finding shown as tags, e.g. 'session ran no checks', 'ended by: consolidate'. */
+  attributes?: string[];
 }
 
 export type MonitorFamily =
@@ -45,9 +47,13 @@ export interface MonitorDef {
   id: string;
   title: string;
   family: MonitorFamily;
-  /** Pseudo-code shown verbatim in the Monitors view. */
+  /** Verbatim transcription of the brief's Active / Resolves / Insufficient row, shown in the Monitors view. */
   rule: string;
+  /** Owner rulings that refine the brief's row (shown under the rule, dated). */
+  ruling?: string;
   needs: MonitorNeed[];
+  /** Extra event types the monitor reads beyond `needs` (used by the withheld-in-span rule; never gates applicability). */
+  reads?: EventType[];
   run(ws: WorldState): Finding[];
   /** Path of the sabotage fixture: `src/data/fixtures/<id>.json`. Required; the registry refuses without it. */
   fixture: string;
