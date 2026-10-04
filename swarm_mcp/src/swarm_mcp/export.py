@@ -1,7 +1,7 @@
 """Export a filtered, redacted subset of standard event records for sharing.
 
-    swarm-mcp export --out DIR [--source S] [--kind K] [--channel C] [--author A]
-                     [--since T] [--until T] [--query Q] [--with-agents] [--keep-ips] [--no-check]
+    swarm-mcp export --out DIR [--source S] [--kind K] [--type T] [--channel C] [--author A]
+                     [--since T] [--until T] [--query Q] [--with-agents] [--keep-ips] [--no-check] [--json]
 
 The command reads from the SwarmScope store (``scope.records.export_store``) and
 runs ``check`` on the result unless ``--no-check``. This module is the library.

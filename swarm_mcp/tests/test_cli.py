@@ -420,3 +420,17 @@ def test_render_subtasks_refuses_a_time_window(project: Path, capsys):
     with pytest.raises(SystemExit):
         main(["render", "timeline", "--help"])
     assert "--since" in capsys.readouterr().out
+
+
+def test_export_type_filter(project: Path, capsys):
+    """Regression: `export --kind commit` told the user to use a 'type' filter that export did not have."""
+    make_village(project / "data")
+    assert cli("add", "data/ai-village") == 0
+    capsys.readouterr()
+    assert cli("export", "--out", "data/e1", "--kind", "session_goal") == 2
+    assert "'type' filter" in capsys.readouterr().err
+    assert cli("export", "--out", "data/e1", "--type", "session_goal", "--json") == 0
+    res = json.loads(capsys.readouterr().out)
+    assert res["ok"] is True and res["records"]["by_source_kind"] == {"village": {"event": 2}}
+    rows = [json.loads(x) for x in (project / "data" / "e1" / "events.jsonl").read_text().splitlines()]
+    assert [r["action_kind"] for r in rows] == ["session_goal"] * 2

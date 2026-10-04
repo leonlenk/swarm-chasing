@@ -480,6 +480,7 @@ def cmd_export(args: argparse.Namespace, config: Config) -> int:
     filters = {
         "source": args.source or None,
         "kind": args.kind or None,
+        "type": args.type or None,
         "channel": args.channel,
         "author": args.author,
         "since": args.since,
@@ -587,6 +588,10 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--out", required=True, metavar="DIR", help="export directory (created; keep it under data/)")
     e.add_argument("--source", action="append", default=[], help="only these sources (repeatable)")
     e.add_argument("--kind", action="append", default=[], help="only these id kinds, e.g. msg, event (repeatable)")
+    e.add_argument(
+        "--type", action="append", default=[],
+        help="only these dataset types, e.g. commit, revision, chat (messages.msg_type / actions.kind; repeatable)",
+    )  # fmt: skip
     e.add_argument("--channel", help="only messages in this channel")
     e.add_argument("--author", help="only this author: agent name/alias/id, 'human' or 'human:<id>'")
     e.add_argument("--since", help="inclusive UTC start (ISO date or datetime)")
