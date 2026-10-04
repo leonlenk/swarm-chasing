@@ -113,3 +113,35 @@ def test_trace_export_skips_sources_with_missing_inputs(tmp_path, monkeypatch, c
     assert "skipped source 'hostility'" in err and "results.json is missing" in err and "tracer_hostility.py" in err
     # a single requested source with missing inputs fails cleanly, without a traceback
     assert trace_export.main(["--out", str(out), "--source", "hostility"]) == 1
+
+
+def _items_csv(path):
+    import csv
+    with open(path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=["item_id", "group", "agent", "kind", "t", "day_index", "text"])
+        w.writeheader()
+        w.writerow({"item_id": "I0001", "group": "newcomer", "agent": "alpha", "kind": "chat",
+                    "t": "2031-01-02 10:00:00", "day_index": "1", "text": "always verify the kettle"})
+
+
+def test_onboarding_analyze_refuses_without_labels(to, tmp_path):
+    with pytest.raises(SystemExit) as e:
+        to.stage_analyze()
+    assert "items.csv is missing" in str(e.value.code)
+    _items_csv(tmp_path / "items.csv")
+    (tmp_path / "label_batches" / "labels_1.jsonl").write_text("")
+    with pytest.raises(SystemExit) as e:
+        to.stage_analyze()
+    msg = str(e.value.code)
+    assert "no labels found" in msg and "onboarding_labelling.md" in msg and "tracer_onboarding.py analyze" in msg
+    assert not (tmp_path / "results.json").exists() and not (tmp_path / "uptake.png").exists()
+
+
+def test_onboarding_handcheck_only_from_a_file(to, tmp_path):
+    import json
+    rows = [{"item_id": "I0001", "rule": "R01", "label": "STATES"}, {"item_id": "I0002", "rule": "R02", "label": "FOLLOWS"}]
+    assert to.handcheck_summary(rows) is None
+    (tmp_path / "handcheck.json").write_text(json.dumps({"I0001/R01": 1, "I0002/R02": 0, "I0009/R01": 1}))
+    hc = to.handcheck_summary(rows)
+    assert hc["n"] == 3 and hc["agreement"] == round(2 / 3, 3)
+    assert hc["by_label"] == {"STATES": "1/1", "FOLLOWS": "0/1", "?": "1/1"}
