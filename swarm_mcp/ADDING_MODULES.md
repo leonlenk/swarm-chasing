@@ -129,13 +129,15 @@ them and replaces that source's rows in one transaction; an adapter's optional
   Revisions become messages (with `reply_to`), deletions and reverts actions, pages
   artifacts and links mention touches. Only via `swarm-mcp add <dir> --adapter wiki`.
 - `mapped` (`scope/adapters/mapped.py`): runs a declarative mapping (below) and converts
-  its records: category `message` → `messages` (`<source>:msg:<id>`, dataset kind in
-  `msg_type`), `action` and `other` → `actions` (`<source>:event:<id>`, dataset kind in
-  `kind`), periods → `<source>:period:<id>`, then agents. `scope.ingest.ingest_mapped(mapping,
-  path, db)` is the library entry point.
+  its records: category `message` → `messages` (`<source>:msg:<kind>/<id>`, the dataset
+  kind in `msg_type`), `action` and `other` → `actions` (`<source>:event:<kind>/<id>`, the
+  dataset kind in `kind`), periods → `<source>:period:<kind>/<id>`, then agents
+  (`<source>:agent:<id>`). The `<kind>/` prefix keeps ids from different record entries
+  apart. `scope.ingest.ingest_mapped(mapping, path, db)` is the library entry point.
 
 `scope.records.store_records(db, filters)` streams standard records out of the store with
-the filters `source`, `kind`, `channel`, `author`, `since`, `until` and `query`. The scope
+the filters `source`, `kind` (schema kind: `msg` or `event`), `type` (the dataset type:
+`msg_type` or `actions.kind`), `channel`, `author`, `since`, `until` and `query`. The scope
 module registers `StoreRecordProvider` as the `store` record provider for
 `sweep_run(filters=...)`, and `scope.records.export_store` feeds the same records to
 `export.export` with a `redact.Redactor`. Any module can register another provider with

@@ -109,7 +109,8 @@ verdict with the id it is about.
 
 1. `sweep_run(rubric, filters={"source": "village", "channel": "general", "since": "2026-01-05", "until": "2026-01-12"})`
    is a dry run: records, estimated tokens and USD, and the first prompt. Filters are
-   `source`, `kind`, `channel`, `author`, `since`, `until` and `query`; or pass `ids`.
+   `source`, `kind` (`msg` or `event`), `type` (the dataset type, e.g. `session_goal`),
+   `channel`, `author`, `since`, `until` and `query`; or pass `ids`.
 2. The same call with `dry_run=false` runs it (needs `ANTHROPIC_API_KEY`; `cap` defaults
    to 50, max 500). The run stops after 3 consecutive failed calls.
 3. `sweep_review(sweep_id)` returns items to check; read each with `core_get`, then
