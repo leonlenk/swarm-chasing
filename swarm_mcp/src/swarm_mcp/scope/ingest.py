@@ -111,32 +111,33 @@ def _read_spool(table: str, spool: Path) -> str:
 
 
 def _duplicate_error(
-    con: duckdb.DuckDBPyConnection, table: str, spool: Path, adapter: Adapter, path: Path, err: Exception
+    con: duckdb.DuckDBPyConnection, table: str, spool: Path, adapter: Adapter, err: Exception
 ) -> ToolInputError:
     """A readable error for a primary-key collision at INSERT (e.g. two mapped records with one local_id).
 
-    Called after ROLLBACK; names up to three duplicate ids from the spooled rows (or, when the clash is
-    with another source's rows, the key DuckDB reported)."""
+    Called after ROLLBACK; names up to five duplicate ids from the spooled rows and how many there are
+    (or, when the clash is with another source's rows, the key DuckDB reported)."""
     pk = schema.PRIMARY_KEYS[table]
-    dupes: list[tuple[Any, int]] = []
+    dupes: list[tuple[Any, int, int]] = []
     try:
         dupes = con.execute(
-            f"SELECT {pk}, count(*) AS n FROM {_read_spool(table, spool)} GROUP BY 1 HAVING count(*) > 1 "
-            "ORDER BY n DESC, 1 LIMIT 3"
+            f"SELECT {pk}, n, count(*) OVER () FROM (SELECT {pk}, count(*) AS n FROM {_read_spool(table, spool)} "
+            "GROUP BY 1 HAVING count(*) > 1) ORDER BY n DESC, 1 LIMIT 5"
         ).fetchall()
     except duckdb.Error:
         pass
     if dupes:
-        ids = ", ".join(f"{k!r} ({n}x)" for k, n in dupes)
+        ids = ", ".join(f"{k!r} ({n}x)" for k, n, _ in dupes)
+        more = dupes[0][2] - len(dupes)
+        ids += f" and {more:,} more" if more else ""
     else:
         m = re.search(r'duplicate key "([^"]*)"', str(err))
         ids = repr(m.group(1)) if m else "(unknown)"
-    mapping = (getattr(adapter, "source_meta", None) or {}).get("mapping")
-    check = f"swarm-mcp add {path}" + (f" --mapping {mapping}" if mapping else "") + " --dry-run"
     return ToolInputError(
         f"source {adapter.source!r}: duplicate {pk} in {table}: {ids}. Nothing was ingested (the store is "
         "unchanged). Each record's id must be unique; for a mapping, make each entry's local_id unique "
-        f"within its kind (e.g. a primary key, not a foreign key). `{check}` runs the mapping check."
+        "within its kind (e.g. a primary key, not a foreign key). The mapping check (--dry-run) reads only "
+        "a sample, so it can miss duplicates further into the data."
     )
 
 
@@ -238,7 +239,7 @@ def ingest(
                 except duckdb.ConstraintException as e:
                     con.execute("ROLLBACK")
                     in_tx = False
-                    raise _duplicate_error(con, table, spool, adapter, path, e) from None
+                    raise _duplicate_error(con, table, spool, adapter, e) from None
             con.execute("DELETE FROM sources WHERE source = ?", [adapter.source])
             con.execute(
                 "INSERT INTO sources VALUES (?, ?, ?, ?, ?, ?)",
