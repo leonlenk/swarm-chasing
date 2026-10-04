@@ -23,6 +23,8 @@ ALL = {
     "git": "skipped",
     "subtasks": "skipped",
     "wiki": "skipped",
+    "investigate": "loaded",  # needs no data
+    "sweep": "loaded",  # needs no data
 }
 
 
@@ -32,7 +34,13 @@ def test_default_loads_all(data_dir: Path):
 
 def test_modules_allowlist_keeps_core(data_dir: Path):
     app = build_server(config_for(data_dir, SWARM_MCP_MODULES="village"))
-    assert _status(app) == {**ALL, "findings": "skipped", "scope": "skipped"}
+    assert _status(app) == {
+        **ALL,
+        "findings": "skipped",
+        "scope": "skipped",
+        "investigate": "skipped",
+        "sweep": "skipped",
+    }
     app = build_server(config_for(data_dir, SWARM_MCP_MODULES="core"))
     st = _status(app)
     assert st["village"] == "skipped"

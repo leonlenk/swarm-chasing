@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Modular MCP server for the swarm-understanding toolkit (AI Village and friends), with the SwarmScope evidence store."
 requires-python = ">=3.11"
 dependencies = [
+    "anthropic>=1.11.0",
     "mcp>=2.3,<3",
     "duckdb>=1.1",
     "networkx>=3.6.1",
