@@ -23,7 +23,7 @@ from typing import Any, Iterator, Sequence
 import duckdb
 
 from swarm_mcp.scope import schema
-from swarm_mcp.toolkit import ToolInputError
+from swarm_mcp.toolkit import ToolInputError, label_matches
 
 HUMAN = "human"
 _HUMAN_WORDS = {"human", "humans", "user", "users"}
@@ -119,6 +119,8 @@ class Store:
             exact = [r for r in rows if norm(r["display_name"]) == key]
         if not exact:
             exact = [r for r in rows if any(norm(a) == key for a in (r["aliases"] or []))]
+        if not exact:  # the display name exactly as a tool returned it (toolkit.safe_label)
+            exact = [r for r in rows if label_matches(r["display_name"], q)]
         if not exact:
             exact = [r for r in rows if key and key in norm(r["display_name"])]
         if len(exact) == 1:
@@ -155,7 +157,7 @@ class Store:
         sql = "SELECT DISTINCT channel FROM messages WHERE channel IS NOT NULL" + (" AND source = ?" if source else "")
         names = [r["channel"] for r in self.all(sql, [source] if source else [])]
         for n in names:
-            if n == q or n.lower() == q.lower():
+            if n == q or n.lower() == q.lower() or label_matches(n, channel):
                 return n
         raise ToolInputError(f"Unknown channel {channel!r}. Channels: {', '.join(sorted(names))}")
 
