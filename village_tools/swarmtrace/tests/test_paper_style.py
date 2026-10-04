@@ -3,7 +3,7 @@
 paperfig reads its palette from swarm_mcp's assets/paper.css, so these checks pin the contract:
 every role the figures use exists, the categorical slots are the Okabe-Ito colours in their fixed
 order, and the sequential ramp gets darker step by step (so it also reads in greyscale).
-Run from the repo root: uv run --no-project --with pytest --with jsonschema pytest village_tools/swarmtrace/tests
+Run from the repo root: uv run --no-project --with pytest --with jsonschema --with matplotlib pytest village_tools/swarmtrace/tests
 """
 
 import sys
@@ -41,7 +41,7 @@ def test_sequential_ramp_is_monotone():
 
 
 def test_rc_is_neurips_sized():
-    pytest.importorskip("cycler")  # rc() builds a colour cycle; cycler ships with matplotlib
+    pytest.importorskip("cycler", reason="needs matplotlib (rc() builds a cycler colour cycle): add --with matplotlib")
     rc = paperfig.rc()
     assert rc["font.family"] == "serif" and rc["font.serif"][0] == "Times New Roman"
     assert min(rc[k] for k in ("font.size", "axes.labelsize", "xtick.labelsize", "ytick.labelsize", "legend.fontsize")) >= 7
