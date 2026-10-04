@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+/* One row per inferred subtask on a compressed time axis; detail panels below. Tokens match render timeline. */
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10); --alt: #f1f0ec; --hi: #4a3aa7;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
+  --s5: #e87ba4; --s6: #008300; --s7: #4a3aa7; --s8: #e34948; --other: #a9a8a2;
+  --seq0: #cde2fb; --seq1: #104281; --tip-bg: #fcfcfb;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10); --alt: #232321; --hi: #9085e9;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+    --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767; --other: #5d5c58;
+    --seq0: #1c2a3d; --seq1: #86b6ef; --tip-bg: #242423;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10); --alt: #232321; --hi: #9085e9;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+  --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767; --other: #5d5c58;
+  --seq0: #1c2a3d; --seq1: #86b6ef; --tip-bg: #242423;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--page); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1600px; margin: 0 auto; padding: 20px 16px 32px; display: grid; gap: 14px; }
+h1 { font-size: 20px; margin: 0; }
+h2 { font-size: 15px; margin: 0; }
+h3 { font-size: 11px; margin: 8px 0 0; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+.lede { color: var(--ink-2); margin: 4px 0 0; max-width: 95ch; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.muted { color: var(--muted); }
+.controls { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; font-size: 13px; color: var(--ink-2); }
+.group { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-right: 2px; }
+button, select, input { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; }
+select { max-width: 220px; }
+button { cursor: pointer; }
+button:hover { border-color: var(--axis); }
+button[aria-pressed="true"] { background: var(--ink); color: var(--page); border-color: var(--ink); }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--hi); outline-offset: 2px; }
+.desc { font-size: 13px; color: var(--ink-2); margin: 0; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--ink-2); align-items: center; }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; min-width: 0; }
+#tracks { overflow: hidden; }
+#tracks svg { display: block; width: 100%; }
+.rowbg { fill: transparent; cursor: pointer; }
+.rowbg:hover, .sel .rowbg { fill: var(--alt); }
+.rname { font: 500 12.5px system-ui, sans-serif; fill: var(--ink); }
+.rmeta, .axis text { font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; fill: var(--muted); }
+.bead { cursor: pointer; }
+.below { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+@media (max-width: 980px) { .below { grid-template-columns: minmax(0, 1fr); } }
+.col { display: grid; gap: 14px; min-width: 0; }
+.card { padding: 12px 14px; display: grid; gap: 8px; min-width: 0; }
+.title { font-weight: 600; font-size: 16px; margin: 0; overflow-wrap: anywhere; }
+.meta { display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: 12.5px; color: var(--ink-2); }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; font-size: 12.5px; width: 100%; }
+th { font: 500 11px ui-monospace, Menlo, monospace; color: var(--muted); text-align: right; padding: 4px 6px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+td { padding: 4px 6px; border-bottom: 1px solid var(--grid); text-align: right; font-variant-numeric: tabular-nums; }
+th:first-child, td:first-child { text-align: left; }
+.list { display: grid; gap: 2px; max-height: 340px; overflow: auto; font-size: 12.5px; }
+.item { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 6px; padding: 2px 4px; border-radius: 4px; cursor: pointer; align-items: baseline; }
+.item:hover, .item.on { background: var(--alt); }
+.item .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ho { display: grid; gap: 5px; font-size: 12.5px; max-height: 320px; overflow: auto; }
+.ho .ev { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.frag { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; align-items: center; font-size: 12px; }
+.bar { display: flex; gap: 2px; height: 10px; }
+.bar i { display: block; height: 100%; background: var(--axis); border-radius: 2px; }
+.bar i:first-child { background: var(--ink-2); }
+.pill { display: inline-block; font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; margin: 0 4px 4px 0; }
+.empty { color: var(--ink-2); margin: 0; }
+#tip { position: fixed; z-index: 10; pointer-events: none; max-width: min(420px, calc(100vw - 32px)); background: var(--tip-bg); color: var(--ink); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 18px rgba(0,0,0,.18); padding: 8px 10px; font-size: 12px; display: none; }
+footer { font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Subtasks · __CORPUS__</h1>
+  <p class="lede" id="lede"></p>
+</header>
+<div class="controls">
+  <div class="group" id="methods"><span class="lbl">Method</span></div>
+  <div class="group" id="levels"><span class="lbl">Granularity</span></div>
+  <div class="group"><span class="lbl">Min size</span><input id="minsize" type="number" min="1" value="2" style="width:64px"></div>
+  <div class="group"><span class="lbl">Pair lens</span><select id="pa" aria-label="First actor"></select><select id="pb" aria-label="Second actor"></select></div>
+</div>
+<p class="desc" id="mdesc"></p>
+<div class="legend" id="legend"></div>
+<div class="panel" id="tracks"><svg id="sv" role="img" aria-label="Inferred subtasks over time"></svg></div>
+<div class="below">
+  <div class="col">
+    <div class="panel card" id="detail"></div>
+    <div class="panel card" id="why"></div>
+  </div>
+  <div class="col">
+    <div class="panel card" id="pair"></div>
+    <div class="panel card" id="agree"></div>
+    <div class="panel card" id="notes"></div>
+  </div>
+</div>
+<footer>__FOOTER__</footer>
+</main>
+<div id="tip"></div>
+<script id="data" type="application/json">__DATA__</script>
+<script>
+(function () {
+  'use strict';
+  var D = JSON.parse(document.getElementById('data').textContent);
+  var U = D.units, A = D.actors, NS = 'http://www.w3.org/2000/svg';
+  var S = { method: 'combined', level: 'medium', sel: null, unit: null, pa: -1, pb: -1, min: 2 };
+  var VERB = { builds_on: 'changed ' + D.artifact + ' created in', integrates: 'imported a module created in',
+    tests: 'added tests for a module created in', fixes: 'fixed ' + D.artifact + 's created in',
+    resubmits: 're-created the ' + D.artifact + 's of', duplicate: 'duplicated' };
+  var DASH = { integrates: '', builds_on: '5 3', tests: '1.5 3', fixes: '8 3 2 3', resubmits: '10 2', duplicate: '2 2' };
+
+  // ---- DOM helpers: every data-derived string goes through textContent, never parsed as markup ----------
+  function el(tag, attrs, kids) {
+    var n = document.createElement(tag);
+    if (attrs) Object.keys(attrs).forEach(function (k) {
+      if (k === 'text') n.textContent = attrs[k];
+      else if (k === 'class') n.className = attrs[k];
+      else if (k.slice(0, 2) === 'on') n.addEventListener(k.slice(2), attrs[k]);
+      else n.setAttribute(k, attrs[k]);
+    });
+    (kids || []).forEach(function (c) { if (c != null) n.appendChild(typeof c === 'string' ? document.createTextNode(c) : c); });
+    return n;
+  }
+  function sv(tag, attrs) { var n = document.createElementNS(NS, tag); Object.keys(attrs || {}).forEach(function (k) { n.setAttribute(k, attrs[k]); }); return n; }
+  function clear(n) { n.textContent = ''; return n; }
+  function color(a) { return a >= 0 && a < D.slots ? 'var(--s' + (a + 1) + ')' : 'var(--other)'; }
+  function aname(a) { return a >= 0 ? A[a] : '?'; }
+  function iso(ms) { return ms == null ? '?' : new Date(ms).toISOString().slice(0, 16).replace('T', ' '); }
+  function day(ms) { return new Date(ms).toISOString().slice(5, 10); }
+  function ML(m) { return (D.method_label && D.method_label[m]) || m; }
+  function dotEl(a, hollow) { var d = el('i', { class: 'dot' }); d.style.background = hollow ? 'transparent' : color(a); d.style.border = '1.5px solid ' + color(a); return d; }
+
+  // ---- derived state -------------------------------------------------------------------------------
+  function clusters() { return D.clusters[S.method][S.level]; }
+  function names() { return D.names[S.method][S.level]; }
+  function labelOf(m, l) { var lab = new Int32Array(U.length); D.clusters[m][l].forEach(function (c, ci) { c.forEach(function (i) { lab[i] = ci; }); }); return lab; }
+  function touches(i, a) { return U[i][8].indexOf(a) >= 0; }
+
+  // ---- time axis compressed to active segments -------------------------------------------------------
+  function scale(x0, x1) {
+    var seg = D.segments, GAP = 12, tot = seg.reduce(function (s, g) { return s + g[1] - g[0]; }, 0) || 1;
+    var k = (x1 - x0 - GAP * Math.max(0, seg.length - 1)) / tot;
+    return function (t) {
+      var x = x0;
+      for (var i = 0; i < seg.length; i++) {
+        if (t < seg[i][0]) return x - (i ? GAP / 2 : 0);
+        if (t <= seg[i][1]) return x + (t - seg[i][0]) * k;
+        x += (seg[i][1] - seg[i][0]) * k + GAP;
+      }
+      return x1;
+    };
+  }
+
+  // ---- controls ----------------------------------------------------------------------------------------
+  function buildControls() {
+    var mg = document.getElementById('methods');
+    D.methods.forEach(function (m) { mg.appendChild(el('button', { type: 'button', 'data-m': m, text: ML(m), onclick: function () { S.method = m; S.sel = null; S.unit = null; render(); } })); });
+    var lg = document.getElementById('levels');
+    D.levels.forEach(function (l) { lg.appendChild(el('button', { type: 'button', 'data-l': l, text: l, onclick: function () { S.level = l; S.sel = null; S.unit = null; render(); } })); });
+    document.getElementById('minsize').addEventListener('change', function (e) { S.min = Math.max(1, +e.target.value || 1); drawTracks(); });
+    ['pa', 'pb'].forEach(function (id) {
+      var s = document.getElementById(id);
+      s.appendChild(el('option', { value: '-1', text: 'any actor' }));
+      A.forEach(function (a, i) { s.appendChild(el('option', { value: String(i), text: a })); });
+      s.addEventListener('change', function () { S[id] = +s.value; render(); });
+    });
+    var leg = document.getElementById('legend');
+    A.slice(0, D.slots).forEach(function (a, i) { leg.appendChild(el('span', null, [dotEl(i, false), a])); });
+    if (A.length > D.slots) leg.appendChild(el('span', null, [dotEl(-1, false), (A.length - D.slots) + ' other actors']));
+    if (D.unfinished.length) leg.appendChild(el('span', null, [dotEl(-1, true), 'did not complete (' + D.unfinished.join(', ') + ')']));
+    var used = {}; D.edges.forEach(function (e) { used[e[2]] = 1; });
+    Object.keys(DASH).filter(function (k) { return used[k]; }).forEach(function (k) {
+      var s = sv('svg', { width: 26, height: 8 }); s.appendChild(sv('line', { x1: 1, y1: 4, x2: 25, y2: 4, stroke: 'var(--ink-2)', 'stroke-width': 1.5, 'stroke-dasharray': DASH[k] }));
+      leg.appendChild(el('span', null, [s, k.replace('_', ' ')]));
+    });
+    leg.appendChild(el('span', { class: 'muted', text: '(handoff lines show for the selected row)' }));
+    document.getElementById('lede').textContent = 'Each row is a subtask: a group of ' + D.unit + 's inferred from what they touched and said. ' +
+      'One dot per ' + D.unit + ' at its start, coloured by its main actor. Click a row for who did what and the handoffs ' +
+      'between actors; click a dot for why it was grouped there. ' + U.length + ' ' + D.unit + 's, ' + A.length + ' actors, ' + D.edges.length + ' handoffs.';
+  }
+
+  function render() {
+    document.querySelectorAll('#methods button').forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-m') === S.method); });
+    document.querySelectorAll('#levels button').forEach(function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-l') === S.level); });
+    document.getElementById('mdesc').textContent = D.method_desc[S.method];
+    drawTracks(); drawDetail(); drawWhy(); drawPair(); drawAgree(); drawNotes();
+  }
+
+  // ---- tracks ----------------------------------------------------------------------------------------------
+  function rows() {
+    var out = [];
+    clusters().forEach(function (c, ci) {
+      if (c.length < S.min) return;
+      if (S.pa >= 0 && !c.some(function (i) { return touches(i, S.pa); })) return;
+      if (S.pb >= 0 && !c.some(function (i) { return touches(i, S.pb); })) return;
+      var st = Math.min.apply(null, c.map(function (i) { return U[i][6] || Infinity; }));
+      out.push({ ci: ci, m: c, st: st });
+    });
+    return out.sort(function (a, b) { return a.st - b.st; });
+  }
+  function drawTracks() {
+    var svg = document.getElementById('sv'), W = svg.clientWidth || 1200, LW = Math.min(300, W * 0.3), RH = 22, TOP = 24;
+    var R = rows(), selH = 60, H = TOP + R.length * RH + (R.some(function (r) { return r.ci === S.sel; }) ? selH : 0) + 22;
+    svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H); svg.setAttribute('height', H); clear(svg);
+    var X = scale(LW + 10, W - 12), lens = S.pa >= 0 || S.pb >= 0;
+    var ax = sv('g', { class: 'axis' });
+    D.segments.forEach(function (g) {
+      var a = X(g[0]), b = X(g[1]);
+      ax.appendChild(sv('rect', { x: a, y: TOP - 4, width: Math.max(0, b - a), height: Math.max(0, H - TOP - 18), fill: 'var(--alt)', opacity: 0.5 }));
+      if (b - a > 34) { var t = sv('text', { x: a + 2, y: 14 }); t.textContent = day(g[0]); ax.appendChild(t); }
+    });
+    svg.appendChild(ax);
+    var y = TOP;
+    R.forEach(function (r) {
+      var isSel = r.ci === S.sel, rh = isSel ? RH + selH : RH, cy = y + (isSel ? RH + selH - 16 : RH / 2);
+      var g = sv('g', { class: isSel ? 'sel' : '' });
+      g.appendChild(sv('rect', { class: 'rowbg', x: 0, y: y, width: W, height: rh }));
+      var nm = names()[r.ci], t = sv('text', { class: 'rname', x: 10, y: y + 15 });
+      t.textContent = nm.length > 40 ? nm.slice(0, 39) + '…' : nm; g.appendChild(t);
+      var actors = {}; r.m.forEach(function (i) { U[i][8].forEach(function (a) { actors[a] = 1; }); });
+      var mt = sv('text', { class: 'rmeta', x: LW - 4, y: y + 15, 'text-anchor': 'end' });
+      mt.textContent = r.m.length + ' · ' + Object.keys(actors).length + 'a'; g.appendChild(mt);
+      var xs = r.m.map(function (i) { return X(U[i][6]); }), xe = r.m.map(function (i) { return X(U[i][7] || U[i][6]); });
+      g.appendChild(sv('line', { x1: Math.min.apply(null, xs), x2: Math.max.apply(null, xe), y1: cy, y2: cy, stroke: 'var(--axis)' }));
+      if (isSel) {
+        var inC = {}; r.m.forEach(function (i) { inC[i] = 1; });
+        D.edges.forEach(function (e) {
+          if (!inC[e[0]] || !inC[e[1]]) return;
+          var x1 = X(U[e[0]][6]), x2 = X(U[e[1]][6]), hh = Math.min(selH - 6, 8 + Math.abs(x2 - x1) * 0.25);
+          var hl = S.pa >= 0 && S.pb >= 0 && ((e[3] === S.pa && e[4] === S.pb) || (e[3] === S.pb && e[4] === S.pa));
+          g.appendChild(sv('path', { d: 'M' + x1 + ',' + cy + ' C' + x1 + ',' + (cy - hh) + ' ' + x2 + ',' + (cy - hh) + ' ' + x2 + ',' + cy,
+            fill: 'none', stroke: hl ? 'var(--hi)' : 'var(--ink-2)', 'stroke-width': hl ? 2 : 1.2, 'stroke-dasharray': DASH[e[2]], opacity: 0.85 }));
+        });
+      }
+      r.m.forEach(function (i) {
+        var u = U[i], hollow = u[5] === 0, c = color(u[3]);
+        var dim = lens && !((S.pa >= 0 && touches(i, S.pa)) || (S.pb >= 0 && touches(i, S.pb)));
+        var b = sv('circle', { class: 'bead', cx: X(u[6]), cy: cy, r: S.unit === i ? 6 : 4.5, fill: hollow ? 'var(--surface)' : c,
+          stroke: hollow ? c : 'var(--surface)', 'stroke-width': hollow ? 1.75 : 1.2, opacity: dim ? 0.18 : 1 });
+        b.addEventListener('mousemove', function (ev) { tip(ev, i); });
+        b.addEventListener('mouseleave', function () { document.getElementById('tip').style.display = 'none'; });
+        b.addEventListener('click', function (ev) { ev.stopPropagation(); S.sel = r.ci; S.unit = i; render(); });
+        g.appendChild(b);
+      });
+      g.addEventListener('click', function () { S.sel = r.ci; S.unit = null; render(); document.getElementById('detail').scrollIntoView({ block: 'nearest', behavior: 'smooth' }); });
+      svg.appendChild(g); y += rh;
+    });
+    var ft = sv('text', { class: 'rmeta', x: 10, y: y + 15 });
+    ft.textContent = R.length + ' subtasks shown (size >= ' + S.min + (lens ? ', matching the pair lens' : '') + ') of ' + clusters().length + '; idle gaps over 6 h are compressed';
+    svg.appendChild(ft);
+  }
+  function tip(ev, i) {
+    var t = document.getElementById('tip'), u = U[i]; clear(t);
+    t.appendChild(el('div', { class: 'mono muted', text: u[0] }));
+    t.appendChild(el('div', { style: 'font-weight:600', text: u[1] + ' · ' + aname(u[3]) }));
+    t.appendChild(el('div', { text: u[2] }));
+    t.appendChild(el('div', { class: 'muted', text: iso(u[6]) + ' · ' + u[4] + (u[9] ? ' · ' + u[9] + ' chat mentions' : '') }));
+    t.style.display = 'block';
+    var r = t.getBoundingClientRect();
+    t.style.left = Math.min(ev.clientX + 14, innerWidth - r.width - 8) + 'px';
+    t.style.top = Math.min(ev.clientY + 14, innerHeight - r.height - 8) + 'px';
+  }
+
+  // ---- detail ------------------------------------------------------------------------------------------------
+  function edgeLine(e) {
+    var a = U[e[0]], b = U[e[1]];
+    var txt = aname(e[4]) + ' ' + VERB[e[2]] + ' ' + aname(e[3]) + "'s " + a[1] + (e[2] === 'duplicate' ? ' in ' + b[1] : ' (' + b[1] + ')');
+    var ev = e[2] === 'duplicate' ? 'similarity ' + e[7] + ' (inferred)' : (e[6].join(', ') + ' · evidence: ' + e[5].join(', '));
+    return el('div', null, [el('div', null, [el('span', { class: 'mono muted', text: iso(b[6]) + '  ' }), el('b', { text: e[2].replace('_', ' ') + ': ' }), txt]), el('div', { class: 'ev mono', text: ev })]);
+  }
+  function drawDetail() {
+    var box = clear(document.getElementById('detail'));
+    if (S.sel == null) { box.appendChild(el('h2', { text: 'Subtask' })); box.appendChild(el('p', { class: 'empty', text: 'Click a row above.' })); return; }
+    var m = clusters()[S.sel], inC = {}; m.forEach(function (i) { inC[i] = 1; });
+    var P = m.slice().sort(function (a, b) { return U[a][6] - U[b][6]; });
+    var states = {}; m.forEach(function (i) { states[U[i][4]] = (states[U[i][4]] || 0) + 1; });
+    box.appendChild(el('h2', { text: 'Subtask ' + D.corpus + '/' + S.method + '/' + S.level + '/' + (S.sel + 1) }));
+    box.appendChild(el('p', { class: 'title', text: names()[S.sel] }));
+    var internal = D.edges.filter(function (e) { return inC[e[0]] && inC[e[1]]; });
+    var inb = D.edges.filter(function (e) { return e[2] !== 'duplicate' && !inC[e[0]] && inC[e[1]]; }).length;
+    var outb = D.edges.filter(function (e) { return e[2] !== 'duplicate' && inC[e[0]] && !inC[e[1]]; }).length;
+    var end = Math.max.apply(null, m.map(function (i) { return U[i][7] || U[i][6]; }));
+    box.appendChild(el('div', { class: 'meta' }, [el('span', { text: m.length + ' ' + D.unit + 's' }), el('span', { text: iso(U[P[0]][6]) + ' → ' + iso(end) }),
+      el('span', { text: Object.keys(states).map(function (k) { return states[k] + ' ' + k; }).join(', ') }),
+      el('span', { text: inb + ' handoffs in from other subtasks, ' + outb + ' out' })]));
+    var st = {};
+    function g(a) { return st[a] || (st[a] = { led: 0, other: 0, gave: 0, got: 0 }); }
+    m.forEach(function (i) { if (U[i][3] >= 0) g(U[i][3]).led++; U[i][8].forEach(function (a) { if (a !== U[i][3]) g(a).other++; }); });
+    internal.forEach(function (e) { if (e[2] !== 'duplicate') { g(e[3]).gave++; g(e[4]).got++; } });
+    var tb = el('tbody');
+    Object.keys(st).map(Number).sort(function (a, b) { return st[b].led - st[a].led || st[b].gave - st[a].gave; }).slice(0, 25).forEach(function (a) {
+      tb.appendChild(el('tr', null, [el('td', null, [dotEl(a, false), ' ' + aname(a)]), el('td', { text: String(st[a].led) }), el('td', { text: String(st[a].other) }), el('td', { text: String(st[a].gave) }), el('td', { text: String(st[a].got) })]));
+    });
+    box.appendChild(el('h3', { text: 'Who did what' }));
+    box.appendChild(el('div', { class: 'tablewrap' }, [el('table', null, [el('thead', null, [el('tr', null, [el('th', { text: 'actor' }), el('th', { text: D.unit + 's led' }), el('th', { text: "in others'" }), el('th', { text: 'built upon' }), el('th', { text: "built on others'" })])]), tb])]));
+    box.appendChild(el('h3', { text: 'Handoffs between actors (' + internal.length + ')' }));
+    var ho = el('div', { class: 'ho' });
+    if (!internal.length) ho.appendChild(el('p', { class: 'empty', text: 'No cross-actor handoffs inside this subtask.' }));
+    internal.slice().sort(function (a, b) { return U[a[1]][6] - U[b[1]][6]; }).slice(0, 200).forEach(function (e) { ho.appendChild(edgeLine(e)); });
+    box.appendChild(ho);
+    var tags = {}; m.forEach(function (i) { U[i][10].forEach(function (t) { tags[t] = (tags[t] || 0) + 1; }); });
+    var tk = Object.keys(tags).sort(function (a, b) { return tags[b] - tags[a]; }).slice(0, 6);
+    if (tk.length && D.tag) { box.appendChild(el('h3', { text: 'Dataset labels: ' + D.tag })); box.appendChild(el('div', null, tk.map(function (t) { return el('span', { class: 'pill', text: t + ' ' + tags[t] }); }))); }
+    box.appendChild(el('h3', { text: 'How the other methods group these ' + D.unit + 's' }));
+    D.methods.filter(function (x) { return x !== S.method; }).forEach(function (x) {
+      var lab = labelOf(x, S.level), cnt = {}; m.forEach(function (i) { cnt[lab[i]] = (cnt[lab[i]] || 0) + 1; });
+      var parts = Object.keys(cnt).sort(function (a, b) { return cnt[b] - cnt[a]; });
+      var bar = el('div', { class: 'bar' }); parts.forEach(function (p) { var b = el('i'); b.style.flex = String(cnt[p]); bar.appendChild(b); });
+      var note = (parts.length === 1 ? 'kept whole' : 'split ' + parts.length + ' ways') + ' · largest: ' + D.names[x][S.level][+parts[0]] + ' (' + cnt[parts[0]] + '/' + m.length + ')';
+      box.appendChild(el('div', { class: 'frag' }, [el('span', { class: 'mono muted', text: ML(x) }), el('div', null, [bar, el('div', { class: 'muted', style: 'font-size:11px', text: note })])]));
+    });
+    box.appendChild(el('h3', { text: D.unit + 's' }));
+    var list = el('div', { class: 'list' });
+    P.forEach(function (i) {
+      list.appendChild(el('div', { class: 'item' + (S.unit === i ? ' on' : ''), onclick: function () { S.unit = i; drawWhy(); drawTracks(); drawDetail(); } },
+        [dotEl(U[i][3], U[i][5] === 0), el('span', { class: 't', text: U[i][1] + ' · ' + aname(U[i][3]) + ' · ' + U[i][2] })]));
+    });
+    box.appendChild(list);
+  }
+
+  // ---- why -----------------------------------------------------------------------------------------------------
+  function drawWhy() {
+    var box = clear(document.getElementById('why'));
+    box.appendChild(el('h2', { text: 'Why is this ' + D.unit + ' here?' }));
+    if (S.unit == null) { box.appendChild(el('p', { class: 'empty', text: 'Click a dot, or a ' + D.unit + ' in the subtask list.' })); return; }
+    var u = U[S.unit], lab = labelOf(S.method, S.level);
+    box.appendChild(el('p', { class: 'title', text: u[1] + ': ' + u[2] }));
+    box.appendChild(el('div', { class: 'mono muted', text: u[0] }));
+    box.appendChild(el('div', { class: 'meta' }, [el('span', { text: 'led by ' + aname(u[3]) }), el('span', { text: iso(u[6]) }), el('span', { text: u[4] }), el('span', { text: u[9] + ' chat mentions' })]));
+    box.appendChild(el('h3', { text: 'Closest ' + D.unit + 's (combined signal)' }));
+    if (!D.nbrs[S.unit].length) box.appendChild(el('p', { class: 'empty', text: 'No similar ' + D.unit + 's.' }));
+    D.nbrs[S.unit].forEach(function (n) {
+      var j = n[0], kids = [el('div', null, [el('b', { text: U[j][1] + ' ' }), U[j][2] + ' ', el('span', { class: 'muted', text: n[1] + ' · ' + (lab[j] === lab[S.unit] ? 'same subtask' : 'other subtask') })])];
+      Object.keys(n[2]).forEach(function (k) { kids.push(el('div', { class: 'mono muted', text: k + ' ' + n[2][k][0] + ': ' + n[2][k][1].join(', ') })); });
+      box.appendChild(el('div', { style: 'border-left:2px solid var(--grid);padding-left:8px' }, kids));
+    });
+    var eds = D.edges.filter(function (e) { return e[0] === S.unit || e[1] === S.unit; });
+    box.appendChild(el('h3', { text: 'Handoffs touching it (' + eds.length + ')' }));
+    var ho = el('div', { class: 'ho' }); eds.slice(0, 60).forEach(function (e) { ho.appendChild(edgeLine(e)); }); box.appendChild(ho);
+  }
+
+  // ---- pair --------------------------------------------------------------------------------------------------------
+  function drawPair() {
+    var box = clear(document.getElementById('pair'));
+    box.appendChild(el('h2', { text: 'Pair lens' }));
+    if (S.pa < 0 || S.pb < 0 || S.pa === S.pb) { box.appendChild(el('p', { class: 'empty', text: "Pick two different actors above to see what they did with each other's work." })); return; }
+    var pairE = D.edges.filter(function (e) { return e[2] !== 'duplicate' && ((e[3] === S.pa && e[4] === S.pb) || (e[3] === S.pb && e[4] === S.pa)); });
+    var ab = {}, ba = {};
+    pairE.forEach(function (e) { var t = e[3] === S.pa ? ab : ba; t[e[2]] = (t[e[2]] || 0) + 1; });
+    function fmt(o) { var k = Object.keys(o); return k.length ? k.map(function (x) { return o[x] + ' ' + x.replace('_', ' '); }).join(', ') : 'none'; }
+    box.appendChild(el('p', { class: 'title', text: aname(S.pa) + ' & ' + aname(S.pb) }));
+    box.appendChild(el('div', { text: aname(S.pb) + ' picked up ' + aname(S.pa) + "'s work: " + fmt(ab) }));
+    box.appendChild(el('div', { text: aname(S.pa) + ' picked up ' + aname(S.pb) + "'s work: " + fmt(ba) }));
+    var shared = [];
+    clusters().forEach(function (c, ci) {
+      if (c.some(function (i) { return touches(i, S.pa); }) && c.some(function (i) { return touches(i, S.pb); })) {
+        var inC = {}; c.forEach(function (i) { inC[i] = 1; });
+        shared.push({ ci: ci, n: pairE.filter(function (e) { return inC[e[1]]; }).length, size: c.length });
+      }
+    });
+    shared.sort(function (a, b) { return b.n - a.n || b.size - a.size; });
+    box.appendChild(el('h3', { text: 'Shared subtasks (' + shared.length + ')' }));
+    var list = el('div', { class: 'list' });
+    shared.forEach(function (s) {
+      list.appendChild(el('div', { class: 'item', onclick: function () { S.sel = s.ci; S.unit = null; render(); } },
+        [el('span'), el('span', { class: 't', text: names()[s.ci] + ' · ' + s.size + ' ' + D.unit + 's · ' + s.n + ' handoffs between them' })]));
+    });
+    box.appendChild(list);
+    box.appendChild(el('h3', { text: 'Direct handoffs (' + pairE.length + ')' }));
+    var ho = el('div', { class: 'ho' });
+    pairE.slice().sort(function (a, b) { return U[a[1]][6] - U[b[1]][6]; }).slice(0, 80).forEach(function (e) { ho.appendChild(edgeLine(e)); });
+    box.appendChild(ho);
+  }
+
+  // ---- agreement + notes ------------------------------------------------------------------------------------------
+  function mix(v) {
+    var cs = getComputedStyle(document.documentElement), lo = cs.getPropertyValue('--seq0').trim(), hi = cs.getPropertyValue('--seq1').trim();
+    var a = parseInt(lo.slice(1), 16), b = parseInt(hi.slice(1), 16);
+    return 'rgb(' + [16, 8, 0].map(function (s) { return Math.round(((a >> s) & 255) * (1 - v) + ((b >> s) & 255) * v); }).join(',') + ')';
+  }
+  function drawAgree() {
+    var box = clear(document.getElementById('agree'));
+    box.appendChild(el('h2', { text: 'Method agreement' }));
+    box.appendChild(el('p', { class: 'muted', style: 'margin:0;font-size:12.5px', text: 'Adjusted Rand index between methods at medium granularity: 1 = identical grouping, 0 = chance.' }));
+    var head = el('tr', null, [el('th')].concat(D.methods.map(function (m) { return el('th', { text: ML(m) }); })));
+    var tb = el('tbody');
+    D.methods.forEach(function (a) {
+      tb.appendChild(el('tr', null, [el('td', { class: 'mono muted', text: ML(a) })].concat(D.methods.map(function (b) {
+        var v = D.agreement[a][b], td = el('td', { text: a === b ? '' : v.toFixed(2) });
+        td.style.background = mix(Math.max(0, Math.min(1, v))); if (v > 0.55) td.style.color = 'var(--page)'; return td;
+      }))));
+    });
+    box.appendChild(el('div', { class: 'tablewrap' }, [el('table', null, [el('thead', null, [head]), tb])]));
+  }
+  function drawNotes() {
+    var box = clear(document.getElementById('notes'));
+    box.appendChild(el('h2', { text: 'About this corpus' }));
+    var ul = el('ul', { style: 'margin:0;padding-left:18px;font-size:12.5px;color:var(--ink-2)' });
+    D.notes.forEach(function (n) { ul.appendChild(el('li', { text: n })); });
+    box.appendChild(ul);
+  }
+
+  buildControls(); render();
+  window.addEventListener('resize', drawTracks);
+})();
+</script>
+</body>
+</html>
