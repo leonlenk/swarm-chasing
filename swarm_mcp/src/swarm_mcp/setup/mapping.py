@@ -203,11 +203,15 @@ def _as_text(v: Any) -> str:
 
 
 def _scalar(v: Any) -> str | None:
-    if v is None or v == "" or isinstance(v, (dict, list)):
+    """A scalar as a stripped string (None for empty, whitespace-only, dict or list).
+
+    Stripped because ids built from it must survive ``parse_event_id``, which strips: a
+    local id "42 " would be stored as "src:kind:42 " but cited as "src:kind:42"."""
+    if v is None or isinstance(v, (dict, list)):
         return None
     if isinstance(v, float) and v.is_integer():
         v = int(v)
-    return str(v)
+    return str(v).strip() or None
 
 
 def _norm_field(fs: Any) -> dict[str, Any]:

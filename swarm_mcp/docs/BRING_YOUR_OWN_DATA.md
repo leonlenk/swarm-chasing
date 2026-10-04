@@ -217,7 +217,7 @@ problem is reported with counts and up to 5 masked examples.
 | no_records           | error           | a records entry yields nothing                              |
 | id_missing           | error >5% / warn| rows dropped because local_id is empty                      |
 | id_duplicate         | error           | two records with the same event id                          |
-| id_unparseable       | error           | an id fails `events.parse_event_id`                         |
+| id_unparseable       | error           | an id fails `parse_event_id` or does not parse to itself    |
 | record_invalid       | error           | `events.event_record` rejects a record                      |
 | time_unparseable     | error >1% / warn| time present but not parseable with the given format        |
 | time_out_of_range    | error >1% / warn| parsed time outside 1990–2100 (wrong epoch unit?)           |

@@ -10,7 +10,7 @@ Checks, each reported with counts and up to 5 masked examples:
 | no_records           | error           | a records entry yields nothing                               |
 | id_missing           | error >5% / warn| rows dropped because local_id is empty                       |
 | id_duplicate         | error           | two records with the same event id                           |
-| id_unparseable       | error           | an id fails ``events.parse_event_id``                        |
+| id_unparseable       | error           | an id fails ``parse_event_id`` or does not parse to itself   |
 | record_invalid       | error           | ``events.event_record`` rejects a record                     |
 | time_unparseable     | error >1% / warn| time present but not parseable with the given format        |
 | time_out_of_range    | error >1% / warn| parsed time outside 1990–2100 (wrong epoch unit?)            |
@@ -166,8 +166,9 @@ def run_check(
             n += 1
             kind = rec.kind
             by_kind[kind] += 1
-            try:
-                parse_event_id(rec.event_id)
+            try:  # an id must parse back to itself, or citations of it never resolve
+                if str(parse_event_id(rec.event_id)) != rec.event_id:
+                    c.hit("id_unparseable", show(rec.event_id))
             except Exception:  # noqa: BLE001
                 c.hit("id_unparseable", show(rec.event_id))
             if rec.event_id in seen_ids:
@@ -214,6 +215,11 @@ def run_check(
     try:
         for p in adapter.periods(limit):
             periods += 1
+            try:
+                if str(parse_event_id(p.event_id)) != p.event_id:
+                    c.hit("id_unparseable", show(p.event_id))
+            except Exception:  # noqa: BLE001
+                c.hit("id_unparseable", show(p.event_id))
             if p.event_id in seen_ids:
                 c.hit("id_duplicate", show(p.event_id))
             seen_ids.add(p.event_id)
@@ -247,7 +253,7 @@ def run_check(
         )
     for code, msg in (
         ("id_duplicate", "duplicate event ids"),
-        ("id_unparseable", "event ids that do not parse"),
+        ("id_unparseable", "event ids that do not parse back to themselves (stray whitespace?)"),
         ("record_invalid", "records rejected by events.event_record"),
     ):
         if c.counts[code]:
