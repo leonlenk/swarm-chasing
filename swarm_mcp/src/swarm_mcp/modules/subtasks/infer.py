@@ -38,6 +38,7 @@ from datetime import datetime
 
 import networkx as nx
 import numpy as np
+from scipy import sparse
 
 METHODS = ("combined", "code", "title", "files", "chat", "refs")
 LEVELS = {"coarse": 1.0, "medium": 3.0, "fine": 6.0}  # Louvain resolution
@@ -45,6 +46,9 @@ BLEND = {"code": 0.35, "title": 0.25, "files": 0.15, "chat": 0.10, "refs": 0.15}
 TAU = {"files": 0.2, "code": 0.2, "title": 0.2, "chat": 0.15, "refs": 0.3, "combined": 0.12}
 K_NEIGHBOURS = 6
 SEED = 7
+CHUNK = 256  # rows per block when computing nearest neighbours (memory ~ CHUNK x units)
+DUP_MIN = 0.5  # default similarity for a 'duplicate' edge (corpora with templated content use higher)
+DUP_PER_UNIT = 3  # keep only the closest few duplicates of each unit
 
 METHOD_DESCRIPTIONS = {
     "combined": "weighted blend: code 35%, title 25%, files 15%, explicit refs 15%, chat 10%",
@@ -142,6 +146,7 @@ class Unit:
     actions: list[Action]
     refs: set[str] = field(default_factory=set)  # event ids of other units it links to explicitly
     roles: dict[str, set[str]] = field(default_factory=dict)  # extra actor roles, e.g. {"GPT-5.2": {"merge"}}
+    tags: dict[str, int] = field(default_factory=dict)  # dataset's own labels for the unit, e.g. page families
 
 
 @dataclass
@@ -174,9 +179,8 @@ class Inference:
     touch: list[dict[str, set[str]]]  # actor -> roles ("author", "action", "merge"...) per unit
     terms: list[list[str]]  # top content terms per unit
     artifacts: list[list[tuple[str, int]]]
-    vec: dict[str, tuple[np.ndarray, dict[int, str]]]
-    sim: dict[str, np.ndarray]
-    refs_raw: np.ndarray
+    vec: dict[str, tuple[sparse.csr_matrix, dict[int, str]]]  # L2-normalised TF-IDF rows per signal
+    refs_raw: sparse.csr_matrix  # explicit link weights between units
     clusters: dict[str, dict[str, list[list[int]]]]  # method -> level -> clusters (sorted by start)
     names: dict[str, dict[str, list[str]]]
     label_of: dict[str, dict[str, np.ndarray]]  # method -> level -> cluster index per unit
@@ -193,33 +197,66 @@ class Inference:
 # --------------------------------------------------------------------------- similarity helpers
 
 
-def _tfidf(bags: list[collections.Counter]) -> tuple[np.ndarray, dict[int, str]]:
+def _tfidf(bags: list[collections.Counter]) -> tuple[sparse.csr_matrix, dict[int, str]]:
     n = len(bags)
     vocab: dict[str, int] = {}
     rows = [{vocab.setdefault(w, len(vocab)): c for w, c in b.items()} for b in bags]
-    df = np.zeros(len(vocab))
+    df = np.zeros(max(1, len(vocab)))
     for r in rows:
         for j in r:
             df[j] += 1
     idf = np.log((1 + n) / (1 + df)) + 1
-    idf[df > 0.30 * n] *= 0.2  # terms in >30% of PRs carry ~no subtask signal
-    X = np.zeros((n, len(vocab)))
-    for i, r in enumerate(rows):
-        for j, c in r.items():
-            X[i, j] = (1 + math.log(c)) * idf[j]
-    nrm = np.linalg.norm(X, axis=1, keepdims=True)
-    nrm[nrm == 0] = 1
-    return X / nrm, {j: w for w, j in vocab.items()}
+    idf[df > 0.30 * n] *= 0.2  # terms in >30% of units carry ~no subtask signal
+    data, indices, indptr = [], [], [0]
+    for r in rows:
+        vals = [(1 + math.log(c)) * idf[j] for j, c in r.items()]
+        norm = math.sqrt(sum(v * v for v in vals)) or 1.0
+        indices.extend(r.keys())
+        data.extend(v / norm for v in vals)
+        indptr.append(len(indices))
+    X = sparse.csr_matrix((data, indices, indptr), shape=(n, max(1, len(vocab))))
+    return X, {j: w for w, j in vocab.items()}
 
 
-def _cluster(S: np.ndarray, tau: float, res: float) -> list[list[int]]:
-    n = len(S)
+def _neighbours(
+    vec: dict[str, tuple[sparse.csr_matrix, dict[int, str]]], R: sparse.csr_matrix, n: int, dup_min: float
+) -> tuple[dict[str, tuple[np.ndarray, np.ndarray]], list[tuple[int, int, float]]]:
+    """Top-K neighbours per unit for every method, plus duplicate candidates, in row blocks so memory stays
+    O(CHUNK x n) instead of O(n^2)."""
+    k = min(K_NEIGHBOURS, max(1, n - 1))
+    out = {m: (np.zeros((n, k), int), np.zeros((n, k))) for m in METHODS}
+    dups: list[tuple[int, int, float]] = []
+    for start in range(0, n, CHUNK):
+        stop = min(n, start + CHUNK)
+        rows = np.arange(start, stop)
+        blocks = {
+            key: (vec[key][0][start:stop] @ vec[key][0].T).toarray() for key in ("files", "code", "title", "chat")
+        }
+        r = R[start:stop].toarray()
+        blocks["refs"] = r / (r + 2)  # saturating: one explicit ref -> .6
+        blocks["combined"] = sum(w * blocks[key] for key, w in BLEND.items())
+        for m in METHODS:
+            B = blocks[m]
+            B[rows - start, rows] = 0
+            top = np.argsort(-B, axis=1, kind="stable")[:, :k]  # ties -> lower unit index: deterministic
+            out[m][0][start:stop] = top
+            out[m][1][start:stop] = np.take_along_axis(B, top, axis=1)
+        dup = 0.6 * blocks["title"] + 0.4 * blocks["code"]
+        for a, b in zip(*np.nonzero(dup > dup_min), strict=True):
+            i, j = start + int(a), int(b)
+            if j > i:
+                dups.append((i, j, float(dup[a, b])))
+    return out, dups
+
+
+def _cluster(nb: tuple[np.ndarray, np.ndarray], tau: float, res: float) -> list[list[int]]:
+    idx, val = nb
     G = nx.Graph()
-    G.add_nodes_from(range(n))
-    for i in range(n):
-        for j in np.argsort(-S[i])[:K_NEIGHBOURS]:
-            if S[i, j] >= tau:
-                G.add_edge(i, int(j), weight=float(S[i, j]))
+    G.add_nodes_from(range(len(idx)))
+    for i in range(len(idx)):
+        for j, v in zip(idx[i], val[i], strict=True):
+            if v >= tau and int(j) != i:
+                G.add_edge(i, int(j), weight=float(v))
     comms = nx.community.louvain_communities(G, weight="weight", resolution=res, seed=SEED)
     return [sorted(c) for c in comms]
 
@@ -240,7 +277,7 @@ def _ari(a: np.ndarray, b: np.ndarray) -> float:
 # --------------------------------------------------------------------------- main entry
 
 
-def infer(corpus: str, units: list[Unit], chat: list[ChatMsg]) -> Inference:
+def infer(corpus: str, units: list[Unit], chat: list[ChatMsg], dup_min: float = DUP_MIN) -> Inference:
     """Cluster ``units`` and derive handoffs. ``chat``: messages already linked to unit event ids."""
     order = sorted(units, key=lambda u: (u.start, u.event_id))
     idx = {u.event_id: i for i, u in enumerate(order)}
@@ -323,25 +360,21 @@ def infer(corpus: str, units: list[Unit], chat: list[ChatMsg]) -> Inference:
                 for y in range(x + 1, len(ix)):
                     comention[(ix[x], ix[y])] += 1
 
-    # ---- similarity
-    vec, sim = {}, {}
-    for key in ("files", "code", "title", "chat"):
-        X, inv = _tfidf([f[key] for f in F])
-        vec[key] = (X, inv)
-        S = X @ X.T
-        np.fill_diagonal(S, 0)
-        sim[key] = S
-    R = np.zeros((N, N))
+    # ---- similarity: sparse TF-IDF per signal, explicit links, then top-K neighbours per method
+    vec = {key: _tfidf([f[key] for f in F]) for key in ("files", "code", "title", "chat")}
+    links: collections.Counter = collections.Counter()
     for i, f in enumerate(F):
         for e in f["refs"]:
-            if e in idx:
-                R[i, idx[e]] += 3
-                R[idx[e], i] += 3
+            if e in idx and idx[e] != i:
+                links[(i, idx[e])] += 3
+                links[(idx[e], i)] += 3
     for (a, b), c in comention.items():
-        R[a, b] += c
-        R[b, a] += c
-    sim["refs"] = R / (R + 2)  # saturating: one explicit ref -> .6
-    sim["combined"] = sum(w * sim[k] for k, w in BLEND.items())
+        links[(a, b)] += c
+        links[(b, a)] += c
+    R = sparse.csr_matrix(
+        (list(links.values()), ([a for a, _ in links], [b for _, b in links])), shape=(N, N), dtype=float
+    )
+    nbrs, dup_pairs = _neighbours(vec, R, N, dup_min)
 
     # ---- clusters, sorted by first unit start so ids read chronologically
     clusters: dict[str, dict[str, list[list[int]]]] = {}
@@ -349,7 +382,7 @@ def infer(corpus: str, units: list[Unit], chat: list[ChatMsg]) -> Inference:
     for m in METHODS:
         clusters[m], label_of[m] = {}, {}
         for lvl, res in LEVELS.items():
-            cl = sorted(_cluster(sim[m], TAU[m], res), key=lambda c: (min(c), -len(c)))
+            cl = sorted(_cluster(nbrs[m], TAU[m], res), key=lambda c: (min(c), -len(c)))
             clusters[m][lvl] = cl
             lab = np.zeros(N, int)
             for ci, c in enumerate(cl):
@@ -362,7 +395,7 @@ def infer(corpus: str, units: list[Unit], chat: list[ChatMsg]) -> Inference:
         sc: collections.Counter = collections.Counter()
         for key, w in (("title", 1.0), ("code", 0.6), ("files", 0.4)):
             X, inv = vec[key]
-            v = X[c].sum(0)
+            v = np.asarray(X[c].sum(0)).ravel()
             for t in np.argsort(-v)[:8]:
                 if v[t] > 0:
                     term = inv[t] if key != "files" else " ".join(file_words(inv[t]))
@@ -424,21 +457,18 @@ def infer(corpus: str, units: list[Unit], chat: list[ChatMsg]) -> Inference:
         e.artifacts = e.artifacts[:6]
         edges.append(e)
     linked = {(e.src, e.dst) for e in edges} | {(e.dst, e.src) for e in edges}
-    dup = sim["title"] * 0.6 + sim["code"] * 0.4
-    for i in range(N):
-        for j in range(i + 1, N):
-            if (
-                dup[i, j] > 0.5
-                and authors[i] != authors[j]
-                and (i, j) not in linked
-                and not (order[i].completed and order[j].completed)
-                and abs(_days(order[i].start, order[j].start)) < 3
-            ):
-                edges.append(
-                    Edge(
-                        "duplicate", i, j, authors[i] or "?", authors[j] or "?", [], [], [], round(float(dup[i, j]), 2)
-                    )
-                )
+    per_unit: dict[int, list[tuple[float, int]]] = collections.defaultdict(list)
+    for i, j, score in dup_pairs:
+        if (
+            authors[i] != authors[j]
+            and (i, j) not in linked
+            and not (order[i].completed and order[j].completed)
+            and abs(_days(order[i].start, order[j].start)) < 3
+        ):
+            per_unit[j].append((score, i))  # j (the later unit) duplicated i
+    for j, cands in per_unit.items():
+        for score, i in sorted(cands, reverse=True)[:DUP_PER_UNIT]:
+            edges.append(Edge("duplicate", i, j, authors[i] or "?", authors[j] or "?", [], [], [], round(score, 2)))
     edges.sort(key=lambda e: (order[e.dst].start, e.kind))
 
     return Inference(
@@ -449,7 +479,6 @@ def infer(corpus: str, units: list[Unit], chat: list[ChatMsg]) -> Inference:
         terms=[[t for t, _ in f["code"].most_common(8)] for f in F],
         artifacts=[f["files"].most_common(8) for f in F],
         vec=vec,
-        sim=sim,
         refs_raw=R,
         clusters=clusters,
         names=names,
@@ -469,24 +498,34 @@ def _days(a: str, b: str) -> float:
     return (datetime.strptime(a, fmt) - datetime.strptime(b, fmt)).total_seconds() / 86400
 
 
+def score(inf: Inference, method: str, i: int, j: int) -> float:
+    """Similarity of two units under one method (0..1)."""
+    if method == "refs":
+        r = float(inf.refs_raw[i, j])
+        return r / (r + 2)
+    if method == "combined":
+        return sum(w * score(inf, key, i, j) for key, w in BLEND.items())
+    X = inf.vec[method][0]
+    return float(X[i].multiply(X[j]).sum())
+
+
 def shared_terms(inf: Inference, key: str, i: int, j: int, n: int = 4) -> list[str]:
     X, inv = inf.vec[key]
-    prod = X[i] * X[j]
-    return [inv[int(t)] for t in np.argsort(-prod)[:n] if prod[t] > 0]
+    prod = X[i].multiply(X[j]).tocoo()
+    top = sorted(zip(prod.data, prod.col, strict=True), reverse=True)[:n]
+    return [inv[int(c)] for v, c in top if v > 0]
 
 
 def why(inf: Inference, i: int, j: int) -> dict[str, dict]:
     """Per-signal similarity between two units, with the terms they share."""
     out: dict[str, dict] = {}
     for key in ("code", "title", "files", "chat"):
-        s = float(inf.sim[key][i, j])
+        s = score(inf, key, i, j)
         if s > 0.05:
             out[key] = {"score": round(s, 2), "shared": shared_terms(inf, key, i, j)}
-    if inf.refs_raw[i, j]:
-        out["refs"] = {
-            "score": round(float(inf.sim["refs"][i, j]), 2),
-            "shared": [f"{int(inf.refs_raw[i, j])} link weight"],
-        }
+    raw = float(inf.refs_raw[i, j])
+    if raw:
+        out["refs"] = {"score": round(raw / (raw + 2), 2), "shared": [f"{int(raw)} link weight"]}
     return out
 
 

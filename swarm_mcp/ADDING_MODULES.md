@@ -37,6 +37,7 @@ writes the same entry into `.mcp.json`, which already exists.
 | `SWARM_MCP_LOG_LEVEL` | INFO | stderr log level |
 | `SWARM_<MODULE>_<KEY>` | | per-module settings via `ctx.setting("key")`, e.g. `SWARM_VILLAGE_DIR` |
 | `SWARM_GIT_DIR` | `<data>/*/repos/` | folder of bare git clones for the `git` and `subtasks` modules |
+| `SWARM_WIKI_DB` | `<data>/*/*.db` | a wiki database (collusion.wiki explorer schema) for the `wiki` and `subtasks` modules |
 
 ### Modules in this repo
 
@@ -45,7 +46,8 @@ writes the same entry into `.mcp.json`, which already exists.
 | `core` | none | module report, config, and `core_get_event` / `core_get_events` / `core_event_sources` for any event id |
 | `village` | `<data>/ai-village/*.jsonl.gz` | agents, goals, chat search and windows, per-agent activity |
 | `git` | bare clones in `<data>/<dataset>/repos/*.git` | repos and PR listings; PRs and commits as event ids |
-| `subtasks` | any *corpus* with an adapter in `subtasks/sources.py`: git repos today (+ village chat if present) | work units (PRs...) grouped into subtasks by several methods, typed handoffs between actors, pair tracing |
+| `wiki` | `<data>/<name>/*.db` in the collusion.wiki explorer schema | corpus description with blind spots, search over what each revision added, pages, editor labels; revisions, pages and edit sessions as event ids |
+| `subtasks` | any *corpus* with an adapter in `subtasks/sources.py`: git repos (+ village chat if present) and wikis | work units (PRs...) grouped into subtasks by several methods, typed handoffs between actors, pair tracing |
 
 A repo for `git` is a bare clone with every PR head fetched, so closed and squash-merged PRs keep their commits:
 
@@ -55,6 +57,12 @@ git -C data/ai-village/repos/rpg-game.git fetch origin '+refs/pull/*/head:refs/p
 ```
 
 The first `git`/`subtasks` call on a repo loads it (about 15 s for the RPG week's 458 PRs); later calls are instant.
+
+For collusion.wiki, save Simon Willison's SQLite build of the published export as
+`data/collusion-wiki/collusion-wiki.db` (https://static.simonwillison.net/static/cors-allow/2026/collusion-wiki.db).
+Subtask inference over its ~5,800 edit sessions takes about 10 s on first use.
+`examples/subtasks_demo.py` and `examples/wiki_demo.py` run the tools end to end over stdio;
+`examples/wiki_eval.py` scores the inferred subtasks against the publishers' page_family labels.
 
 ## A module in five lines
 

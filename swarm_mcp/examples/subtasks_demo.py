@@ -62,7 +62,7 @@ async def main() -> None:
         show("its subtask", sub)
 
         got = await call("subtasks_get", subtask_id=sub["subtask_id"], max_chat=2)
-        show("members", [f"{m['event_id']}  {m['state']:8s} {m['author']}: {m['title'][:60]}" for m in got["members"]])
+        show("members", [f"{m['event_id']}  {m['state']:8s} {m['actor']}: {m['title'][:60]}" for m in got["members"]])
         show("handoffs", [f"{h['time']} {h['summary']}" for h in got["handoffs"]])
         show(
             "other methods",
@@ -77,7 +77,7 @@ async def main() -> None:
         commit = await call("core_get_event", event_id=ev, before=0, after=0, max_chars=400)
         show("evidence commit", commit["event"]["text"])
 
-        pair = await call("subtasks_trace_pair", actor_a="Opus 4.5", actor_b="GPT-5.2", limit=3)
+        pair = await call("subtasks_trace_pair", corpus="rpg-game", actor_a="Opus 4.5", actor_b="GPT-5.2", limit=3)
         show("pair summary", pair["summary"])
         show(
             "top shared subtasks",

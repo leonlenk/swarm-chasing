@@ -21,8 +21,19 @@ from pydantic import Field
 
 from swarm_mcp.events import parse_event_id
 from swarm_mcp.modules.git import get_repo, repo_paths
-from swarm_mcp.modules.subtasks.infer import LEVELS, METHOD_DESCRIPTIONS, METHODS, Edge, Inference, cohesion, infer, why
-from swarm_mcp.modules.subtasks.sources import Corpus, git_units, link_chat_to_prs
+from swarm_mcp.modules.subtasks.infer import (
+    LEVELS,
+    METHOD_DESCRIPTIONS,
+    METHODS,
+    Edge,
+    Inference,
+    cohesion,
+    infer,
+    score,
+    why,
+)
+from swarm_mcp.modules.subtasks.sources import Corpus, git_units, link_chat_to_prs, wiki_units
+from swarm_mcp.modules.wiki import get_wiki, wiki_paths
 from swarm_mcp.toolkit import TS_FORMAT, ToolInputError, iso, parse_time, truncate
 
 NAME = "subtasks"
@@ -50,8 +61,8 @@ def requires(ctx) -> list[str]:
         import numpy  # noqa: F401
     except ImportError as e:
         return [f"missing dependency: {e.name} (uv sync in swarm_mcp)"]
-    if not repo_paths(ctx):
-        return ["no corpora available: no git repos (bare clones under <data>/*/repos/)"]
+    if not repo_paths(ctx) and not wiki_paths(ctx):
+        return ["no corpora available: no git repos (<data>/*/repos/*.git) and no wiki databases (<data>/*/*.db)"]
     return []
 
 
@@ -124,8 +135,36 @@ def register(mcp, ctx) -> None:
 
         return Corpus(name, "git repo", "pull request", "commit", "file", load)
 
+    def wiki_corpus(name: str) -> Corpus:
+        def load():
+            w = get_wiki(ctx, name)
+            return (
+                wiki_units(w),
+                [],
+                [
+                    "units are edit sessions: one actor label's revisions with gaps <= 30 min; a label may be many agents",
+                    "the wiki itself is the message channel, so the chat signal is empty; links between pages are refs",
+                    "'builds_on' here means editing (posting to) a page another actor's session created",
+                    "'duplicate' here means near-identical posts (similarity > 0.8) by different actors within 3 days "
+                    "(copying or echoing); only each session's 3 closest are kept",
+                ],
+            )
+
+        return Corpus(
+            name,
+            "wiki",
+            "edit session",
+            "revision",
+            "page",
+            load,
+            tag_name="page_family (publishers' heuristic label)",
+            dup_min=0.8,  # wiki posts are heavily templated
+        )
+
     def corpora() -> dict[str, Corpus]:
         out = {n: git_corpus(n) for n in sorted(repo_paths(ctx))}
+        for n in sorted(wiki_paths(ctx)):
+            out.setdefault(n, wiki_corpus(n))
         return out
 
     def get_corpus(name: str | None) -> Corpus:
@@ -143,7 +182,7 @@ def register(mcp, ctx) -> None:
 
         def build() -> Inference:
             units, chat, notes = c.load()
-            inf = infer(c.name, units, chat)
+            inf = infer(c.name, units, chat, dup_min=c.dup_min)
             inf.notes.extend(notes)
             return inf
 
@@ -361,13 +400,12 @@ def register(mcp, ctx) -> None:
             raise ToolInputError(f"{subtask_id!r}: there are {len(cl)} subtasks for {method}/{level}.")
         members = cl[k]
         inside = set(members)
-        S = inf.sim[method]
         rows = []
         for i in members[:max_members]:
             row = unit_brief(inf, i)
             others = [j for j in members if j != i]
             if others:
-                j = max(others, key=lambda j: S[i, j])
+                j = max(others, key=lambda j: score(inf, method, i, j))
                 row["closest_member"] = inf.units[j].event_id
                 row["signals"] = why(inf, i, j)
             if inf.rewrites[i]:
@@ -438,6 +476,20 @@ def register(mcp, ctx) -> None:
             "handoffs_to_other_subtasks": other_groups(outgoing, "dst"),
             "other_methods": splits,
             "agreement_by_method": coh,
+            **(
+                {
+                    "dataset_labels": {
+                        "name": c.tag_name,
+                        "counts": dict(
+                            sum(
+                                (collections.Counter(inf.units[i].tags) for i in members), collections.Counter()
+                            ).most_common(6)
+                        ),
+                    }
+                }
+                if c.tag_name
+                else {}
+            ),
             "chat": {"messages_mentioning_members": len(msgs), "cited": cited},
             "unresolved": unresolved,
             "notes": [
@@ -519,9 +571,17 @@ def register(mcp, ctx) -> None:
     ) -> dict[str, Any]:
         """Which subtask(s) an event belongs to: a unit's subtask, an action's unit's subtask, or the subtasks
         of the units a chat message points at. Bridges search results to subtasks."""
-        parse_event_id(event_id)
+        eid = parse_event_id(event_id)
+        cs = corpora()
+        # only load the corpora this id can belong to (each corpus loads on first use)
+        if eid.source == "wiki":
+            names = [n for n in cs if n == eid.local_id.split("/", 1)[0]]
+        elif eid.source == "git":
+            names = [n for n in cs if n == re.split(r"[#@]", eid.local_id, maxsplit=1)[0]]
+        else:
+            names = [n for n, c in cs.items() if c.kind == "git repo"]  # chat messages point at PRs
         found: list[tuple[Inference, int]] = []
-        for name in corpora():
+        for name in names:
             inf = get_inf(name)[1]
             if event_id in inf.index:
                 found.append((inf, inf.index[event_id]))

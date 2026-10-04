@@ -15,14 +15,20 @@ def _status(app) -> dict[str, str]:
 
 
 def test_default_loads_all(data_dir: Path):
-    # git/subtasks need a repo, which the synthetic village dataset doesn't have
-    expected = {"core": "loaded", "village": "loaded", "git": "skipped", "subtasks": "skipped"}
+    # git/subtasks/wiki need a repo or wiki db, which the synthetic village dataset does not have
+    expected = {"core": "loaded", "village": "loaded", "git": "skipped", "subtasks": "skipped", "wiki": "skipped"}
     assert _status(build_server(config_for(data_dir))) == expected
 
 
 def test_modules_allowlist_keeps_core(data_dir: Path):
     app = build_server(config_for(data_dir, SWARM_MCP_MODULES="village"))
-    assert _status(app) == {"core": "loaded", "village": "loaded", "git": "skipped", "subtasks": "skipped"}
+    assert _status(app) == {
+        "core": "loaded",
+        "village": "loaded",
+        "git": "skipped",
+        "subtasks": "skipped",
+        "wiki": "skipped",
+    }
     app = build_server(config_for(data_dir, SWARM_MCP_MODULES="core"))
     st = _status(app)
     assert st["village"] == "skipped"
