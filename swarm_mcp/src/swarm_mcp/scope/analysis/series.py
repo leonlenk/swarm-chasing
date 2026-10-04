@@ -216,13 +216,17 @@ def metric_series(
         rows = store.all(
             f"""SELECT {gcol} AS g, {dsql} AS d, count(*) AS den,
                        count(*) FILTER (WHERE len(recipient_ids) > 0) AS hits
-                FROM messages WHERE {where} AND author_id NOT LIKE 'human:%' GROUP BY 1, 2""",
+                FROM messages WHERE {where} AND author_id IN (SELECT agent_id FROM agents) GROUP BY 1, 2""",
             params,
         )
         for r in rows:
             r["num"] = r["den"] if metric == "messages" else r["hits"]
-        excluded["human_messages"] = int(
-            store.scalar(f"SELECT count(*) FROM messages WHERE {where} AND author_id LIKE 'human:%'", params) or 0
+        excluded["non_agent_messages"] = int(  # humans, external and unknown actors (not in the agents table)
+            store.scalar(
+                f"SELECT count(*) FROM messages WHERE {where} AND author_id NOT IN (SELECT agent_id FROM agents)",
+                params,
+            )
+            or 0
         )
         what = "agent messages per day" if metric == "messages" else "share of agent messages that name another agent"
     else:
@@ -242,10 +246,10 @@ def metric_series(
                 pa + [ids],
             )
         agg: dict[tuple[str, date], list[int]] = defaultdict(lambda: [0, 0])
-        humans = 0
+        non_agents = 0
         for r in found:
-            if (r["actor"] or "").startswith("human:"):
-                humans += 1
+            if r["actor"] not in agents_meta:  # humans, external and unknown actors are not agents
+                non_agents += 1
                 continue
             g = {"agent": r["actor"], "lab": r["actor"], "channel": r["channel"] or "(none)", "all": "all"}[by]
             a = agg[(g, r["d"])]
@@ -255,7 +259,7 @@ def metric_series(
         excluded.update(
             sweep_records=len(ids),
             not_in_store_or_filters=len(ids) - len(found),
-            human_records=humans,
+            non_agent_records=non_agents,
             failed_calls=int(sw["errors"]),
         )
         rubric = (sw["meta"] or {}).get("rubric")
@@ -321,7 +325,7 @@ def metric_series(
     notes[:0] = [
         f"{what}; points are active days (days with any matching record), "
         + (f"Village days in {spec['tz']}" if spec else "UTC dates")
-        + "; humans are left out.",
+        + "; only agents (authors in the agents table) count: humans, external and unknown actors are left out.",
         f"line: trailing {window}-day mean over the active days in the window"
         + (" of the group's daily counts (0 on active days it was silent)" if kind == "count" else " (pooled x / n)"),
         "band: 95% normal interval mean +/- 1.96 sqrt(max(s^2, mean)/k) on the k daily counts (never narrower "

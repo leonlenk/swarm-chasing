@@ -274,6 +274,10 @@ def test_actor_kinds_and_labs(store_path: Path, tmp_path: Path):
     assert _actor_kind("human:abc") == "human"
     assert _actor_kind("external:someone") == "external" and _actor_kind("unknown") == "external"
     assert _actor_kind("village:agent:x") == "agent"
+    # with the store's agents, membership decides (as in analysis/graph.py): unmatched actors are external
+    agents = frozenset({"village:agent:x"})
+    assert _actor_kind("village:agent:x", agents) == "agent" and _actor_kind("village:agent:y", agents) == "external"
+    assert _actor_kind("human:abc", agents) == "human"
     assert [_lab_group(x) for x in ("Anthropic", "Google DeepMind", "OpenAI", "xAI", None)] == [
         "Anthropic",
         "Google",
@@ -355,3 +359,26 @@ def test_sweep_series(store_path: Path, tmp_path: Path):
     _, _, p = _render(store_path, tmp_path / "w.html", sweeps=[sweep])
     labels = [s["label"] for s in p.payload["x"]["series"]]
     assert any("s1" in lbl and "judged yes" in lbl for lbl in labels), labels
+
+
+def test_external_actors_are_not_agents(store_path: Path, tmp_path: Path):
+    db = tmp_path / "ext.duckdb"
+    shutil.copy(store_path, db)
+    con = duckdb.connect(str(db))  # read-write, on the COPY only
+    try:
+        con.execute(
+            """INSERT INTO messages (evidence_id, source, channel, author_id, recipient_ids, ts, ts_quality, content, meta)
+               SELECT replace(evidence_id, 'm0002', 'ext1'), source, channel, 'external:visitor', [], ts, 'exact',
+                      'a synthetic note from a visitor', '{}'
+               FROM messages WHERE evidence_id LIKE '%:m0002'"""
+        )
+    finally:
+        con.close()
+    res, _, p = _render(db, tmp_path / "e.html")
+    meta = p.payload["meta"]
+    assert "external:visitor" not in [ln["id"] for ln in p.payload["lanes"]]  # never a lane
+    assert meta["external"] == 1 and meta["humans"] == 2  # meta.humans counts every non-agent author
+    kinds = {a["id"]: a["kind"] for a in p.payload["actors"]}
+    assert kinds["external:visitor"] == "external" and all(
+        v != "external" for k, v in kinds.items() if k != "external:visitor"
+    )

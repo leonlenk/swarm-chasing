@@ -67,7 +67,7 @@ def test_messages_by_agent(store_path: Path):
     assert r["kind"] == "count" and r["window"] == 7
     assert [g["name"] for g in r["groups"]] == ["GPT-5.2", "Claude Opus 4.5", "Gemini 2.5 Pro"]
     assert [g["total_den"] for g in r["groups"]] == [253, 4, 2]
-    assert r["excluded"]["human_messages"] == 1
+    assert r["excluded"]["non_agent_messages"] == 1
     # Village days: day 1 is the first village goal's Pacific date (2026-01-05)
     assert r["days"]["day_one"] == "2026-01-05" and r["day_numbers"][0] == 1
     assert len(r["dates"]) == len(r["starts"]) == len(r["day_numbers"])
@@ -127,7 +127,7 @@ def test_sweep_join(store_path: Path, tmp_path: Path):
     assert r["excluded"] == {
         "sweep_records": 5,
         "not_in_store_or_filters": 1,
-        "human_records": 0,
+        "non_agent_records": 0,
         "failed_calls": 1,
     }
     assert any("Does the agent propose a plan?" in n for n in r["notes"])

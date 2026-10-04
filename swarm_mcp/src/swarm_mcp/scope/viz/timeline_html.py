@@ -100,13 +100,15 @@ def _id_prefix(ids: list[str]) -> str:
     return p[: p.rfind(":") + 1]
 
 
-def _actor_kind(author_id: str) -> str:
-    """Presentation-only actor kind: 'agent', 'human' or 'external' (external:/unknown ids)."""
+def _actor_kind(author_id: str, agent_ids: set[str] | frozenset[str] | None = None) -> str:
+    """Presentation kind of an author, following the store's convention (agents are the ids in
+    the agents table): 'human' for human:..., 'agent' for agents, 'external' for everything
+    else (external and unknown actors). Without ``agent_ids`` any non-human id counts as an agent."""
     if author_id.startswith("human:"):
         return "human"
-    if author_id.startswith("external:") or author_id in ("unknown", "") or author_id.startswith("unknown"):
-        return "external"
-    return "agent"
+    if agent_ids is None:
+        return "external" if not author_id or author_id == "unknown" or author_id.startswith("external:") else "agent"
+    return "agent" if author_id in agent_ids else "external"
 
 
 def _lab_group(lab: str | None) -> str | None:
@@ -185,6 +187,16 @@ def render_timeline(
             or {}
         )
         total = int(agg.get("total") or 0)
+        # presentation split of the non-agent messages: humans vs external/unknown actors
+        external = int(
+            store.scalar(
+                f"""SELECT count(*) FROM messages WHERE {base}
+                    AND author_id NOT IN (SELECT agent_id FROM agents) AND author_id NOT LIKE 'human:%'""",
+                params,
+            )
+            or 0
+        )
+        agent_ids = frozenset(r["agent_id"] for r in store.all("SELECT agent_id FROM agents"))
 
         lane_rows = store.all(
             f"""SELECT author_id, count(*) AS n, epoch_ms(min(ts)) AS first_ms
@@ -312,7 +324,7 @@ def render_timeline(
         {
             "name": db.label_for(aid, names),
             "id": aid,
-            "kind": _actor_kind(aid),
+            "kind": _actor_kind(aid, agent_ids),
             "lab": labs.get(aid),
             "labg": _lab_group(labs.get(aid)),
         }
@@ -323,7 +335,13 @@ def render_timeline(
         if r[1] not in actor_index:
             actor_index[r[1]] = len(actors)
             actors.append(
-                {"name": db.label_for(r[1], names), "id": r[1], "kind": _actor_kind(r[1]), "lab": None, "labg": None}
+                {
+                    "name": db.label_for(r[1], names),
+                    "id": r[1],
+                    "kind": _actor_kind(r[1], agent_ids),
+                    "lab": None,
+                    "labg": None,
+                }
             )
 
     lanes: list[dict[str, Any]] = [
@@ -334,7 +352,7 @@ def render_timeline(
             "first": int(r["first_ms"]),
             "a": 0,
             "b": 0,
-            "kind": _actor_kind(r["author_id"]),
+            "kind": _actor_kind(r["author_id"], agent_ids),
             "lab": labs.get(r["author_id"]),
             "labg": _lab_group(labs.get(r["author_id"])),
         }
@@ -407,7 +425,7 @@ def render_timeline(
         "top": top,
         "total": total,
         "humans": humans,
-        "external": 0,
+        "external": external,
         "undated": int(agg.get("undated") or 0),
         "n_agents": n_agents,
         "n_lanes": len(lanes),

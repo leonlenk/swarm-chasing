@@ -17,10 +17,12 @@ carries a ``notes`` field (or, for ``notable_moments``, a ``why`` per item) that
 Shared definitions:
   term       a lowercased token matching ``[a-z][a-z0-9_-]{2,}`` or two adjacent such tokens,
              minus a short stopword list; counted once per message, agent messages only.
-  mention    author -> each agent in ``recipient_ids``, self and humans excluded (the
+  agent      an author listed in the agents table (as in ``analysis/graph.py``): human,
+             external and unknown actors are not agents. "Agent messages" are theirs.
+  mention    author -> each agent in ``recipient_ids``, self and non-agents excluded (the
              mention edge of ``analysis/graph.py``).
   actor kind ``human`` for ``human:*`` authors, ``agent`` for ids in the agents table,
-             ``external`` for anything else.
+             ``external`` for anything else (external and unknown actors).
   day        the Village day (``viz.pagekit.village_days``) when the store has one.
 
 Windows are half-open [since, until) in UTC; ``since``/``until`` accept ``toolkit.parse_time``
@@ -225,7 +227,7 @@ def _recap_batch(
         r["seg"]: r
         for r in store.all(
             f"""{head} SELECT seg, count(*) AS messages,
-                       count(*) FILTER (WHERE author_id NOT LIKE 'human:%') AS agent_messages
+                       count(*) FILTER (WHERE author_id IN (SELECT agent_id FROM agents)) AS agent_messages
                 FROM m GROUP BY 1""",
             hp,
         )
@@ -236,7 +238,7 @@ def _recap_batch(
         f"""{head}, e AS (SELECT seg, author_id AS src, unnest(recipient_ids) AS dst FROM m
                           WHERE seg IN ({tlist}) AND len(recipient_ids) > 0)
             SELECT seg, src, dst, count(*) AS n FROM e
-            WHERE src <> dst AND src NOT LIKE 'human:%' AND dst NOT LIKE 'human:%'
+            WHERE src <> dst AND src IN (SELECT agent_id FROM agents) AND dst IN (SELECT agent_id FROM agents)
             GROUP BY 1, 2, 3""",
         hp,
     )
@@ -244,11 +246,11 @@ def _recap_batch(
     # rising terms: log-odds with an informative Dirichlet prior (Monroe et al. 2008), per
     # segment against the previous one, over message counts (a message counts a term once)
     term_rows = store.all(
-        f"""{head}, {_terms_cte("(SELECT * FROM m WHERE author_id NOT LIKE 'human:%')", "seg, evidence_id, author_id, ts")},
+        f"""{head}, {_terms_cte("(SELECT * FROM m WHERE author_id IN (SELECT agent_id FROM agents))", "seg, evidence_id, author_id, ts")},
             c AS (SELECT seg, term, count(*) AS n, count(DISTINCT author_id) AS agents,
                          arg_min(evidence_id, (ts, evidence_id)) AS first_id
                   FROM terms GROUP BY 1, 2),
-            tot AS (SELECT seg, count(*) AS N FROM m WHERE author_id NOT LIKE 'human:%' GROUP BY 1),
+            tot AS (SELECT seg, count(*) AS N FROM m WHERE author_id IN (SELECT agent_id FROM agents) GROUP BY 1),
             cand AS (
               SELECT w.seg, w.term, w.n, coalesce(b.n, 0) AS nb, w.agents, w.first_id,
                      CAST(coalesce(ti.N, 0) AS DOUBLE) AS ni, CAST(coalesce(tj.N, 0) AS DOUBLE) AS nj
@@ -588,7 +590,7 @@ _NOVEL_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
 def default_min_term_msgs(store: Store, source: str | None = None) -> int:
     """max(5, agent messages / 20,000): 9 on the 173k-message AI Village store, 5 on small stores."""
     w, p = _filters("messages", source, None)
-    n = store.scalar(f"SELECT count(*) FROM messages WHERE {w} AND author_id NOT LIKE 'human:%'", p) or 0
+    n = store.scalar(f"SELECT count(*) FROM messages WHERE {w} AND author_id IN (SELECT agent_id FROM agents)", p) or 0
     return max(5, round(n / 20_000))
 
 
@@ -617,7 +619,7 @@ def novel_terms(
     cutoff = t0 + max((t1 - t0) * NOVEL_SPAN_SHARE, NOVEL_MIN_DELAY)
     where, params = _filters("messages", source, None)
     rows = store.all(
-        f"""WITH {_terms_cte(f"(SELECT * FROM messages WHERE {where} AND author_id NOT LIKE 'human:%')", "evidence_id, author_id, ts")},
+        f"""WITH {_terms_cte(f"(SELECT * FROM messages WHERE {where} AND author_id IN (SELECT agent_id FROM agents))", "evidence_id, author_id, ts")},
             f AS (SELECT term, min(ts) AS first_ts, count(*) AS n, count(DISTINCT author_id) AS agents
                   FROM terms GROUP BY term
                   HAVING count(*) >= ? AND count(DISTINCT author_id) >= ? AND min(ts) > CAST(? AS TIMESTAMP)),
@@ -685,7 +687,7 @@ def _term_regex(term: str) -> str:
 def _term_ids(store: Store, term: str, source: str | None, limit: int = MAX_MOMENT_IDS) -> list[str]:
     where, params = _filters("messages", source, None)
     rows = store.all(
-        f"""SELECT evidence_id FROM messages WHERE {where} AND author_id NOT LIKE 'human:%'
+        f"""SELECT evidence_id FROM messages WHERE {where} AND author_id IN (SELECT agent_id FROM agents)
               AND regexp_matches(lower(content), ?) ORDER BY ts, evidence_id LIMIT ?""",
         params + [_term_regex(term), int(limit)],
     )
@@ -851,12 +853,12 @@ def agent_arc(
         head = f"WITH {seg_sql}, {m_sql}"
         outs = store.all(
             f"""{head}, e AS (SELECT seg, unnest(recipient_ids) AS dst FROM m WHERE author_id = ? AND len(recipient_ids) > 0)
-                SELECT seg, dst, count(*) AS n FROM e WHERE dst <> ? AND dst NOT LIKE 'human:%' GROUP BY 1, 2""",
+                SELECT seg, dst, count(*) AS n FROM e WHERE dst <> ? AND dst IN (SELECT agent_id FROM agents) GROUP BY 1, 2""",
             seg_p + mp + m_p + [aid, aid],
         )
         ins = store.all(
             f"""{head} SELECT seg, author_id AS src, count(*) AS n FROM m
-                WHERE list_contains(recipient_ids, ?) AND author_id <> ? AND author_id NOT LIKE 'human:%'
+                WHERE list_contains(recipient_ids, ?) AND author_id <> ? AND author_id IN (SELECT agent_id FROM agents)
                 GROUP BY 1, 2""",
             seg_p + mp + m_p + [aid, aid],
         )
@@ -959,7 +961,7 @@ def _daily_counts(
     store: Store, entity: str, where: str, params: list[Any], spec: dict[str, str] | None
 ) -> list[dict[str, Any]]:
     col = {"agent": "author_id", "channel": "channel"}[entity]
-    extra = " AND author_id NOT LIKE 'human:%'" if entity == "agent" else " AND channel IS NOT NULL"
+    extra = " AND author_id IN (SELECT agent_id FROM agents)" if entity == "agent" else " AND channel IS NOT NULL"
     d = _local_date_sql("ts", spec)
     return store.all(
         f"SELECT {col} AS e, {d} AS d, count(*) AS n FROM messages WHERE {where}{extra} GROUP BY 1, 2", params
@@ -1172,8 +1174,8 @@ def _partner_shifts(
     rows = store.all(
         f"""WITH {seg_sql}, {m_sql},
               e AS (SELECT seg, author_id AS src, unnest(recipient_ids) AS dst FROM m
-                    WHERE author_id NOT LIKE 'human:%' AND len(recipient_ids) > 0)
-            SELECT seg, src, dst, count(*) AS n FROM e WHERE src <> dst AND dst NOT LIKE 'human:%' GROUP BY 1, 2, 3""",
+                    WHERE author_id IN (SELECT agent_id FROM agents) AND len(recipient_ids) > 0)
+            SELECT seg, src, dst, count(*) AS n FROM e WHERE src <> dst AND dst IN (SELECT agent_id FROM agents) GROUP BY 1, 2, 3""",
         seg_p + mp + m_p,
     )
     dist: dict[str, dict[int, Counter[str]]] = defaultdict(lambda: defaultdict(Counter))

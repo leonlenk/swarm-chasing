@@ -513,7 +513,8 @@
     if (DAYS) parts.push('Village day 1 is ' + D.days.day_one + ' (' + D.days.tz + ').');
     if (META.sampled) parts.push('Counts include all ' + fmtN(META.lane_total) + ' messages by these agents; ' + fmtN(META.marks) + ' of them (' + Math.round(100 * META.marks / Math.max(1, META.lane_total)) + '%, an even sample per agent) are kept for hovering and reading' + (info.mode === 'msgs' ? ', so the ticks show that sample.' : '.'));
     var ex = [];
-    if (META.humans) ex.push(fmtN(META.humans) + ' by humans');
+    var nonAgentHumans = (META.humans || 0) - (META.external || 0);  // meta.humans counts every non-agent author
+    if (nonAgentHumans > 0) ex.push(fmtN(nonAgentHumans) + ' by humans');
     if (META.external) ex.push(fmtN(META.external) + ' by external or unknown actors');
     if (META.other_msgs) ex.push(fmtN(META.other_msgs) + ' by ' + plural(Math.max(META.n_agents - lanes.length, 0), 'other agent'));
     if (ex.length) parts.push('Not drawn: ' + ex.join(', ') + (META.undated ? '; ' + fmtN(META.undated) + ' undated' : '') + '.');
