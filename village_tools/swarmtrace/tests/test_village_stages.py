@@ -46,3 +46,40 @@ def test_hostility_analyze_names_the_missing_stage(th, tmp_path):
 def test_write_csv_with_no_rows(th, tmp_path):
     th.write_csv(tmp_path / "empty.csv", [])
     assert th.read_csv(tmp_path / "empty.csv") == []
+
+
+def test_hostility_build_needs_the_memory_sample(th, tmp_path, monkeypatch):
+    monkeypatch.setattr(th, "MEM_SAMPLE", tmp_path / "cache" / "memory_daily_sample.jsonl.gz")
+    with pytest.raises(SystemExit) as e:
+        th.build()
+    assert "memory_daily_sample.jsonl.gz is missing" in str(e.value.code)
+    assert "python memories.py" in str(e.value.code)
+
+
+@pytest.fixture
+def to(tmp_path, monkeypatch):
+    import tracer_onboarding as to
+    monkeypatch.setattr(to, "OUTD", tmp_path)
+    monkeypatch.setattr(to, "LBD", tmp_path / "label_batches")
+    monkeypatch.setattr(to, "EVD", tmp_path / "evidence")
+    monkeypatch.setattr(to, "MEM", tmp_path / "cache" / "memory_daily_sample.jsonl.gz")
+    monkeypatch.setattr(to, "load_msgs", _no_dataset)
+    (tmp_path / "label_batches").mkdir()
+    return to
+
+
+@pytest.mark.parametrize("stage", ["stage_guides", "stage_items"])
+def test_onboarding_stages_need_the_memory_sample(to, stage):
+    with pytest.raises(SystemExit) as e:
+        getattr(to, stage)()
+    assert "memory_daily_sample.jsonl.gz is missing" in str(e.value.code)
+    assert "python memories.py" in str(e.value.code)
+
+
+def test_memories_checks_ideas_json_before_scanning(tmp_path, monkeypatch):
+    import memories
+    monkeypatch.setattr(memories, "IDEAS", tmp_path / "ideas.json")
+    monkeypatch.setattr(memories, "load_agents", _no_dataset)
+    with pytest.raises(SystemExit) as e:
+        memories.main()
+    assert "ideas.json is missing" in str(e.value.code) and "python ideas.py" in str(e.value.code)

@@ -4,6 +4,13 @@ how much memory text agents share verbatim.
 Takes the last memory each agent wrote on each day (the file holds every
 consolidation; ~7 GB uncompressed, so the sample is cached after the first run).
 
+Pipeline order (from village_tools/):
+    python ideas.py      -> out/ideas.json (needed here for the tracked terms)
+    python memories.py   -> out/cache/memory_daily_sample.jsonl.gz (the daily memory sample, built on the first
+                            run) and out/memories.json
+The cached sample is also an input of `tracer_hostility.py build` and `tracer_onboarding.py guides|items|analyze`,
+so run this script before those.
+
 Outputs out/memories.json.
 """
 
@@ -11,13 +18,15 @@ import collections
 import gzip
 import json
 import statistics
+import sys
 import zlib
 
-from common import (CACHE, Mentions, active_windows, agent_families, agent_presence, deepseek_label, load_agents,
+from common import (CACHE, OUT, Mentions, active_windows, agent_families, agent_presence, deepseek_label, load_agents,
                     load_chat, read_jsonl, ts, week_of, write_json)
 from ideas import terms, words
 
 SAMPLE = CACHE / "memory_daily_sample.jsonl.gz"
+IDEAS = OUT / "ideas.json"
 SHINGLE = 6
 
 
@@ -46,6 +55,8 @@ def shingles(text):
 
 
 def main():
+    if not IDEAS.exists():                  # checked before the long scan of the memory file
+        sys.exit(f"error: {IDEAS} is missing; produce it first with `python ideas.py` (from village_tools/).")
     agents = load_agents()
     fam = agent_families(agents, split_deepseek=True)
     if not SAMPLE.exists():
@@ -56,7 +67,7 @@ def main():
     mentions = Mentions(win, split_deepseek=True)
     # Present = joined the village and not yet gone (join date to last activity), by label.
     presence = {a: p["window"] for a, p in agent_presence(agents, msgs, split_deepseek=True).items()}
-    ideas = json.loads((SAMPLE.parent.parent / "ideas.json").read_text())
+    ideas = json.loads(IDEAS.read_text())
     tracked = {r["term"] for r in ideas["durable"] + ideas["episodic"]}
 
     by_day = collections.defaultdict(dict)        # day -> agent -> shingles

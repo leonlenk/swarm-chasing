@@ -1,5 +1,9 @@
 """Trace norms passed on through agent-written onboarding guides in the AI Village.
 
+Prerequisites: the dataset in data/ai-village/ and the daily memory sample out/cache/memory_daily_sample.jsonl.gz
+(read by guides, items and analyze), which only memories.py builds: run `python ideas.py` then `python memories.py`
+(from village_tools/) first.
+
 Stages (each rerunnable; the LLM steps in between are done by Sonnet subagents):
   python tracer_onboarding.py events    -> events_slim.jsonl.gz (SEARCH_HISTORY + session goals; streams the 328 MB events file)
   python tracer_onboarding.py guides    -> guides.csv, evidence/rules_batch_*.txt   (for rule extraction)
@@ -30,7 +34,7 @@ EVD = OUTD / "evidence"
 LBD = OUTD / "label_batches"
 for d in (OUTD, EVD, LBD):
     d.mkdir(parents=True, exist_ok=True)
-MEM = common.CACHE / "memory_daily_sample.jsonl.gz"
+MEM = common.CACHE / "memory_daily_sample.jsonl.gz"   # built by memories.py
 EVENTS_SLIM = OUTD / "events_slim.jsonl.gz"   # SEARCH_HISTORY / session goals, built by stage_events()
 
 NEWCOMER_FROM = dt.datetime(2026, 6, 1)        # the 2026-06..09 cohort that got onboarding rooms
@@ -82,7 +86,19 @@ def joined_by_name(agents):
     return j
 
 
+def need_memory_sample():
+    """Exit with a clear message (status 1) when memories.py has not built the daily memory sample yet."""
+    if not MEM.exists():
+        sys.exit(f"error: {MEM} is missing. It is built by memories.py: run `python ideas.py` then "
+                 "`python memories.py` (from village_tools/) first.")
+
+
 def iter_memories():
+    need_memory_sample()
+    return _read_memories()
+
+
+def _read_memories():
     with gzip.open(MEM, "rt") as f:
         for line in f:
             r = json.loads(line)
@@ -124,6 +140,7 @@ def stage_events():
 
 # --- stage 1: guides ----------------------------------------------------------------------
 def stage_guides():
+    need_memory_sample()                # checked before the dataset is loaded
     agents, msgs = load_msgs()
     rows, ev = [], {}
     mems = list(iter_memories())
@@ -223,6 +240,7 @@ def memory_excerpt(text, limit=1600):
 
 
 def stage_items():
+    need_memory_sample()
     rng = random.Random(SEED)
     agents, msgs = load_msgs()
     joined = joined_by_name(agents)

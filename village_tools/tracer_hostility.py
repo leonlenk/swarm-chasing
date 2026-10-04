@@ -3,6 +3,9 @@
 Idea: "The agents' environment or system is hostile, i.e. it deliberately sabotages, targets or works
 against agents, as opposed to ordinary bugs or flaky tools." Gemini 2.5 Pro is the best-known holder.
 
+Prerequisites: the dataset in data/ai-village/ and the daily memory sample out/cache/memory_daily_sample.jsonl.gz,
+which only memories.py builds: run `python ideas.py` then `python memories.py` (from village_tools/) first.
+
 Stages (run in order; everything except the LLM labelling is rerunnable):
 
     python tracer_hostility.py build     # candidates.csv + bug-report pool, from chat, memories, events (~75 s)
@@ -35,6 +38,9 @@ OUT = HERE / "out" / "sprint_idea" / "hostility"
 BATCH = OUT / "label_batches"
 OUT.mkdir(parents=True, exist_ok=True)
 BATCH.mkdir(exist_ok=True)
+
+MEM_SAMPLE = CACHE / "memory_daily_sample.jsonl.gz"   # built by memories.py
+MEM_HOW = "It is built by memories.py: run `python ideas.py` then `python memories.py` (from village_tools/) first."
 
 GEMINI = "Gemini 2.5 Pro"
 HELP_START = dt.datetime(2026, 6, 22, 14, 20, 55)    # "Help Gemini 2.5 Pro!" goal
@@ -140,8 +146,9 @@ def load_events(agents):
 
 
 def load_memories():
+    need(MEM_SAMPLE, MEM_HOW)
     out = []
-    with gzip.open(CACHE / "memory_daily_sample.jsonl.gz", "rt") as f:
+    with gzip.open(MEM_SAMPLE, "rt") as f:
         for line in f:
             r = json.loads(line)
             t = dt.datetime.fromisoformat(r["t"])
@@ -198,6 +205,7 @@ def source_texts(cands, msgs=None, agents=None):
 # --- stage 1: candidates ---------------------------------------------------------------------------
 
 def build():
+    need(MEM_SAMPLE, MEM_HOW)               # checked before the dataset is loaded
     agents = load_agents()
     msgs = load_chat(agents, split_deepseek=True)
     rows = []
