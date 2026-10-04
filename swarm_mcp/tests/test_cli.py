@@ -1,14 +1,18 @@
-"""The swarm-mcp command line: info, add (AI Village and mapped datasets), export. All data is synthetic."""
+"""The swarm-mcp command line: info, add (AI Village, git, wiki and mapped datasets), export. All data is
+synthetic."""
 
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
 from conftest import make_village
 from setup_datasets import make_nested_jsonl, make_sqlite_board
+from test_git_subtasks import make_repo
 from test_mapped_ingest import BOARD_SPEC
+from test_wiki import make_wiki
 
 from swarm_mcp.cli import main
 from swarm_mcp.scope import db
@@ -72,11 +76,11 @@ def test_info_reports_and_fails_on_bad_findings(project: Path, capsys):
     fdir = project / "findings"
     fdir.mkdir()
     bad = {"finding_id": "f-1", "created_at": "2026-10-03T12:00:00Z", "claim": "c",
-           "evidence_ids": ["village:chat:does-not-exist"], "status": "open"}  # fmt: skip
+           "evidence_ids": ["village:msg:does-not-exist"], "status": "open"}  # fmt: skip
     (fdir / "findings.jsonl").write_text(json.dumps(bad) + "\n")
     assert cli("info") == 1
     out = capsys.readouterr().out
-    assert "BAD EVIDENCE" in out and "village:chat:does-not-exist" in out
+    assert "BAD EVIDENCE" in out and "village:msg:does-not-exist" in out
 
 
 def test_add_with_a_mapping(project: Path, capsys):
@@ -120,6 +124,65 @@ def test_add_drafts_a_mapping(project: Path, capsys):
     assert cli("add", "data/crew", "--name", "Bad Name") == 2
 
 
+def table_count(store: Path, table: str, source: str) -> int:
+    with db.connect(store) as s:
+        return s.scalar(f"SELECT count(*) FROM {table} WHERE source = ?", [source])
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_add_a_git_repo(project: Path, capsys):
+    bare = make_repo(project / "data" / "repos")  # data/repos/rpg.git with 5 pull request heads
+    store = project / "data" / "swarmscope.duckdb"
+    assert cli("add", "data/repos/rpg.git", "--dry-run") == 0
+    out = capsys.readouterr().out
+    assert "detected a bare git repository" in out and "built-in git adapter" in out
+    assert "dry run: source 'rpg'" in out and "5 pull request heads" in out and not store.exists()
+
+    assert cli("add", "data/repos/rpg.git") == 0  # source defaults to the repo name
+    out = capsys.readouterr().out
+    assert "ingested source 'rpg' (git adapter)" in out and "5 periods, 5 artifacts" in out
+    assert table_count(store, "periods", "rpg") == 5 and table_count(store, "agents", "rpg") == 4
+
+    assert cli("add", "data/repos/rpg.git", "--adapter", "git", "--name", "game") == 0
+    assert "ingested source 'game'" in capsys.readouterr().out
+    assert table_count(store, "periods", "game") == 5 and table_count(store, "periods", "rpg") == 5
+    with db.connect(store) as s:
+        assert s.scalar("SELECT evidence_id FROM periods WHERE source = 'game' ORDER BY 1 LIMIT 1").startswith(
+            "game:period:pr-"
+        )
+
+    shutil.copytree(bare, project / "data" / "repos" / "plain")  # HEAD + objects/ + refs/, no .git suffix
+    assert cli("add", "data/repos/plain") == 0
+    assert "detected a bare git repository" in capsys.readouterr().out
+    assert table_count(store, "periods", "plain") == 5
+
+    (project / "data" / "notarepo").mkdir()
+    assert cli("add", "data/notarepo", "--adapter", "git") == 2
+    assert "not readable as a bare git repository" in capsys.readouterr().err
+    assert cli("add", "data/repos/rpg.git", "--name", "Bad Name") == 2
+    assert cli("add", "data/repos/rpg.git", "--adapter", "git", "--mapping", "x.json") == 2
+    assert cli("add", "data/repos/rpg.git", "--adapter", "village") == 2
+    assert "no AI Village file set" in capsys.readouterr().err
+
+
+def test_add_a_wiki_only_when_asked(project: Path, capsys):
+    make_wiki(project / "data")  # data/test-wiki/test-wiki.db: 3 pages, 5 revisions
+    store = project / "data" / "swarmscope.duckdb"
+    assert cli("add", "data/test-wiki", "--adapter", "wiki", "--dry-run") == 0
+    out = capsys.readouterr().out
+    assert "a wiki database in" in out and "detected" not in out
+    assert "dry run: source 'test-wiki'" in out and "3 pages, 5 revisions" in out and not store.exists()
+
+    assert cli("add", "data/test-wiki", "--adapter", "wiki") == 0
+    out = capsys.readouterr().out
+    assert "ingested source 'test-wiki' (wiki adapter)" in out and "5 messages" in out and "3 artifacts" in out
+    assert counts(store, "test-wiki")["messages"] == 5
+
+    assert cli("add", "data/test-wiki/test-wiki.db", "--adapter", "wiki", "--name", "wiki2") == 0
+    assert "ingested source 'wiki2'" in capsys.readouterr().out
+    assert counts(store, "wiki2")["messages"] == 5 and counts(store, "test-wiki")["messages"] == 5
+
+
 def test_export_from_the_store(project: Path, capsys):
     make_village(project / "data")
     assert cli("add", "data/ai-village") == 0
@@ -127,7 +190,7 @@ def test_export_from_the_store(project: Path, capsys):
     args = ("export", "--source", "village", "--channel", "general", "--since", "2026-01-05", "--until", "2026-01-06")
     assert cli(*args, "--out", "data/export") == 0
     out = capsys.readouterr().out
-    assert "exported 4 records" in out and "village: 4 chat" in out and "check passed" in out
+    assert "exported 4 records" in out and "village: 4 msg" in out and "check passed" in out
     text = (project / "data" / "export" / "events.jsonl").read_text()
     assert EMAIL not in text and "[email]" in text and "help@agentvillage.org" in text
 

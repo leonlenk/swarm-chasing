@@ -6,10 +6,14 @@
     swarm-mcp render <view> [options]      write a self-contained HTML view (views: timeline)
     swarm-mcp export --out DIR [filters]   export a redacted subset of the store, then check it
 
-``add`` detects the AI Village layout and uses the built-in adapter. Any other
-dataset is profiled, mapped (``--mapping`` or a draft by ``--agent``), checked
-(it stops with the report on failure) and then ingested. ``--dry-run`` stops
-after the check. The developer benchmark is ``python -m swarm_mcp.bench``.
+``add --adapter auto`` (the default) picks the adapter from the path: ``--mapping``
+given -> mapped; the AI Village file set -> ai_village; a bare git repository
+(a directory with HEAD, objects/ and refs/, or a ``*.git`` directory) -> git;
+anything else is profiled, mapped (a draft by ``--agent``), checked (it stops
+with the report on failure) and then ingested. ``--adapter wiki`` (the
+collusion.wiki explorer SQLite schema) is never auto-detected: pass it
+explicitly. ``--dry-run`` stops after the check (mapped) or only inspects the
+dataset (village, git, wiki). The developer benchmark is ``python -m swarm_mcp.bench``.
 
 Relative paths are tried against the current directory first, then the project
 root (``uv run --directory swarm_mcp`` changes the cwd to swarm_mcp/).
@@ -29,6 +33,7 @@ from swarm_mcp.config import Config, ConfigError, find_project_root, resolve_dat
 
 SUBCOMMANDS = ("info", "add", "render", "export")
 AGENT_MODES = ("none", "api", "claude-code")
+ADD_ADAPTERS = ("auto", "village", "git", "wiki", "mapped")
 
 
 class CommandError(ValueError):
@@ -95,6 +100,16 @@ def village_dir(path: Path) -> Path | None:
     return None
 
 
+def git_repo_dir(path: Path) -> Path | None:
+    """``path`` if it is a bare git repository: a directory holding HEAD, objects/ and refs/, or a
+    directory named ``*.git`` (e.g. ``data/ai-village/repos/rpg-game.git``)."""
+    if not path.is_dir():
+        return None
+    if (path / "HEAD").is_file() and (path / "objects").is_dir() and (path / "refs").is_dir():
+        return path
+    return path if path.name.endswith(".git") else None
+
+
 def default_name(path: Path) -> str:
     stem = path.name.split(".")[0] if path.is_file() else path.name
     slug = re.sub(r"[^a-z0-9_-]+", "_", stem.lower()).strip("_-")
@@ -105,7 +120,8 @@ def default_name(path: Path) -> str:
 
 def _counts(res: dict[str, Any]) -> str:
     c = res["counts"]
-    return ", ".join(f"{c.get(k, 0):,} {k}" for k in ("messages", "actions", "agents", "periods"))
+    keys = ["messages", "actions", "agents", "periods"] + [k for k in ("artifacts", "touches") if c.get(k)]
+    return ", ".join(f"{c.get(k, 0):,} {k}" for k in keys)
 
 
 def _next_steps(source: str) -> list[str]:
@@ -122,19 +138,31 @@ def cmd_add(args: argparse.Namespace, config: Config) -> int:
     if not path.exists():
         raise CommandError(f"dataset not found: {path}")
     db = _db(args, config)
-    village = None if args.mapping else village_dir(path)
-    if village is not None:
-        return _add_village(args, village, db)
+    adapter = args.adapter
+    if args.mapping and adapter not in ("auto", "mapped"):
+        raise CommandError(f"--mapping only applies to mapped datasets (got --adapter {adapter})")
+    if adapter == "village" or (adapter == "auto" and not args.mapping and village_dir(path)):
+        village = village_dir(path)
+        if village is None:
+            raise CommandError(f"no AI Village file set in {path} (or {path / 'ai-village'})")
+        return _add_village(args, village, db, detected=adapter == "auto")
+    if adapter == "git" or (adapter == "auto" and not args.mapping and git_repo_dir(path)):
+        if not path.is_dir():
+            raise CommandError(f"--adapter git needs a git repository directory, got {path}")
+        return _add_builtin(args, "git", path, db, detected=adapter == "auto")
+    if adapter == "wiki":
+        return _add_builtin(args, "wiki", path, db, detected=False)
     return _add_mapped(args, config, path, db)
 
 
-def _add_village(args: argparse.Namespace, path: Path, db: Path) -> int:
+def _add_village(args: argparse.Namespace, path: Path, db: Path, *, detected: bool = True) -> int:
     from swarm_mcp.scope.adapters.ai_village import SOURCE, AiVillageAdapter
     from swarm_mcp.scope.ingest import ingest
 
     if args.name and args.name != SOURCE:
         raise CommandError(f"AI Village data always uses the source name {SOURCE!r} (got --name {args.name!r})")
-    print(f"detected the AI Village layout in {path}: using the built-in ai_village adapter")
+    how = "detected the AI Village layout" if detected else "AI Village data"
+    print(f"{how} in {path}: using the built-in ai_village adapter")
     if args.dry_run:
         info = AiVillageAdapter().inspect(path)
         print(f"dry run: {len(info['files'])} files, nothing ingested")
@@ -143,6 +171,53 @@ def _add_village(args: argparse.Namespace, path: Path, db: Path) -> int:
         return 0
     res = ingest("ai_village", path, db, progress=_say)
     print(f"ingested source '{res['source']}' into {res['db']}: {_counts(res)} ({res['seconds']}s)")
+    print("(re-running add replaces this source; other sources and findings are kept)")
+    print("\n".join(_next_steps(res["source"])))
+    return 0
+
+
+_BUILTIN_LABEL = {"git": "a bare git repository", "wiki": "a wiki database"}
+
+
+def _inspect_counts(info: dict[str, Any]) -> list[str]:
+    """Counts from an adapter's ``inspect``: numbers as is, lists by length, dicts of numbers flattened."""
+    out = []
+    for k, v in info.items():
+        if isinstance(v, bool) or k in ("adapter", "path", "source"):
+            continue
+        if isinstance(v, int):
+            out.append(f"{v:,} {k.replace('_', ' ')}")
+        elif isinstance(v, (list, tuple)):
+            out.append(f"{len(v):,} {k.replace('_', ' ')}")
+        elif isinstance(v, dict):
+            out += [f"{n:,} {sub.replace('_', ' ')}" for sub, n in v.items() if isinstance(n, int)]
+    return out
+
+
+def _add_builtin(args: argparse.Namespace, name: str, path: Path, db: Path, *, detected: bool) -> int:
+    """The git or wiki adapter, unchanged: ``--name`` becomes the adapter's source (default: its own,
+    the repo or folder name)."""
+    from swarm_mcp.scope.adapters import get_adapter
+    from swarm_mcp.scope.ingest import ingest
+
+    if args.name and not _SLUG.match(args.name):
+        raise CommandError(f"--name must be a lowercase slug (letters, digits, _ or -), got {args.name!r}")
+    source = args.name
+    if source is None and name == "git" and path.name == ".git":  # a working tree's .git: name it after the tree
+        source = default_name(path.parent)
+    how = f"detected {_BUILTIN_LABEL[name]}" if detected else _BUILTIN_LABEL[name]
+    print(f"{how} in {path}: using the built-in {name} adapter")
+    try:
+        info = get_adapter(name, source).inspect(path)
+    except Exception as e:  # noqa: BLE001 - not a repository / not a database: a user error, not a crash
+        raise CommandError(f"{path} is not readable as {_BUILTIN_LABEL[name]}: {type(e).__name__}: {e}") from None
+    if args.dry_run:
+        counts = ", ".join(_inspect_counts(info)) or "no counts"
+        print(f"dry run: source '{info.get('source')}': {counts}; nothing ingested")
+        return 0
+    res = ingest(name, path, db, source=source, progress=_say)
+    print(f"ingested source '{res['source']}' ({res['adapter']} adapter) into {res['db']}: {_counts(res)} "
+          f"({res['seconds']}s)")  # fmt: skip
     print("(re-running add replaces this source; other sources and findings are kept)")
     print("\n".join(_next_steps(res["source"])))
     return 0
@@ -326,15 +401,28 @@ def build_parser() -> argparse.ArgumentParser:
     i.set_defaults(fn=cmd_info)
 
     a = sub.add_parser("add", help="add a dataset to the store: detect or map it, check it, ingest it (idempotent)")
-    a.add_argument("path", help="dataset folder or file, e.g. data/ai-village")
-    a.add_argument("--name", help="source slug for a mapped dataset (default: from the folder name)")
+    a.add_argument("path", help="dataset folder or file, e.g. data/ai-village or data/ai-village/repos/rpg-game.git")
+    a.add_argument(
+        "--adapter", choices=ADD_ADAPTERS, default="auto",
+        help="auto = --mapping given -> mapped, the AI Village file set -> village, a bare git repo -> git, "
+        "else mapped with a drafted mapping; wiki (a collusion.wiki explorer SQLite db) is used only when given",
+    )  # fmt: skip
+    a.add_argument(
+        "--name",
+        help="source slug: for mapped data (default: from the folder name), git or wiki (default: the repo / "
+        "folder name); AI Village is always 'village'",
+    )
     a.add_argument(
         "--agent", choices=AGENT_MODES, default="none",
         help="who drafts the mapping: none = heuristic draft with TODO notes; api = an LLM (ANTHROPIC_API_KEY); "
         "claude-code = write a task file for the /swarm-setup command",
     )  # fmt: skip
     a.add_argument("--mapping", help="use this mapping JSON instead of drafting one")
-    a.add_argument("--dry-run", action="store_true", help="stop after the check; ingest nothing")
+    a.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="mapped: stop after the check; village/git/wiki: only inspect; ingest nothing",
+    )
     a.add_argument("--db", help="store path (default: [data] db in swarm.toml, or <data dir>/swarmscope.duckdb)")
     a.set_defaults(fn=cmd_add)
 
@@ -353,7 +441,7 @@ def build_parser() -> argparse.ArgumentParser:
     e = sub.add_parser("export", help="export a redacted subset of the store, then rescan it (the check)")
     e.add_argument("--out", required=True, metavar="DIR", help="export directory (created; keep it under data/)")
     e.add_argument("--source", action="append", default=[], help="only these sources (repeatable)")
-    e.add_argument("--kind", action="append", default=[], help="only these id kinds, e.g. chat, event (repeatable)")
+    e.add_argument("--kind", action="append", default=[], help="only these id kinds, e.g. msg, event (repeatable)")
     e.add_argument("--channel", help="only messages in this channel")
     e.add_argument("--author", help="only this author: agent name/alias/id, 'human' or 'human:<id>'")
     e.add_argument("--since", help="inclusive UTC start (ISO date or datetime)")

@@ -5,7 +5,7 @@ Works on any source in the SwarmScope store whose records *touch artifacts* (``t
 repos (units = pull requests, artifacts = files), wikis (units = edit sessions, artifacts = pages), or any
 dataset an adapter maps the same way. Nothing here is dataset-specific; see ``sources.py`` for how units,
 refs, chat links and identities come out of the generic tables. Inference runs once per source on first
-use and is cached. Every result cites evidence ids that ``scope_get_record`` resolves. Subtask ids look
+use and is cached. Every result cites evidence ids that ``core_get`` resolves. Subtask ids look
 like ``<source>/<method>/<granularity>/<n>`` and are stable for a given store and code version.
 """
 
@@ -38,7 +38,7 @@ DESCRIPTION = (
     "Groups work units (pull requests, edit sessions, runs: any store source whose records touch artifacts) into "
     "subtasks with several inference methods, so disagreement is visible, and derives typed handoffs between actors: "
     "who built on, integrated, tested, fixed, re-submitted or duplicated whose work. Start with subtasks_corpora. "
-    "Results cite evidence ids for scope_get_record."
+    "Results cite evidence ids for core_get."
 )
 
 Method = Literal["combined", "code", "title", "files", "chat", "refs"]
@@ -62,7 +62,7 @@ def requires(ctx) -> list[str]:
         return [f"missing dependency: {e.name} (uv sync in swarm_mcp)"]
     if not ctx.store_path.exists():
         return [
-            f"SwarmScope store not found at {ctx.store_path}; ingest a source first (swarm-mcp ingest git|wiki ...)"
+            f"SwarmScope store not found at {ctx.store_path}; add a source first (swarm-mcp add <repo.git> | --adapter wiki <db>)"
         ]
     return []
 
@@ -79,7 +79,7 @@ def register(mcp, ctx) -> None:
         if not names:
             raise ToolInputError(
                 "No source in the store has artifact touches (files, pages...). Ingest one, e.g. "
-                "`swarm-mcp ingest git data/ai-village/repos/rpg-game.git` or `swarm-mcp ingest wiki data/collusion-wiki`."
+                "`swarm-mcp add data/ai-village/repos/rpg-game.git` or `swarm-mcp add --adapter wiki data/collusion-wiki`."
             )
         if name is None:
             if len(names) != 1:

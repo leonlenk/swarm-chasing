@@ -1,6 +1,6 @@
 """How well do inferred subtasks match the collusion.wiki publishers' page_family labels?
 
-    uv run --directory swarm_mcp swarm-mcp ingest wiki data/collusion-wiki
+    uv run --directory swarm_mcp swarm-mcp add --adapter wiki data/collusion-wiki
     uv run --directory swarm_mcp python examples/wiki_eval.py
 
 page_family is the publishers' own heuristic task label per page (e.g. 'oecd-equity',

@@ -1,6 +1,6 @@
 """The same tools on a non-village source: collusion.wiki, over the real MCP protocol (stdio).
 
-    uv run --directory swarm_mcp swarm-mcp ingest wiki data/collusion-wiki
+    uv run --directory swarm_mcp swarm-mcp add --adapter wiki data/collusion-wiki
     uv run --directory swarm_mcp python examples/wiki_demo.py [query]
 
 Needs data/collusion-wiki/collusion-wiki.db (Simon Willison's SQLite build of the collusion.wiki export).
@@ -41,7 +41,7 @@ async def main() -> None:
             print(f"\n▶ {tool}({', '.join(f'{k}={v!r}' for k, v in args.items())})  [{time.perf_counter() - t:.1f}s]")
             return res.structured_content
 
-        src = {x["source"]: x for x in (await call("scope_list_sources"))["sources"]}["collusion-wiki"]
+        src = {x["source"]: x for x in (await call("core_info"))["sources"]}["collusion-wiki"]
         show(
             "source",
             {
@@ -55,7 +55,7 @@ async def main() -> None:
         hit = hits["results"][0]
         show("search", {"total_matches": hits["total_matches"], "first": hit})
 
-        rec = await call("scope_get_record", evidence_id=hit["evidence_id"], neighbors=2, max_chars=150)
+        rec = await call("core_get", ids=hit["evidence_id"], before=2, after=2, max_chars=150)
         around = rec["neighbors"]["before"] + [{"ts": rec["ts"], "author": rec["author"], "snippet": rec["content"]}]
         around += rec["neighbors"]["after"]
         show("same page, before/after", [f"{r['ts']} {r['author']}: {r['snippet']['content'][:100]}" for r in around])
@@ -94,7 +94,7 @@ async def main() -> None:
             ],
         )
 
-        relent = await call("scope_get_record", evidence_id="collusion-wiki:agent:AgentRelent")
+        relent = await call("core_get", ids="collusion-wiki:agent:AgentRelent")
         show("one label, many machines", {"agent": relent["display_name"], **relent["meta"]})
 
 
