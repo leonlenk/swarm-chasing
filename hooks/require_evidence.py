@@ -1,35 +1,52 @@
 #!/usr/bin/env python3
 """Stop hook: refuse to end the turn while a recorded finding cites evidence ids that don't resolve.
 
-Registered in .claude/settings.json (it imports swarm_mcp, so it runs in the uv env):
+Registered in .claude/settings.json and run with plain ``python3`` (this entry point is stdlib only):
 
-    uv run --project "$CLAUDE_PROJECT_DIR/swarm_mcp" --quiet python "$CLAUDE_PROJECT_DIR/hooks/require_evidence.py"
+    python3 "$CLAUDE_PROJECT_DIR/hooks/require_evidence.py" || exit 1
 
-It runs ``swarm_mcp.scope.findings.check_findings`` on ``<findings dir>/findings.jsonl``
-against the SwarmScope store (read-only).
+It works in two stages so that nothing outside the evidence check itself can block a stop:
 
-Project root: $CLAUDE_PROJECT_DIR, else <this script's dir>/... The findings dir and the
-store come from ``swarm_mcp.config.Config.load(cwd=<project root>)``: ``[data] findings`` and
+1. Hook (this process). Reads the hook payload from stdin. If ``stop_hook_active`` is true
+   (Claude is already continuing because of an earlier block), or the payload is not a JSON
+   object, it allows the stop at once. Otherwise it runs stage 2 in the swarm_mcp env:
+
+       uv run --project <this repo>/swarm_mcp --frozen --quiet python <this file> --check
+
+2. Check (``--check``, imports swarm_mcp). Runs ``swarm_mcp.scope.findings.check_findings`` on
+   ``<findings dir>/findings.jsonl`` against the SwarmScope store (read-only) and prints one
+   result line on stdout.
+
+The hook blocks only when stage 2 returns a well-formed result that names bad findings. It
+blocks with Claude Code's JSON output, ``{"decision": "block", "reason": ...}`` on stdout, and
+exit code 0. It never exits 2. Anything unexpected allows the stop with a note on stderr: uv
+missing or failing to start (an unparseable or merge-conflicted pyproject.toml, a lock or
+network error), an import error, a timeout, or garbled output. The ``|| exit 1`` in
+settings.json turns a failure to start python3 or to open this file (exit 2) into a
+non-blocking error.
+
+Project root: $CLAUDE_PROJECT_DIR, else <this script's dir>/... The findings dir and the store
+come from ``swarm_mcp.config.Config.load(cwd=<project root>)``: ``[data] findings`` and
 ``[data] db`` in <project root>/swarm.toml, defaulting to <project root>/findings and
 <data dir>/swarmscope.duckdb (SWARM_DATA_DIR is honoured).
 
-Exit codes (Claude Code Stop-hook semantics):
-  0  allow the stop: all findings resolve, findings.jsonl is missing/empty, the store is
-     missing (warning on stderr), or ``stop_hook_active`` is true (loop guard; a one-line
-     note on stderr if findings are still bad)
-  2  block the stop: a finding cites an unresolvable id or a line is corrupt; stderr
-     explains which lines/ids and how to fix them (Claude sees it)
-  1  unexpected error (non-blocking; the error is on stderr)
+The stop is allowed (stdout empty) when all findings resolve, findings.jsonl is missing or
+empty, or the store is missing (warning on stderr).
 """
 
 from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
-MAX_LISTED = 20  # cap on problems spelled out in the stderr report
+MAX_LISTED = 20  # cap on problems spelled out in the block reason
+CHECK_TIMEOUT = 45  # seconds for stage 2; settings.json gives the whole hook 60
+RESULT_PREFIX = "@@require_evidence-result@@ "
+SWARM_MCP_DIR = Path(__file__).resolve().parent.parent / "swarm_mcp"
 
 
 def project_root() -> Path:
@@ -37,13 +54,11 @@ def project_root() -> Path:
     return Path(env).expanduser() if env else Path(__file__).resolve().parent.parent
 
 
-def read_input() -> dict:
+def note(msg: str) -> None:
     try:
-        raw = sys.stdin.read()
-        data = json.loads(raw) if raw.strip() else {}
-        return data if isinstance(data, dict) else {}
-    except Exception:  # noqa: BLE001 - a garbled payload just means "no loop guard info"
-        return {}
+        print(f"require_evidence hook: {msg}", file=sys.stderr)
+    except Exception:  # noqa: BLE001 - a closed stderr must not fail the hook
+        pass
 
 
 def explain(result: dict) -> str:
@@ -74,49 +89,106 @@ def explain(result: dict) -> str:
     return "\n".join(lines)
 
 
-def main() -> int:
-    data = read_input()
-    root = project_root()
-    loop_guard = bool(data.get("stop_hook_active"))
+# --------------------------------------------------------------------------- stage 2: the check
 
+
+def check_main() -> int:
+    """Run in the swarm_mcp env: print one ``RESULT_PREFIX + json`` line and return 0."""
     from swarm_mcp.config import Config
     from swarm_mcp.scope.findings import check_findings
 
-    config = Config.load(cwd=root)
+    config = Config.load(cwd=project_root())
     ffile = config.findings_path / "findings.jsonl"
-    if not ffile.exists():
-        return 0
-    db_path = config.store_path
-    if loop_guard:  # Claude is already continuing because of an earlier block: never block again
-        try:
-            result = check_findings(ffile, db_path)
-            if not result.get("ok"):
-                print(
-                    f"require_evidence hook: findings still have problems ({result.get('message')}); "
-                    "not blocking again (stop_hook_active).",
-                    file=sys.stderr,
-                )
-        except Exception as e:  # noqa: BLE001
-            print(f"require_evidence hook: check skipped ({type(e).__name__}: {e})", file=sys.stderr)
-        return 0
+    if ffile.exists():
+        result = check_findings(ffile, config.store_path)
+    else:
+        result = {"ok": True, "message": f"No findings to check ({ffile} does not exist).", "findings_file": str(ffile)}
+    sys.stdout.write(RESULT_PREFIX + json.dumps(result, default=str) + "\n")
+    sys.stdout.flush()
+    return 0
 
-    result = check_findings(ffile, db_path)
-    if result.get("ok"):
-        return 0
-    if result.get("store_missing"):
-        print(
-            f"require_evidence hook: {result.get('message')} Findings in {ffile} were not verified; allowing the stop.",
-            file=sys.stderr,
+
+# --------------------------------------------------------------------------- stage 1: the hook
+
+
+def read_payload() -> dict | None:
+    try:
+        data = json.loads(sys.stdin.read())
+    except Exception:  # noqa: BLE001
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _tail(text: str, limit: int = 400) -> str:
+    text = " ".join((text or "").split())
+    return text if len(text) <= limit else "..." + text[-limit:]
+
+
+def run_check(payload: dict) -> dict | None:
+    """Stage 2 in a subprocess. The parsed result, or None (after a note) if it could not run."""
+    uv = shutil.which("uv")
+    if uv is None:
+        note("uv not found on PATH; findings were not checked. Allowing the stop.")
+        return None
+    script = str(Path(__file__).resolve())
+    cmd = [uv, "run", "--project", str(SWARM_MCP_DIR), "--frozen", "--quiet", "python", script, "--check"]
+    try:
+        proc = subprocess.run(cmd, input=json.dumps(payload), capture_output=True, text=True, timeout=CHECK_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        note(f"the findings check timed out after {CHECK_TIMEOUT}s. Allowing the stop.")
+        return None
+    except Exception as e:  # noqa: BLE001
+        note(f"could not start the findings check ({type(e).__name__}: {e}). Allowing the stop.")
+        return None
+    lines = [ln for ln in (proc.stdout or "").splitlines() if ln.startswith(RESULT_PREFIX)]
+    if proc.returncode != 0 or not lines:
+        note(
+            f"the findings check could not run (exit {proc.returncode}: {_tail(proc.stderr) or 'no output'}). "
+            "Findings were not checked. Allowing the stop."
         )
-        return 0
-    print(explain(result), file=sys.stderr)
-    return 2
+        return None
+    try:
+        result = json.loads(lines[-1][len(RESULT_PREFIX) :])
+    except ValueError:
+        result = None
+    if not isinstance(result, dict):
+        note("the findings check returned garbled output. Allowing the stop.")
+        return None
+    return result
+
+
+def hook_main() -> None:
+    payload = read_payload()
+    if payload is None:
+        note("the hook payload is not a JSON object, so stop_hook_active is unknown. Allowing the stop.")
+        return
+    if payload.get("stop_hook_active"):  # Claude is already continuing because of an earlier block
+        note("stop_hook_active is set; not checking or blocking again.")
+        return
+    result = run_check(payload)
+    if result is None or result.get("ok"):
+        return
+    if result.get("store_missing"):
+        note(f"{result.get('message')} Findings in {result.get('findings_file')} were not verified; allowing the stop.")
+        return
+    if not (result.get("problems") or result.get("parse_errors")):
+        note(f"the findings check failed without naming a finding ({result.get('message')}). Allowing the stop.")
+        return
+    sys.stdout.write(json.dumps({"decision": "block", "reason": explain(result)}) + "\n")
+    sys.stdout.flush()
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--check"]:
+        sys.exit(check_main())
     try:
-        code = main()
-    except Exception as e:  # noqa: BLE001 - unexpected: non-blocking error
-        print(f"require_evidence hook error: {type(e).__name__}: {e}", file=sys.stderr)
-        code = 1
-    sys.exit(code)
+        hook_main()
+    except BaseException as e:  # noqa: BLE001 - even KeyboardInterrupt/SystemExit must not block the stop
+        note(f"unexpected error ({type(e).__name__}: {e}). Allowing the stop.")
+    finally:
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except Exception:  # noqa: BLE001
+            pass
+        os._exit(0)

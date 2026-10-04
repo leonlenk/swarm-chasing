@@ -77,8 +77,8 @@ Safety:
 
 - **PostToolUse `hooks/audit_log.py`.** For every `mcp__swarm__.*` call it appends the tool name, the arguments, a sha256 of the result and a timestamp to `findings/audit.jsonl`. It never blocks.
 - **Stop `hooks/require_evidence.py`.**
-  - It blocks stopping (exit 2, with the reasons on stderr) while any finding in `findings/findings.jsonl` has an evidence id that doesn't resolve, or a corrupt line.
-  - It respects `stop_hook_active`, so it can't loop.
+  - It blocks stopping (a JSON `{"decision": "block"}` with the reasons) while any finding in `findings/findings.jsonl` has an evidence id that doesn't resolve, or a corrupt line.
+  - It respects `stop_hook_active`, so it can't loop. It runs with plain `python3` and never exits 2: if the check itself can't run (uv missing, a broken `pyproject.toml`, an import error), it allows the stop with a note on stderr.
   - It allows the stop, with a warning, when the store is missing.
   - The same check is available as `swarm-mcp check-findings`, which exits 0 or 1.
 

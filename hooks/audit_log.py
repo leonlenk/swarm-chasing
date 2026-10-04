@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """PostToolUse hook: append one audit line per swarm MCP tool call.
 
-Registered in .claude/settings.json for matcher ``mcp__swarm__.*``. For every
+Registered in .claude/settings.json for matcher ``mcp__swarm__.*`` as
+``python3 "$CLAUDE_PROJECT_DIR/hooks/audit_log.py" || exit 0``, so even a missing or broken
+script can't block or fail a tool call. For every
 tool named ``mcp__swarm__*`` it appends to ``<findings dir>/audit.jsonl``:
 
     {ts, session_id, tool_use_id, tool, args, result_sha256, result_chars, is_error?}
