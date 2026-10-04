@@ -482,12 +482,13 @@ def _validate(trace, max_bytes):
     def items(k):
         return [(f"{k}[{i}]", x) for i, x in enumerate(lists[k]) if isinstance(x, dict)]
 
-    names = set()
+    names = set()                                   # string names only, so a list or dict can't break the lookups
     for p, a in items("agents"):
         err.text(f"{p}.name", a.get("name"), nonempty=True)
-        if a.get("name") in names:
-            err.at(f"{p}.name", f"duplicate agent {a.get('name')!r}")
-        names.add(a.get("name"))
+        if isinstance(a.get("name"), str):
+            if a["name"] in names:
+                err.at(f"{p}.name", f"duplicate agent {a['name']!r}")
+            names.add(a["name"])
         err.text(f"{p}.lab", a.get("lab"), nonempty=True)
         if "group" in a:
             err.text(f"{p}.group", a["group"])
@@ -499,16 +500,17 @@ def _validate(trace, max_bytes):
     def agent_ref(path, v, nullable=False):
         if v is None and nullable:
             return
-        if v not in names:
+        if not isinstance(v, str) or v not in names:
             err.at(path, f"{v!r} not in agents")
 
     ids = set()
     for p, e in items("events"):
         if not isinstance(e.get("id"), str) or not e.get("id"):
             err.at(f"{p}.id", "expected a non-empty string")
-        elif e["id"] in ids:
-            err.at(f"{p}.id", f"duplicate event id {e['id']!r}")
-        ids.add(e.get("id"))
+        else:
+            if e["id"] in ids:
+                err.at(f"{p}.id", f"duplicate event id {e['id']!r}")
+            ids.add(e["id"])
         err.time(f"{p}.t", e.get("t"))
         agent_ref(f"{p}.agent", e.get("agent"))
         err.enum(f"{p}.channel", e.get("channel"), CHANNELS)
@@ -521,7 +523,7 @@ def _validate(trace, max_bytes):
     def event_ref(path, v, nullable=False):
         if v is None and nullable:
             return
-        if v not in ids:
+        if not isinstance(v, str) or v not in ids:
             err.at(path, f"{v!r} not an event id")
 
     for p, x in items("exposures"):
@@ -606,9 +608,11 @@ def validate_index(index):
             err.at(f"{p}.{f}", "missing")
         for f in sorted(x.keys() - need):
             err.at(f"{p}.{f}", "unknown field")
-        if x.get("id") in seen:
-            err.at(f"{p}.id", f"duplicate id {x.get('id')!r}")
-        seen.add(x.get("id"))
+        err.text(f"{p}.id", x.get("id"), nonempty=True)
+        if isinstance(x.get("id"), str):
+            if x["id"] in seen:
+                err.at(f"{p}.id", f"duplicate id {x['id']!r}")
+            seen.add(x["id"])
         err.enum(f"{p}.kind", x.get("kind"), KINDS)
         err.text(f"{p}.file", x.get("file"), nonempty=True)
         for f in ("n_agents", "n_events"):
