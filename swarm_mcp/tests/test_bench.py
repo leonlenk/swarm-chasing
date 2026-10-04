@@ -4,10 +4,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import importlib.util
 import json
-import os
-import sys
 from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -29,6 +26,7 @@ from swarm_mcp.bench._common import (
 )
 from swarm_mcp.bench.reference import solve
 from swarm_mcp.bench.score import score
+from swarm_mcp.scope.adapters.ai_village import AiVillageAdapter
 from swarm_mcp.server import build_server
 
 # Field names of the real AI Village export (keys of the first row of each file).
@@ -209,37 +207,8 @@ def test_store_backed_modules_read_it(bench, tmp_path: Path):
     assert [r["evidence_id"] for r in batch["results"]] == ids
 
 
-def _scope_adapter(monkeypatch):
-    """The SwarmScope ai_village adapter: in-package after the leon/mcp merge, else from a sibling checkout."""
-    try:
-        from swarm_mcp.scope.adapters.ai_village import AiVillageAdapter
-
-        return AiVillageAdapter
-    except ImportError:
-        pass
-    here = Path(__file__).resolve()
-    candidates = [
-        os.environ.get("SWARM_SCOPE_SRC"),
-        here.parents[3] / "swarm-chasing-main/swarm_mcp/src/swarm_mcp/scope",
-    ]
-    scope = next((Path(c) for c in candidates if c and (Path(c) / "adapters/ai_village.py").is_file()), None)
-    if scope is None:
-        pytest.skip("SwarmScope ai_village adapter not available (set SWARM_SCOPE_SRC to leon/mcp's scope/ dir)")
-    mods = {}
-    for name, file in (
-        ("swarm_mcp.scope.names", scope / "names.py"),
-        ("_bench_ai_village", scope / "adapters/ai_village.py"),
-    ):
-        spec = importlib.util.spec_from_file_location(name, file)
-        mod = importlib.util.module_from_spec(spec)
-        monkeypatch.setitem(sys.modules, name, mod)
-        spec.loader.exec_module(mod)
-        mods[name] = mod
-    return mods["_bench_ai_village"].AiVillageAdapter
-
-
-def test_scope_adapter_smoke_ingest(bench, monkeypatch):
-    adapter = _scope_adapter(monkeypatch)()
+def test_scope_adapter_smoke_ingest(bench):
+    adapter = AiVillageAdapter()
     info = adapter.inspect(bench["ds"])
     assert info["missing_required"] == []
     by_table: dict[str, list] = {}
