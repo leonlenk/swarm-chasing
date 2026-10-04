@@ -119,8 +119,10 @@ def test_add_drafts_a_mapping(project: Path, capsys):
     assert "swarm-mcp add" in (project / "mappings" / "crew2.task.md").read_text()
     assert counts(project / "data" / "swarmscope.duckdb", "crew2")["messages"] == 0  # nothing ingested
 
-    assert cli("add", "data/crew", "--agent", "api") == 2
+    assert cli("add", "data/crew", "--name", "crew3", "--agent", "api") == 2  # no mapping yet and no key
     assert "--agent none" in capsys.readouterr().err
+    assert cli("add", "data/crew", "--agent", "api") == 0  # mappings/crew.json exists: no draft, no key needed
+    assert "using existing mapping mappings/crew.json" in capsys.readouterr().out
     assert cli("add", "data/crew", "--name", "Bad Name") == 2
 
 
@@ -158,7 +160,7 @@ def test_add_a_git_repo(project: Path, capsys):
 
     (project / "data" / "notarepo").mkdir()
     assert cli("add", "data/notarepo", "--adapter", "git") == 2
-    assert "not readable as a bare git repository" in capsys.readouterr().err
+    assert "not a git repository root" in capsys.readouterr().err
     assert cli("add", "data/repos/rpg.git", "--name", "Bad Name") == 2
     assert cli("add", "data/repos/rpg.git", "--adapter", "git", "--mapping", "x.json") == 2
     assert cli("add", "data/repos/rpg.git", "--adapter", "village") == 2
@@ -255,3 +257,151 @@ def test_add_replaces_a_mapped_source_when_only_the_mapping_changed(project: Pat
     assert cli("add", "data/board", "--mapping", str(second)) == 0
     out = capsys.readouterr().out
     assert "which used another mapping" in out and str(first.resolve()) in out and "ingested source 'board'" in out
+
+
+def test_add_keeps_a_hand_edited_mapping(project: Path, capsys):
+    """Regression: re-running `add` without --mapping (even with --dry-run) redrafted mappings/<source>.json
+    over the user's edits."""
+    make_nested_jsonl(project / "data" / "crew")
+    mapping = project / "mappings" / "crew.json"
+    store = project / "data" / "swarmscope.duckdb"
+    assert cli("add", "data/crew", "--dry-run") == 0  # no mapping yet: a dry run writes the draft for review
+    out = capsys.readouterr().out
+    assert "drafting a mapping" in out and "nothing ingested" in out and mapping.exists() and not store.exists()
+
+    edited = dict(json.loads(mapping.read_text()), description="hand edited")
+    mapping.write_text(json.dumps(edited))
+    assert cli("add", "data/crew", "--dry-run") == 0
+    out = capsys.readouterr().out
+    assert "using existing mapping mappings/crew.json (delete it to redraft)" in out and "drafting" not in out
+    assert json.loads(mapping.read_text()) == edited and not store.exists()
+
+    assert cli("add", "data/crew") == 0
+    out = capsys.readouterr().out
+    assert "using existing mapping" in out and "ingested source 'crew'" in out
+    assert json.loads(mapping.read_text()) == edited
+    assert counts(store, "crew")["messages"] == 300
+
+    broken = dict(edited, records=[dict(edited["records"][0], text="no_such_field")])
+    mapping.write_text(json.dumps(broken))  # the edited mapping is the one checked, not a fresh draft
+    assert cli("add", "data/crew") == 1
+    assert "does not pass the check" in capsys.readouterr().out
+    assert json.loads(mapping.read_text()) == broken
+
+    mapping.unlink()  # deleting it redrafts
+    assert cli("add", "data/crew", "--dry-run") == 0
+    assert "drafting a mapping" in capsys.readouterr().out and mapping.exists()
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_add_git_needs_a_repository_root(project: Path, capsys):
+    """Regression: `add <dir> --adapter git` on a folder inside a working tree (and auto-detect on any folder
+    named *.git) ran `git -C <dir>`, which walks up and ingested the enclosing repository."""
+    from swarm_mcp.cli import git_repo_dir, git_root
+
+    bare = make_repo(project / "data" / "repos")  # also leaves the working tree data/work-repo (with commits)
+    tree = project / "data" / "work-repo"
+    store = project / "data" / "swarmscope.duckdb"
+    fake = tree / "fake.git"  # a folder named *.git inside a working tree
+    fake.mkdir()
+    (fake / "notes.txt").write_text("not a repository\n")
+    lookalike = project / "data" / "lookalike.git"  # HEAD, objects/ and refs/, but not a repository
+    for d in ("objects", "refs"):
+        (lookalike / d).mkdir(parents=True)
+    (lookalike / "HEAD").write_text("not a ref\n")
+
+    for sub in (tree / "src", fake, lookalike):
+        assert git_repo_dir(sub) is None and git_root(sub) is None
+        assert cli("add", str(sub), "--adapter", "git") == 2
+        assert "not a git repository root" in capsys.readouterr().err
+        assert cli("add", str(sub), "--adapter", "git", "--dry-run") == 2
+        capsys.readouterr()
+    cli("add", str(fake), "--dry-run")  # auto: not taken for a git repo (it goes on to draft a mapping)
+    assert "git adapter" not in capsys.readouterr().out
+    assert not store.exists()
+
+    assert git_repo_dir(bare) == bare and git_root(bare) == bare  # a bare repo
+    assert git_repo_dir(tree) is None and git_root(tree) == tree / ".git"  # a working tree: only when asked
+    assert cli("add", "data/work-repo", "--adapter", "git", "--dry-run") == 0
+    out = capsys.readouterr().out
+    assert f"in {tree / '.git'}" in out and "dry run: source 'work-repo'" in out
+    assert cli("add", "data/work-repo", "--adapter", "git") == 0
+    assert "ingested source 'work-repo' (git adapter)" in capsys.readouterr().out
+    assert table_count(store, "periods", "work-repo") == 0 and table_count(store, "agents", "work-repo") > 0
+    assert cli("add", "data/repos/rpg.git", "--adapter", "git", "--dry-run") == 0
+    assert "dry run: source 'rpg'" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_add_git_slugifies_the_default_source(project: Path, capsys):
+    """Regression: `add "data/repos/My Repo.git"` created source 'My Repo', whose ids evidence.parse rejects."""
+    from swarm_mcp.scope.evidence import parse
+
+    bare = make_repo(project / "data" / "repos")
+    spaced = project / "data" / "repos" / "My Repo.git"
+    shutil.copytree(bare, spaced)
+    store = project / "data" / "swarmscope.duckdb"
+    assert cli("add", str(spaced), "--dry-run") == 0
+    assert "dry run: source 'my_repo'" in capsys.readouterr().out
+    assert cli("add", str(spaced)) == 0
+    assert "ingested source 'my_repo' (git adapter)" in capsys.readouterr().out
+    with db.connect(store) as s:
+        ids = [r["evidence_id"] for r in s.all("SELECT evidence_id FROM periods WHERE source = 'my_repo'")]
+    assert len(ids) == 5 and all(parse(i) for i in ids)
+
+
+def test_add_wiki_needs_a_db_in_the_given_folder(project: Path, capsys, monkeypatch: pytest.MonkeyPatch):
+    """Regression: with no *.db in the given folder, the wiki adapter searched the SIBLING folders and ingested
+    another dataset under that sibling's name. The adapter and ingest are fakes here (empty files, nothing is
+    opened); a refused path must never reach them."""
+    import swarm_mcp.scope.adapters as adapters
+    import swarm_mcp.scope.ingest as ingest_mod
+
+    calls: list[tuple[str, Path]] = []
+
+    class FakeWiki:
+        def __init__(self, source: str | None):
+            self.source = source
+
+        def inspect(self, path: Path) -> dict:
+            calls.append(("inspect", Path(path)))
+            return {"source": self.source or (path.parent if path.is_file() else path).name, "pages": 0}
+
+    def fake_get_adapter(name: str, source: str | None = None) -> FakeWiki:
+        assert name == "wiki"
+        return FakeWiki(source)
+
+    def fake_ingest(name: str, path: Path, db_path: Path, source: str | None = None, **_) -> dict:
+        calls.append(("ingest", Path(path)))
+        return {"source": source or Path(path).name, "adapter": name, "db": str(db_path), "counts": {}, "seconds": 0}
+
+    monkeypatch.setattr(adapters, "get_adapter", fake_get_adapter)
+    monkeypatch.setattr(ingest_mod, "ingest", fake_ingest)
+    data = project / "data"
+    (data / "mydata" / "nested").mkdir(parents=True)
+    (data / "mydata" / "notes.txt").write_text("no database here\n")
+    (data / "mydata" / "nested" / "inner.db").touch()  # not directly in mydata/
+    (data / "mydata" / "folder.db").mkdir()  # a folder, not a database file
+    (data / "sibling").mkdir()
+    (data / "sibling" / "sibling.db").touch()  # empty; the sibling the adapter used to fall back to
+
+    for bad in ("data/mydata", "data/mydata/notes.txt", "data/mydata/folder.db"):
+        for extra in ((), ("--dry-run",)):
+            assert cli("add", bad, "--adapter", "wiki", *extra) == 2
+            assert "no wiki database in" in capsys.readouterr().err
+    assert calls == []
+
+    assert cli("add", "data/sibling", "--adapter", "wiki", "--dry-run") == 0  # a folder with a *.db
+    assert "dry run: source 'sibling'" in capsys.readouterr().out
+    assert calls == [("inspect", data / "sibling")]
+    calls.clear()
+    assert cli("add", "data/sibling/sibling.db", "--adapter", "wiki", "--name", "wiki2") == 0  # a .db file
+    assert "ingested source 'wiki2'" in capsys.readouterr().out
+    assert calls == [("inspect", data / "sibling" / "sibling.db"), ("ingest", data / "sibling" / "sibling.db")]
+
+    calls.clear()
+    (data / "My Wiki").mkdir()
+    (data / "My Wiki" / "w.db").touch()
+    assert cli("add", "data/My Wiki", "--adapter", "wiki") == 2  # default source 'My Wiki': not an id part
+    assert "pass --name" in capsys.readouterr().err
+    assert [c[0] for c in calls] == ["inspect"]

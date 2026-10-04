@@ -8,12 +8,14 @@
 
 ``add --adapter auto`` (the default) picks the adapter from the path: ``--mapping``
 given -> mapped; the AI Village file set -> ai_village; a bare git repository
-(a directory with HEAD, objects/ and refs/, or a ``*.git`` directory) -> git;
-anything else is profiled, mapped (a draft by ``--agent``), checked (it stops
-with the report on failure) and then ingested. ``--adapter wiki`` (the
-collusion.wiki explorer SQLite schema) is never auto-detected: pass it
-explicitly. ``--dry-run`` stops after the check (mapped) or only inspects the
-dataset (village, git, wiki). The developer benchmark is ``python -m swarm_mcp.bench``.
+(a directory with HEAD, objects/ and refs/ that git takes for a repository root) -> git;
+anything else is mapped with ``mappings/<source>.json`` when it exists (re-runs
+keep hand edits; delete it to redraft), else profiled and mapped by a draft
+from ``--agent``, checked (it stops with the report on failure) and then
+ingested. ``--adapter wiki`` (the collusion.wiki explorer SQLite schema) is
+never auto-detected: pass it explicitly. ``--dry-run`` ingests nothing: it
+writes the draft mapping (when none exists) and stops after the check (mapped),
+or only inspects the dataset (village, git, wiki). The developer benchmark is ``python -m swarm_mcp.bench``.
 
 Relative paths are tried against the current directory first, then the project
 root (``uv run --directory swarm_mcp`` changes the cwd to swarm_mcp/).
@@ -100,18 +102,41 @@ def village_dir(path: Path) -> Path | None:
     return None
 
 
-def git_repo_dir(path: Path) -> Path | None:
-    """``path`` if it is a bare git repository: a directory holding HEAD, objects/ and refs/, or a
-    directory named ``*.git`` (e.g. ``data/ai-village/repos/rpg-game.git``)."""
+def git_root(path: Path) -> Path | None:
+    """The git directory when ``path`` is the root of a repository: ``path`` for a bare repository, ``path/.git``
+    for a working tree. None otherwise, in particular for a folder inside another repository (``git -C`` would
+    walk up to that one)."""
+    import subprocess
+
     if not path.is_dir():
         return None
-    if (path / "HEAD").is_file() and (path / "objects").is_dir() and (path / "refs").is_dir():
+    try:
+        res = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--absolute-git-dir"], capture_output=True, text=True, timeout=30
+        )
+    except (OSError, subprocess.SubprocessError):  # git not installed, or hung
+        return None
+    if res.returncode != 0 or not res.stdout.strip():
+        return None
+    git_dir, real = Path(res.stdout.strip()).resolve(), path.resolve()
+    if git_dir == real:
         return path
-    return path if path.name.endswith(".git") else None
+    return path / ".git" if git_dir == real / ".git" else None
+
+
+def git_repo_dir(path: Path) -> Path | None:
+    """``path`` if it is a bare git repository (auto-detect): HEAD, objects/ and refs/, and git agrees it is a
+    repository root (e.g. ``data/ai-village/repos/rpg-game.git``)."""
+    if not ((path / "HEAD").is_file() and (path / "objects").is_dir() and (path / "refs").is_dir()):
+        return None
+    return path if git_root(path) == path else None
 
 
 def default_name(path: Path) -> str:
-    stem = path.name.split(".")[0] if path.is_file() else path.name
+    return _slugify(path.name.split(".")[0] if path.is_file() else path.name)
+
+
+def _slugify(stem: str) -> str:
     slug = re.sub(r"[^a-z0-9_-]+", "_", stem.lower()).strip("_-")
     if not slug or not slug[0].isalpha():
         slug = f"ds_{slug}" if slug else "dataset"
@@ -146,11 +171,19 @@ def cmd_add(args: argparse.Namespace, config: Config) -> int:
         if village is None:
             raise CommandError(f"no AI Village file set in {path} (or {path / 'ai-village'})")
         return _add_village(args, village, db, detected=adapter == "auto")
-    if adapter == "git" or (adapter == "auto" and not args.mapping and git_repo_dir(path)):
-        if not path.is_dir():
-            raise CommandError(f"--adapter git needs a git repository directory, got {path}")
-        return _add_builtin(args, "git", path, db, detected=adapter == "auto")
+    repo = git_repo_dir(path) if adapter == "auto" and not args.mapping else None
+    if adapter == "git" or repo:
+        repo = repo or git_root(path)
+        if repo is None:
+            raise CommandError(
+                f"not a git repository root: {path} (pass a bare repository or the top folder of a working tree)"
+            )
+        return _add_builtin(args, "git", repo, db, detected=adapter == "auto")
     if adapter == "wiki":
+        # only the given .db, or a *.db directly in the given folder: never a sibling dataset (file check only)
+        dbs = [path] if path.suffix == ".db" else list(path.glob("*.db")) if path.is_dir() else []
+        if not any(f.is_file() for f in dbs):
+            raise CommandError(f"no wiki database in {path} (pass a .db file or the folder that holds it)")
         return _add_builtin(args, "wiki", path, db, detected=False)
     return _add_mapped(args, config, path, db)
 
@@ -222,19 +255,23 @@ def _add_builtin(args: argparse.Namespace, name: str, path: Path, db: Path, *, d
     """The git or wiki adapter, unchanged: ``--name`` becomes the adapter's source (default: its own,
     the repo or folder name)."""
     from swarm_mcp.scope.adapters import get_adapter
+    from swarm_mcp.scope.evidence import _PART
     from swarm_mcp.scope.ingest import ingest
 
     if args.name and not _SLUG.match(args.name):
         raise CommandError(f"--name must be a lowercase slug (letters, digits, _ or -), got {args.name!r}")
     source = args.name
-    if source is None and name == "git" and path.name == ".git":  # a working tree's .git: name it after the tree
-        source = default_name(path.parent)
+    if source is None and name == "git":  # the repo's name as a slug; a working tree's .git: the tree's name
+        source = _slugify((path.parent if path.name == ".git" else path).name.removesuffix(".git"))
     how = f"detected {_BUILTIN_LABEL[name]}" if detected else _BUILTIN_LABEL[name]
     print(f"{how} in {path}: using the built-in {name} adapter")
     try:
         info = get_adapter(name, source).inspect(path)
     except Exception as e:  # noqa: BLE001 - not a repository / not a database: a user error, not a crash
         raise CommandError(f"{path} is not readable as {_BUILTIN_LABEL[name]}: {type(e).__name__}: {e}") from None
+    final = source or info.get("source")
+    if not _PART.match(str(final or "")):  # it prefixes every evidence id
+        raise CommandError(f"source name {final!r} is not usable in evidence ids; pass --name SLUG")
     if args.dry_run:
         counts = ", ".join(_inspect_counts(info)) or "no counts"
         print(f"dry run: source '{info.get('source')}': {counts}; nothing ingested")
@@ -252,8 +289,15 @@ def _add_mapped(args: argparse.Namespace, config: Config, path: Path, db: Path) 
     from swarm_mcp.setup.mapping import MappingError, load_spec
 
     mappings_dir = config.project_root / "mappings"
-    if args.mapping:
-        mapping_path = resolve_data_dir(args.mapping)
+    mapping_path = resolve_data_dir(args.mapping) if args.mapping else None
+    if mapping_path is None:
+        source = args.name or default_name(path)
+        if not _SLUG.match(source):
+            raise CommandError(f"--name must be a lowercase slug (letters, digits, _ or -), got {source!r}")
+        if (mappings_dir / f"{source}.json").is_file():  # never redraft over the user's edits
+            mapping_path = mappings_dir / f"{source}.json"
+            print(f"using existing mapping mappings/{source}.json (delete it to redraft)")
+    if mapping_path is not None:
         try:
             spec = load_spec(mapping_path)
         except MappingError as e:
@@ -264,10 +308,7 @@ def _add_mapped(args: argparse.Namespace, config: Config, path: Path, db: Path) 
         print(f"using mapping {mapping_path} (source '{source}')")
         _say("checking the mapping on a sample ...")
         report = run_check(spec, path)
-    else:
-        source = args.name or default_name(path)
-        if not _SLUG.match(source):
-            raise CommandError(f"--name must be a lowercase slug (letters, digits, _ or -), got {source!r}")
+    else:  # no mapping yet: draft one (a dry run too, so it can be reviewed)
         mapping_path, report = _draft(args, path, source, mappings_dir)
         if report is None:  # claude-code: the slash command takes over
             return 0
@@ -450,7 +491,8 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument(
         "--dry-run",
         action="store_true",
-        help="mapped: stop after the check; village/git/wiki: only inspect; ingest nothing",
+        help="ingest nothing. mapped: write the draft mapping (if mappings/<source>.json does not exist yet) and "
+        "stop after the check; village/git/wiki: only inspect",
     )
     a.add_argument(
         "--replace",
