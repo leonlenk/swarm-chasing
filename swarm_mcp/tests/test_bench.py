@@ -23,6 +23,7 @@ from swarm_mcp.bench._common import (
     chat_eid,
     event_eid,
     name_pattern,
+    parse_ts,
     read_jsonl_gz,
     skeleton,
 )
@@ -122,6 +123,16 @@ def _native(eid: str) -> str:
 
 
 # ---------------------------------------------------------------- generation
+def test_parse_ts_converts_an_offset_to_utc():
+    from datetime import timezone
+
+    want = datetime(2025, 12, 29, 18, 0)
+    assert parse_ts("2025-12-29T10:00:00-08:00") == want  # converted to UTC, not just stripped
+    assert parse_ts(datetime(2025, 12, 29, 10, tzinfo=timezone(timedelta(hours=-8)))) == want
+    assert parse_ts("2025-12-29T18:00:00Z") == want and parse_ts("2025-12-29 18:00:00") == want  # naive = UTC
+    assert parse_ts(want) == want and parse_ts("") is None and parse_ts("nope") is None
+
+
 def test_generation_is_deterministic(tmp_path: Path):
     a, b, c = (generate(tmp_path / n, s, days=14, msgs_per_day=40) for n, s in (("a", 11), ("b", 11), ("c", 12)))
     da, db = _digest(tmp_path / "a"), _digest(tmp_path / "b")
