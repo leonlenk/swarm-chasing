@@ -143,7 +143,7 @@ class AiVillageAdapter:
             yield (
                 "messages",
                 {
-                    "evidence_id": f"{SOURCE}:chat:{r['id']}",
+                    "evidence_id": f"{SOURCE}:msg:{r['id']}",
                     "source": SOURCE,
                     "channel": (room or {}).get("name") or r.get("room_id"),
                     "author_id": author,

@@ -16,13 +16,12 @@ def _status(app) -> dict[str, str]:
     return {r.name: r.status for r in app.swarm_registry.records.values()}
 
 
-# subtasks needs units (periods) in the store, which the synthetic fixtures do not have
 ALL = {
     "core": "loaded",
     "findings": "loaded",
     "scope": "loaded",
+    "subtasks": "loaded",  # reads the store
     "village": "loaded",
-    "subtasks": "skipped",
     "investigate": "loaded",  # needs no data
     "sweep": "loaded",  # needs no data
 }
@@ -38,6 +37,7 @@ def test_modules_allowlist_keeps_core(data_dir: Path):
         **ALL,
         "findings": "skipped",
         "scope": "skipped",
+        "subtasks": "skipped",
         "investigate": "skipped",
         "sweep": "skipped",
     }
@@ -100,8 +100,8 @@ dir = "/x"
     assert cfg.llm_prices == {"my-model": (1.0, 5.0)} and cfg.api_key == "sk-x"
     assert "sk-x" not in json.dumps(cfg.public()) and cfg.public()["llm"]["api_key_set"] is True
     assert Config.load({"SWARM_LLM_MODEL": "claude-opus-5-5"}, cwd=tmp_path).llm_model == "claude-opus-5-5"
-    # git/wiki/village keep their per-module env fallback
-    assert Config.load({"SWARM_GIT_DIR": "/repos"}, cwd=tmp_path).module_setting("git", "dir") == "/repos"
+    # village keeps its per-module env fallback
+    assert Config.load({"SWARM_VILLAGE_DIR": "/v"}, cwd=tmp_path).module_setting("village", "dir") == "/x"  # toml wins
     (tmp_path / "swarm.toml").write_text("[nope]\n")
     with pytest.raises(ConfigError, match="unknown section"):
         Config.load({}, cwd=tmp_path)

@@ -2,14 +2,18 @@
 
 `swarm-mcp` is an MCP server (stdio) for investigating multi-agent ("swarm")
 datasets. Its **SwarmScope** store loads each dataset into one DuckDB file with a
-shared schema. Every record has an **id** (`<source>:<kind>:<id>`, e.g.
-`village:chat:<uuid>`), and every tool result carries those ids, so each claim
-can be cited and checked against the raw record.
+shared schema (agents, messages, actions, periods, artifacts and touches). Every
+record has an **id** `<source>:<kind>:<id>` whose kind is the same for every
+dataset: `msg`, `event`, `agent`, `period` or `artifact` (AI Village goals keep
+`goal`), e.g. `village:msg:<uuid>` or `rpg-game:period:pr-109`. The dataset's own
+type (commit, revision, pull request) is a field of the record. Every tool result
+carries ids, so each claim can be cited and checked against the raw record.
 
-AI Village (AI Digest's long-running experiment in which frontier-model agents
-share a group chat and pursue weekly goals) is supported out of the box. Any
-other dataset (chat logs, forums, agent traces) can be added through a
-declarative mapping.
+Built in: **AI Village** (AI Digest's long-running experiment in which
+frontier-model agents share a group chat and pursue weekly goals), **git**
+(a repo the agents built: commits, pull requests, files) and **wiki** (edit
+histories in the collusion.wiki explorer schema). Any other dataset (chat logs,
+forums, agent traces) can be added through a declarative mapping.
 
 Writing modules, adapters or mappings: see [ADDING_MODULES.md](ADDING_MODULES.md).
 
@@ -31,8 +35,10 @@ uv run --directory swarm_mcp swarm-mcp info                    # what is loaded,
 ```
 
 Put datasets under `data/` at the repo root (gitignored; a symlink is fine).
-`add` detects the AI Village export and uses the built-in adapter. For any other
-dataset it profiles the files, drafts a mapping (`--agent none` heuristics, `api`
+`add` detects the AI Village export and bare git repos and uses the built-in
+adapters (`--adapter village|git` forces one; `--name` sets a git source's name).
+Wiki databases are only ingested on request: `swarm-mcp add data/collusion-wiki --adapter wiki`.
+For any other dataset it profiles the files, drafts a mapping (`--agent none` heuristics, `api`
 an LLM, or `claude-code` a task for the `/swarm-setup` command), checks it, and
 stops with the report if the check fails. When the check passes, it ingests.
 `--dry-run` stops after the check, and `--mapping M` uses your own mapping.
@@ -61,7 +67,7 @@ Start a session with `core_info`, or with the `investigate` prompt.
 |---|---|
 | `swarm-mcp` | run the MCP server on stdio (what Claude Code launches) |
 | `swarm-mcp info [--json]` | modules (loaded or skipped, and why), sources with counts and date ranges, findings health, config. Exits 1 when a finding cites an id that does not resolve |
-| `swarm-mcp add <path> [--name SLUG] [--agent none\|api\|claude-code] [--mapping M] [--dry-run] [--db]` | add or refresh a dataset in the store (see above) |
+| `swarm-mcp add <path> [--adapter auto\|village\|git\|wiki\|mapped] [--name SLUG] [--agent none\|api\|claude-code] [--mapping M] [--dry-run] [--db]` | add or refresh a dataset in the store (see above) |
 | `swarm-mcp render timeline [--since --until --channel --source --top --out]` | a self-contained HTML swimlane (one lane per agent, one mark per message, masked hover snippets). Default output `data/swarmscope-timeline.html` |
 | `swarm-mcp export --out DIR [--source --kind --channel --author --since --until --query] [--with-agents] [--keep-ips] [--no-check] [--json]` | export a redacted subset of the store for sharing, then rescan it (see Export) |
 
@@ -71,8 +77,8 @@ Developer-only: `python -m swarm_mcp.bench generate|reference|score` (see ADDING
 
 | tool | what it does |
 |---|---|
-| `core_info` | start here: modules, sources (kinds, row counts, date ranges, channels), findings health, config |
-| `core_get(ids, before=0, after=0, max_chars)` | the record behind any id, or a batch of up to 50, with optional neighbouring records (same room, same agent) |
+| `core_info` | start here: modules, sources (row counts, date ranges, channels, blind-spot notes), findings health, config |
+| `core_get(ids, before=0, after=0, max_chars)` | the record behind any id, or a batch of up to 50: messages, actions, agents, periods (with member records) and artifacts (with the records that touched them); `before`/`after` add neighbouring records |
 | `scope_search(query=None, match, source, channel, author, since, until, table, newest_first, limit, offset, max_chars)` | full-text search over messages or actions; with no query, reads the window in time order |
 | `scope_agents(name=None, ...)` | the agent list; with a name, that agent's profile (channels, co-presence, who it names, actions, samples) |
 | `scope_periods(name=None, source, agent, top)` | dataset periods (AI Village: weekly goals, with a heuristic goal type); with a name, one period's activity |
@@ -89,10 +95,11 @@ Prompt: `investigate(question, custom, source, since, until, period, agent, loca
 `collaboration`, `environment` or `custom` (your own question in `custom`). The
 rendered prompt walks the model through finding, reading and citing evidence.
 
-Other modules in the repo (loaded when their data is present): `git` (repos and
-PRs), `wiki` (collusion.wiki revisions) and `subtasks` (work units and handoffs);
-see ADDING_MODULES.md. `village` adds the AI Village docs as resources
-(`village://readme`, `village://schema`, `village://changelog`).
+`subtasks` (Rigel's module, loaded when the store has data) adds
+`subtasks_corpora`, `subtasks_list`, `subtasks_get`, `subtasks_trace_pair` and
+`subtasks_locate`: work units (pull requests, runs, sessions) grouped into subtasks,
+with typed handoffs between actors; see ADDING_MODULES.md. `village` adds the AI
+Village docs as resources (`village://readme`, `village://schema`, `village://changelog`).
 
 ## Rubric sweeps
 

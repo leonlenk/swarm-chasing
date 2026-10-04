@@ -142,7 +142,7 @@ def test_core_reports_skips(data_dir: Path):
     info = call(app, "core_info")
     out = info["modules"]
     # data-free modules (and the store-backed ones, which only need a writable data dir) stay loaded
-    assert [m["name"] for m in out["loaded"]] == ["core", "findings", "investigate", "scope", "sweep"]
+    assert [m["name"] for m in out["loaded"]] == ["core", "findings", "investigate", "scope", "subtasks", "sweep"]
     skipped = {m["name"]: m for m in out["skipped"]}
     assert skipped["village"]["reasons"] == ["disabled via [server] disable in swarm.toml"]
     assert info["config"]["data_dir"] == str(data_dir) and info["config"]["disable"] == ["village"]

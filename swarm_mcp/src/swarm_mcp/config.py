@@ -31,23 +31,22 @@ Env vars (the only ones read):
 
     [server]
     # modules = ["core", "scope"]      # load only these (core is always on)
-    # disable = ["wiki"]
+    # disable = ["subtasks"]
     max_text = 500                     # default max chars per returned text field
     # default_limit = 20
     # max_limit = 200
     # log_level = "INFO"
 
-    [modules.git]                      # per-module settings: ctx.setting("dir")
-    # dir = "data/repos"
+    [modules.village]                  # per-module settings: ctx.setting("dir")
+    # dir = "data/ai-village"
 
 The project root is the nearest ancestor of the current directory that contains
 ``swarm.toml``, ``.mcp.json`` or ``.git``. A relative SWARM_DATA_DIR is resolved
 against the current directory if it exists there, otherwise against the project
 root (``uv run --directory swarm_mcp`` changes the working directory).
 
-Per-module settings come from ``[modules.<name>]``. For the git, wiki and village
-modules the older per-module env vars ``SWARM_<MODULE>_<KEY>`` (``SWARM_GIT_DIR``,
-``SWARM_WIKI_DB``, ``SWARM_VILLAGE_DIR``) are still honoured as a fallback.
+Per-module settings come from ``[modules.<name>]``. For the village module the older
+env var ``SWARM_VILLAGE_DIR`` is still honoured as a fallback.
 """
 
 from __future__ import annotations
@@ -63,7 +62,7 @@ ENV_VARS = ("SWARM_DATA_DIR", "ANTHROPIC_API_KEY", "SWARM_LLM_MODEL")
 DEFAULT_MODEL = "claude-sonnet-5-5"
 DEFAULT_EFFORT = "low"
 # modules whose per-module env vars (SWARM_<MODULE>_<KEY>) predate swarm.toml
-LEGACY_MODULE_ENV = frozenset({"git", "wiki", "village"})
+LEGACY_MODULE_ENV = frozenset({"village"})
 SECTIONS = ("data", "llm", "privacy", "server", "modules")
 
 

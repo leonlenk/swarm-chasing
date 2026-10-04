@@ -37,7 +37,7 @@ What the server does with each module, in order:
 2. **Import:** an import error skips the module.
 3. **`requires()`:** reasons, or an exception, skip the module.
 4. **`register()`:** an exception skips the module and **rolls back** anything it had
-   already registered (tools, resources, prompts and event sources).
+   already registered (tools, resources and prompts).
 
 Every outcome is recorded with its reason, logged to stderr and shown by `core_info`
 and `swarm-mcp info`. A module can never crash the server. Keep the tool count small:
@@ -53,57 +53,36 @@ prefer one tool with an optional argument (`scope_agents(name=None)`) over two t
 | `ctx.lazy(key, loader)` | compute-once, thread-safe cache, namespaced by module. Load data here, not at import or in `register()` |
 | `ctx.cache` | the shared `LazyCache` (`get`, `clear(prefix)`, `stats`) |
 | `ctx.config`, `ctx.data_dir` | the `Config` (from `swarm.toml`) and the resolved data path |
-| `ctx.setting(key)` | per-module setting `[modules.<NAME>] key = ...` in `swarm.toml`. `git`, `wiki` and `village` also accept their older env vars `SWARM_GIT_DIR`, `SWARM_WIKI_DB`, `SWARM_VILLAGE_DIR` |
+| `ctx.setting(key)` | per-module setting `[modules.<NAME>] key = ...` in `swarm.toml` (`village` also accepts `SWARM_VILLAGE_DIR`) |
 | `ctx.limit(limit, default=None)` | returns `(effective_limit, note)`. It clamps to [1, max] and says when it did |
 | `ctx.untrusted(text, max_chars=None, focus=None)` | **use for every dataset string you return**: masks, caps (default 500) and wraps it as `{"content": ..., "untrusted": true}` (+ `truncated`, `total_chars` when cut; `focus` = regex to centre the snippet on) |
 | `ctx.store(read_only=True)` | `with ctx.store() as s:` a short-lived `scope.db.Store` on the DuckDB store (`s.all/one/scalar`, `resolve_agent`, `author_filter`, `resolve_channel`). Open per call; never cache it, so the CLI and hooks can use the file too |
 | `ctx.store_path` | the store's path (check it in `requires()`) |
 | `ctx.scrub(text)` | the masking engine (`redact.mask_text`, default rules) with the configured email allowlist |
-| `ctx.event_id(kind, local_id)` | builds an id owned by this module (see below) |
-| `@ctx.event_source(kinds={...})` | registers the resolver that makes this module's ids retrievable through `core_get` |
 | `ctx.log` | a logger that writes to stderr |
-| `ctx.registry` | records for all modules, the event sources, and the sweep record providers |
+| `ctx.registry` | records for all modules, the store resolver (`store_api`) and the sweep record providers |
 
 Helpers in `swarm_mcp.toolkit` are `ToolInputError`, `untrusted`, `snippet`, `truncate`, `parse_time` and `iso`.
 The SwarmScope core library (`swarm_mcp.scope`: `schema`, `db`, `evidence`, `adapters`,
 `ingest`, `records`, `findings`, `analysis`, `viz`) is plain Python, not a module; tool
 modules and the CLI call into it.
 
-## Ids and shared retrieval
+## Ids and retrieval
 
-Every piece of evidence a tool returns carries an id `<source>:<kind>:<local_id>`, e.g.
-`village:chat:16b4ab90-…`. `source` is the dataset, `kind` the record type within it, and
-`local_id` the source's own id (it may contain `:`). Callers treat ids as opaque and pass
-them back: `core_get` returns the original record plus optional surrounding context, for
-one id or a batch of up to 50. Derived results (search hits, subtasks, handoffs, claims)
-cite ids rather than copy text, so every finding can be expanded and checked.
+Every record in the store has an id `<source>:<kind>:<native_id>` (`scope/evidence.py`).
+`source` is the ingested dataset; `kind` is a schema kind, the same for every dataset:
+`msg` (messages), `event` (actions), `agent`, `period` (time periods and episodes of
+work such as pull requests) and `artifact` (files, pages); AI Village goals keep `goal`.
+The dataset's own type lives in the record (`messages.msg_type`, `actions.kind`,
+`periods.kind`). `native_id` may contain `:`. Callers treat ids as opaque and pass them
+back: `core_get` resolves one id or a batch through the scope module's store resolver
+(`ctx.registry.store_api["get_record"]`), with the artifacts a record touched, a period's
+member records and optional neighbours. Derived results (search hits, subtasks, handoffs,
+claims) cite ids rather than copy text, so every finding can be expanded and checked.
 
-Records use one shape across sources, built with `swarm_mcp.events.event_record`:
-
-| key | meaning |
-|---|---|
-| `event_id`, `source`, `kind` | identity |
-| `time` | ISO UTC with `Z` |
-| `actor`, `actor_type` | who produced it (agent name, `human:<id>`...) and what kind of actor |
-| `location` | where it happened: room, channel, repo... |
-| `text` | the content, masked and truncated (`truncated: true` when cut) |
-
-Modules may add keys after these. To make a module's ids retrievable:
-
-```python
-from swarm_mcp.events import EventNotFound, event_record
-
-@ctx.event_source(kinds={"thing": "one line on what a thing is and what its context is"})
-def resolve(kind, local_id, *, before, after, max_chars):
-    rec = lookup(local_id)                      # raise EventNotFound if missing
-    return {"event": event_record(ctx.event_id(kind, local_id), time=..., actor=..., text=...),
-            "before": [...], "after": [...],     # up to `before`/`after` neighbouring records
-            "context": "previous/next things in the same room"}
-```
-
-A source name can only be registered once. The `scope` module registers one source per
-store source (kinds `chat`, `event`, `agent`, `goal`, or a mapped dataset's own kinds),
-so store ids resolve through `core_get` without extra code.
+Sweeps and exports work on one flat record shape, `scope.records.event_record`:
+`event_id`, `source`, `kind`, `time` (ISO UTC with `Z`), `actor`, `actor_type`, `location`
+and `text` (masked; `truncated: true` when cut), plus extra keys.
 
 Register everything through `ctx.*`. The raw `mcp` argument is passed only to satisfy the
 contract, and its API depends on the SDK version. `swarm_mcp/sdk.py` is the only file
@@ -132,8 +111,9 @@ that touches the MCP SDK.
 
 `swarm-mcp add` fills the store through an adapter (`scope/adapters/`). An adapter has a
 `name`, a `source` (the id prefix), `inspect(path)` and `load(path)`, which yields
-`(table, row)` pairs for the `agents`, `messages`, `actions` and `periods` tables
-(`scope/schema.py`). `scope.ingest.ingest(adapter, path, db)` validates the rows, bulk-loads
+`(table, row)` pairs for the `agents`, `messages`, `actions`, `periods`, `artifacts` and
+`touches` tables (`scope/schema.py`, schema v2), and optional `notes` (its blind spots,
+shown by `core_info`). `scope.ingest.ingest(adapter, path, db)` validates the rows, bulk-loads
 them and replaces that source's rows in one transaction; an adapter's optional
 `source_meta` dict lands in `sources.meta`.
 
@@ -142,11 +122,17 @@ them and replaces that source's rows in one transaction; an adapter's optional
   (`channel` = room name; `author_id` = agent id or `human:<user id>`; `recipient_ids` =
   agents named in the text), actions from `events.jsonl.gz` (`session_goal`,
   `session_summary`) and the weekly goals as periods.
+- `git` (`scope/adapters/git_repo.py`, Rigel's): a bare clone with PR heads fetched.
+  Commits become actions, pull requests periods with member records, files artifacts and
+  file changes touches. `swarm-mcp add <repo.git>` detects it; `--name` sets the source.
+- `wiki` (`scope/adapters/wiki_db.py`, Rigel's): the collusion.wiki explorer schema.
+  Revisions become messages (with `reply_to`), deletions and reverts actions, pages
+  artifacts and links mention touches. Only via `swarm-mcp add <dir> --adapter wiki`.
 - `mapped` (`scope/adapters/mapped.py`): runs a declarative mapping (below) and converts
-  its records: category `message` → `messages`, `action` and `other` → `actions` with the
-  record's kind kept, then agents, then periods. The mapping's kinds go into
-  `sources.meta.kinds`, so `forum:post:<id>` ids resolve like built-in ones.
-  `scope.ingest.ingest_mapped(mapping, path, db)` is the library entry point.
+  its records: category `message` → `messages` (`<source>:msg:<id>`, dataset kind in
+  `msg_type`), `action` and `other` → `actions` (`<source>:event:<id>`, dataset kind in
+  `kind`), periods → `<source>:period:<id>`, then agents. `scope.ingest.ingest_mapped(mapping,
+  path, db)` is the library entry point.
 
 `scope.records.store_records(db, filters)` streams standard records out of the store with
 the filters `source`, `kind`, `channel`, `author`, `since`, `until` and `query`. The scope
@@ -238,23 +224,16 @@ tests, and `get_client(config)`, which refuses to build a client without
 
 ## Other modules in this repo
 
-| module | data | what it gives |
-|---|---|---|
-| `git` | bare clones in `<data>/<dataset>/repos/*.git` (or `[modules.git] dir`) | repos and PR listings; PRs and commits as ids |
-| `wiki` | `<data>/<name>/*.db` in the collusion.wiki explorer schema (or `[modules.wiki] db`) | corpus description, search over what each revision added, pages, editor labels; revisions, pages and edit sessions as ids |
-| `subtasks` | git repos (+ village chat if present) and wikis | work units grouped into subtasks by several methods, typed handoffs between actors, pair tracing |
-
-A repo for `git` is a bare clone with every PR head fetched:
+`subtasks` (Rigel's) reads only the store: units are periods that records point at (pull
+requests, runs), else per-actor sessions; handoffs come from touches. Its tools are
+`subtasks_corpora`, `subtasks_list`, `subtasks_get`, `subtasks_trace_pair` and
+`subtasks_locate`. For git data, a repo is a bare clone with every PR head fetched:
 
 ```bash
 git clone --bare https://github.com/ai-village-agents/rpg-game data/ai-village/repos/rpg-game.git
 git -C data/ai-village/repos/rpg-game.git fetch origin '+refs/pull/*/head:refs/pull/*/head'
+uv run --directory swarm_mcp swarm-mcp add data/ai-village/repos/rpg-game.git   # source rpg-game
 ```
-
-For collusion.wiki, save Simon Willison's SQLite build of the published export as
-`data/collusion-wiki/collusion-wiki.db`
-(https://static.simonwillison.net/static/cors-allow/2026/collusion-wiki.db).
-`examples/subtasks_demo.py` and `examples/wiki_demo.py` run the tools end to end over stdio.
 
 ## Testing a module
 
@@ -282,6 +261,6 @@ uv run --directory swarm_mcp python -m swarm_mcp.bench score --truth ../data/ben
 ```
 
 `generate` writes `<out>/ai-village/` and `<out>/truth.json`; `add` detects the layout.
-Truth ids are store ids, so they resolve with `core_get`. The output shapes the
+Truth ids are store ids (`village:msg:<uuid>`...), so they resolve with `core_get`. The output shapes the
 investigation tools must return, and the scoring rules, are in the docstring of
 `src/swarm_mcp/bench/score.py`.

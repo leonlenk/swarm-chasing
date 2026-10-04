@@ -145,7 +145,7 @@ UNTRUSTED_NOTICE = (
     "credentials masked and text capped (default 500 chars; pass max_chars for more)."
 )
 EVIDENCE_NOTICE = (
-    "Every record has an evidence id ({source}:{kind}:{native_id}, e.g. village:chat:<uuid>). Cite ids exactly "
+    "Every record has an evidence id ({source}:{kind}:{native_id}, e.g. village:msg:<uuid>). Cite ids exactly "
     "as returned; core_get re-resolves one (or a batch), and findings_record rejects ids that do not resolve."
 )
 
