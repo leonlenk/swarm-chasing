@@ -74,8 +74,41 @@ def render_subtasks(
     ``llm``: an ``LLMClient``; when given, combined-method subtasks of at least ``llm_min_size`` units (coarse
     first) that have no stored name are named by the model, at most ``llm_cap`` calls. Names are cached next to
     the store, so a rerun only asks about groups that changed."""
-    scrub = scrub if scrub is not None else Scrubber()
+    payload, meta, named = build_subtasks(
+        db_path,
+        corpus=corpus,
+        scrub=scrub,
+        title_chars=title_chars,
+        llm=llm,
+        llm_min_size=llm_min_size,
+        llm_cap=llm_cap,
+        llm_concurrency=llm_concurrency,
+        progress=progress,
+    )
     out = Path(out_path).expanduser()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(_page(payload, meta), encoding="utf-8")
+    res = {"out": str(out), "bytes": out.stat().st_size, **{k: v for k, v in meta.items() if k != "db"}}
+    if named is not None:
+        res["llm_names"] = named
+    return res
+
+
+def build_subtasks(
+    db_path: Path | str,
+    *,
+    corpus: str | None = None,
+    scrub: Scrubber | None = None,
+    title_chars: int = 140,
+    llm: Any = None,
+    llm_min_size: int = 3,
+    llm_cap: int = 150,
+    llm_concurrency: int = 4,
+    progress: Any = None,
+) -> tuple[dict[str, Any], dict[str, Any], Any]:
+    """The subtask viewer's data: ``(payload, meta, llm_names)``, arguments as in ``render_subtasks``.
+    ``render_subtasks`` embeds the payload in the HTML page; ``render recall`` writes it for RECALL's Subtasks view."""
+    scrub = scrub if scrub is not None else Scrubber()
     with db.connect(Path(db_path)) as s:
         names = corpus_sources(s)
         if not names:
@@ -218,12 +251,7 @@ def render_subtasks(
         "notes": [_snippet(n, scrub, 300) for n in inf.notes],
     }
     meta = {"corpus": c.name, "units": len(units), "actors": len(actors), "edges": len(edges), "db": Path(db_path).name}
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(_page(payload, meta), encoding="utf-8")
-    res = {"out": str(out), "bytes": out.stat().st_size, **{k: v for k, v in meta.items() if k != "db"}}
-    if named is not None:
-        res["llm_names"] = named
-    return res
+    return payload, meta, named
 
 
 def _page(payload: dict[str, Any], meta: dict[str, Any]) -> str:

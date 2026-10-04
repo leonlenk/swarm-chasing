@@ -1,0 +1,34 @@
+{
+  "name": "recall",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "oxlint",
+    "preview": "vite preview",
+    "check": "tsx scripts/check-engine.ts",
+    "typecheck": "tsc -b",
+    "fetch:ai-village": "tsx scripts/fetch-ai-village.ts",
+    "data:download": "bash scripts/download-turns.sh",
+    "data:build": "tsx scripts/fetch-ai-village.ts && tsx scripts/build-series.ts",
+    "data:series": "tsx scripts/build-series.ts",
+    "data:scan": "python3 scripts/scan_ai_village.py > .hf/candidates.json"
+  },
+  "dependencies": {
+    "@xyflow/react": "^12.12.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "oxlint": "^1.81.0",
+    "tsx": "^4.23.15",
+    "typescript": "~6.0.2",
+    "vite": "^8.3.0"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "swarm-chasing",
+  "displayName": "swarm-chasing",
+  "version": "0.1.0",
+  "description": "Tools for investigating multi-agent swarms: an MCP server over swarm datasets (AI Village, git, wikis) plus hooks that record your own Claude Code sessions and subagents into it as they run.",
+  "author": { "name": "swarm-chasing contributors" },
+  "repository": "https://github.com/leonlenk/swarm-chasing",
+  "keywords": ["multi-agent", "observability", "subagents", "mcp", "investigation"],
+  "mcpServers": {
+    "swarm": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "--quiet", "--project", "${CLAUDE_PLUGIN_ROOT}/swarm_mcp", "swarm-mcp"],
+      "env": {
+        "SWARM_DATA_DIR": "${user_config.data_dir}",
+        "UV_PROJECT_ENVIRONMENT": "${CLAUDE_PLUGIN_DATA}/venv"
+      }
+    }
+  },
+  "userConfig": {
+    "data_dir": {
+      "type": "string",
+      "title": "Swarm datasets folder",
+      "description": "Folder holding datasets for the analysis modules (ai-village/, <dataset>/repos/, wiki .db files). A relative path is resolved against the project you run Claude Code in. Live session recording works without it.",
+      "default": "data"
+    }
+  }
+}

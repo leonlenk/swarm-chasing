@@ -18,6 +18,7 @@ def _status(app) -> dict[str, str]:
 
 ALL = {
     "core": "loaded",
+    "claude_code": "skipped",  # no swarm-live recordings
     "findings": "loaded",
     "scope": "loaded",
     "subtasks": "loaded",  # reads the store

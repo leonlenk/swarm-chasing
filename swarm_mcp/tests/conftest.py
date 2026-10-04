@@ -242,8 +242,8 @@ def config_for(
         data["server"]["disable"] = disable
     if llm:
         data["llm"] = llm
-    if settings:
-        data["modules"] = settings
+    # the claude_code module reads ~/.swarm-live by default: point it at a missing file unless a test sets it
+    data["modules"] = {"claude_code": {"db": str(data_dir / "no-recordings.db")}, **(settings or {})}
     return Config.from_dict(data, env=env or {}, root=data_dir.parent)
 
 

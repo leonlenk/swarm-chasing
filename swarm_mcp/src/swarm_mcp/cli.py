@@ -3,13 +3,16 @@
     swarm-mcp                              run the MCP server on stdio (what Claude Code launches)
     swarm-mcp info [--json]                modules, sources, findings health and config (exit 1 on bad findings)
     swarm-mcp add <path> [options]         add a dataset to the SwarmScope store (idempotent)
-    swarm-mcp render <view> [options]      write a self-contained HTML view (views: timeline, subtasks)
+    swarm-mcp render <view> [options]      write a self-contained HTML view (views: timeline, subtasks), or
+                                           the data for the RECALL UI (view: recall)
     swarm-mcp export --out DIR [filters]   export a redacted subset of the store, then check it
 
 ``add --adapter auto`` (the default) picks the adapter from the path: ``--mapping``
 given -> mapped; the AI Village file set -> ai_village; a git repository root
 (a bare repository with HEAD, objects/ and refs/, or the top folder of a working
-tree, that git takes for a repository root) -> git; anything else is mapped with ``mappings/<source>.json`` when it exists (re-runs
+tree, that git takes for a repository root) -> git;
+a swarm-live recordings database (``swarm_mcp.live``) -> claude_code;
+anything else is mapped with ``mappings/<source>.json`` when it exists (re-runs
 keep hand edits; delete it to redraft), else profiled and mapped by a draft
 from ``--agent``, checked (it stops with the report on failure) and then
 ingested. ``--adapter wiki`` (the collusion.wiki explorer SQLite schema) is
@@ -36,7 +39,7 @@ from swarm_mcp.config import Config, ConfigError, find_project_root, resolve_dat
 
 SUBCOMMANDS = ("info", "add", "render", "export")
 AGENT_MODES = ("none", "api", "claude-code")
-ADD_ADAPTERS = ("auto", "village", "git", "wiki", "mapped")
+ADD_ADAPTERS = ("auto", "village", "git", "wiki", "claude-code", "mapped")
 
 
 class CommandError(ValueError):
@@ -150,6 +153,18 @@ def enclosing_repo(path: Path) -> Path | None:
     return Path(top) if top else None
 
 
+def claude_code_db(path: Path) -> Path | None:
+    """``path`` if it is a swarm-live recordings database (Claude Code sessions recorded by the hooks)."""
+    if not path.is_file():
+        return None
+    try:
+        from swarm_mcp.live.store import is_recordings_db
+
+        return path if is_recordings_db(path) else None
+    except Exception:  # noqa: BLE001 - not SQLite, unreadable...: just not ours
+        return None
+
+
 def default_name(path: Path) -> str:
     return _slugify(path.name.split(".")[0] if path.is_file() else path.name)
 
@@ -222,6 +237,8 @@ def cmd_add(args: argparse.Namespace, config: Config) -> int:
         if not any(f.is_file() for f in dbs):
             raise CommandError(f"no wiki database in {path} (pass a .db file or the folder that holds it)")
         return _add_builtin(args, "wiki", path, db, detected=False)
+    if adapter == "claude-code" or (adapter == "auto" and not args.mapping and claude_code_db(path)):
+        return _add_builtin(args, "claude_code", path, db, detected=adapter == "auto")
     return _add_mapped(args, config, path, db)
 
 
@@ -270,7 +287,11 @@ def _replaced_note(res: dict[str, Any]) -> str:
     return "(a new source; other sources and findings are kept)"
 
 
-_BUILTIN_LABEL = {"git": "a bare git repository", "wiki": "a wiki database"}
+_BUILTIN_LABEL = {
+    "git": "a bare git repository",
+    "wiki": "a wiki database",
+    "claude_code": "a swarm-live recordings database",
+}
 
 
 def _label(name: str, path: Path) -> tuple[str, Path]:
@@ -549,6 +570,51 @@ def _subtasks_run(args: argparse.Namespace, config: Config) -> Any:
     )
 
 
+def _recall_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--top", type=int, default=12, help="explorer: number of agents (by message count) per source")
+    p.add_argument("--max-marks", type=int, default=12_000, help="explorer: messages kept for hover per source")
+    p.add_argument(
+        "--recordings", help="swarm-live recordings db (default: SWARM_LIVE_DB, the plugin's, ~/.swarm-live)"
+    )
+    p.add_argument("--no-explorer", action="store_true", help="skip the explorer payloads")
+    p.add_argument("--no-subtasks", action="store_true", help="skip the subtask payloads")
+    p.add_argument(
+        "--watch",
+        action="store_true",
+        help="after writing, keep rewriting the live sessions whenever the recordings change (Ctrl-C to stop)",
+    )
+
+
+def _recall_run(args: argparse.Namespace, config: Config) -> Any:
+    from swarm_mcp.live.store import default_db
+    from swarm_mcp.scope.viz.recall_bundle import render_recall, watch
+    from swarm_mcp.toolkit import Scrubber
+
+    out = resolve_output(args.out) if args.out else find_project_root(Path.cwd()) / "recall" / "public" / "data"
+    recordings = Path(args.recordings).expanduser() if args.recordings else default_db()
+    scrub = Scrubber(config.scrub, config.email_allowlist)
+    res = render_recall(
+        _db(args, config),
+        out,
+        recordings=recordings,
+        scrub=scrub,
+        sources=[args.source] if args.source else None,
+        top=args.top,
+        max_marks=args.max_marks,
+        explorer=not args.no_explorer,
+        subtasks=not args.no_subtasks,
+        progress=_say,
+    )
+    if args.watch:
+        print(json.dumps(res, indent=2, default=str))
+        _say(f"watching {recordings} (Ctrl-C to stop)")
+        try:
+            watch(_db(args, config), out, recordings=recordings, scrub=scrub, progress=_say)
+        except KeyboardInterrupt:
+            pass
+    return res
+
+
 RENDER_VIEWS: dict[str, RenderView] = {
     "timeline": (
         "HTML explorer: activity per agent over time (Village days when the store has village goals), who names "
@@ -557,6 +623,12 @@ RENDER_VIEWS: dict[str, RenderView] = {
         _timeline_run,
     ),
     "subtasks": ("HTML subtask map: inferred clusters of work, handoffs between agents", _subtasks_args, _subtasks_run),
+    "recall": (
+        "data for the RECALL UI (recall/): explorer and subtask payloads per source plus the recorded Claude Code "
+        "sessions, under <out>/scope/ (--out is a directory; default recall/public/data)",
+        _recall_args,
+        _recall_run,
+    ),
 }
 
 
@@ -644,7 +716,7 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument(
         "--adapter", choices=ADD_ADAPTERS, default="auto",
         help="auto = --mapping given -> mapped, the AI Village file set -> village, a git repo root (bare or "
-        "working tree) -> git, "
+        "working tree) -> git, a swarm-live recordings db -> claude-code, "
         "else mapped with a drafted mapping; wiki (a collusion.wiki explorer SQLite db) is used only when given",
     )  # fmt: skip
     a.add_argument(

@@ -1,0 +1,256 @@
+{
+ "id": "fixture-BD",
+ "label": "Fixture BD \u00b7 session ends right after a failing verdict",
+ "kind": "synthetic",
+ "description": "Synthetic sabotage fixture. Pia's last verdict fails and her session ends by CONSOLIDATE with no further turn. Quinn's session takes another turn after its failure (must not fire).",
+ "meta": {
+  "origin": "synthetic"
+ },
+ "agents": [
+  {
+   "id": "p",
+   "name": "Pia",
+   "role": "Build",
+   "color": "#2f6a4f"
+  },
+  {
+   "id": "q",
+   "name": "Quinn",
+   "role": "Deploy",
+   "color": "#2c5d86"
+  },
+  {
+   "id": "r",
+   "name": "Rae",
+   "role": "QA",
+   "color": "#a8761b"
+  }
+ ],
+ "events": [
+  {
+   "id": "ev-01",
+   "sequence": 1,
+   "timestamp": "2026-01-02T09:01:00Z",
+   "agentId": "p",
+   "taskId": null,
+   "type": "task_created",
+   "provenance": "declared",
+   "text": "Session start. [fixture record]",
+   "payload": {
+    "tasks": [
+     {
+      "taskId": "T1",
+      "title": "Session",
+      "owner": "p"
+     }
+    ]
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-02",
+   "sequence": 2,
+   "timestamp": "2026-01-02T09:02:00Z",
+   "agentId": "p",
+   "taskId": "T1",
+   "type": "action",
+   "provenance": "declared",
+   "text": "npm test [fixture record]",
+   "payload": {
+    "action": "npm test",
+    "referencesClaims": [],
+    "command": "npm test",
+    "commandHash": "h-test",
+    "outputHash": "o-t",
+    "turnId": "t2",
+    "kind": "command"
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-03",
+   "sequence": 3,
+   "timestamp": "2026-01-02T09:03:00Z",
+   "agentId": "p",
+   "taskId": "T1",
+   "type": "tool_result",
+   "provenance": "declared",
+   "text": "command fail [fixture record]",
+   "payload": {
+    "tool": "npm",
+    "runId": "run-3",
+    "category": "execution",
+    "rule": "exit-code",
+    "outcome": "fail",
+    "output": "exit 1"
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-04",
+   "sequence": 4,
+   "timestamp": "2026-01-02T09:04:00Z",
+   "agentId": "q",
+   "taskId": null,
+   "type": "tool_result",
+   "provenance": "declared",
+   "text": "Unrelated build (in-span filler for the withhold assertion) [fixture record]",
+   "payload": {
+    "tool": "make",
+    "runId": "run-4",
+    "category": "build",
+    "outcome": "pass",
+    "output": "built"
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-05",
+   "sequence": 5,
+   "timestamp": "2026-01-02T09:05:00Z",
+   "agentId": "p",
+   "taskId": "T1",
+   "type": "status_updated",
+   "provenance": "declared",
+   "text": "Session ended (consolidate) [fixture record]",
+   "payload": {
+    "status": "ended",
+    "endReason": "consolidate"
+   },
+   "evidenceRefs": [],
+   "statusAfter": "ended"
+  },
+  {
+   "id": "ev-06",
+   "sequence": 6,
+   "timestamp": "2026-01-02T09:06:00Z",
+   "agentId": "q",
+   "taskId": null,
+   "type": "task_created",
+   "provenance": "declared",
+   "text": "Session start. [fixture record]",
+   "payload": {
+    "tasks": [
+     {
+      "taskId": "T2",
+      "title": "Session",
+      "owner": "q"
+     }
+    ]
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-07",
+   "sequence": 7,
+   "timestamp": "2026-01-02T09:07:00Z",
+   "agentId": "q",
+   "taskId": "T2",
+   "type": "tool_result",
+   "provenance": "declared",
+   "text": "command fail [fixture record]",
+   "payload": {
+    "tool": "npm",
+    "runId": "run-7",
+    "category": "execution",
+    "rule": "exit-code",
+    "outcome": "fail",
+    "output": "exit 1"
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-08",
+   "sequence": 8,
+   "timestamp": "2026-01-02T09:08:00Z",
+   "agentId": "q",
+   "taskId": "T2",
+   "type": "action",
+   "provenance": "declared",
+   "text": "git log [fixture record]",
+   "payload": {
+    "action": "git log",
+    "referencesClaims": [],
+    "command": "git log",
+    "commandHash": "h-log",
+    "outputHash": "o-l",
+    "turnId": "t8",
+    "kind": "command"
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-09",
+   "sequence": 9,
+   "timestamp": "2026-01-02T09:09:00Z",
+   "agentId": "q",
+   "taskId": "T2",
+   "type": "status_updated",
+   "provenance": "declared",
+   "text": "Session ended (next-start) [fixture record]",
+   "payload": {
+    "status": "ended",
+    "endReason": "next-start"
+   },
+   "evidenceRefs": [],
+   "statusAfter": "ended"
+  }
+ ],
+ "fixture": {
+  "monitor": "BD",
+  "expect": [
+   {
+    "atCursor": 4,
+    "count": 0
+   },
+   {
+    "atCursor": 5,
+    "state": "active",
+    "count": 1,
+    "evidenceIds": [
+     "ev-03",
+     "ev-05"
+    ],
+    "attributes": [
+     "ended by: CONSOLIDATE"
+    ]
+   },
+   {
+    "atCursor": 9,
+    "state": "active",
+    "count": 1
+   },
+   {
+    "withhold": [
+     "ev-04"
+    ],
+    "atCursor": 5,
+    "state": "insufficient",
+    "count": 1,
+    "missing": [
+     "ev-04"
+    ]
+   },
+   {
+    "withhold": [
+     "ev-04",
+     "ev-08"
+    ],
+    "atCursor": 9,
+    "state": "insufficient",
+    "count": 2,
+    "missing": [
+     "ev-08"
+    ]
+   }
+  ],
+  "quiet": [
+   "A",
+   "B",
+   "U",
+   "V",
+   "BC",
+   "X"
+  ]
+ }
+}

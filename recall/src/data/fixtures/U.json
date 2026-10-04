@@ -1,0 +1,252 @@
+{
+ "id": "fixture-U",
+ "label": "Fixture U \u00b7 same goal fails in three sessions, then passes",
+ "kind": "synthetic",
+ "description": "Synthetic sabotage fixture. Pia runs \"deploy the site\" in three sessions, each with a failing verdict and no pass; a fourth session passes.",
+ "meta": {
+  "origin": "synthetic"
+ },
+ "agents": [
+  {
+   "id": "p",
+   "name": "Pia",
+   "role": "Build",
+   "color": "#2f6a4f"
+  },
+  {
+   "id": "q",
+   "name": "Quinn",
+   "role": "Deploy",
+   "color": "#2c5d86"
+  }
+ ],
+ "events": [
+  {
+   "id": "ev-01",
+   "sequence": 1,
+   "timestamp": "2026-01-02T09:01:00Z",
+   "agentId": "p",
+   "taskId": null,
+   "type": "task_created",
+   "provenance": "declared",
+   "text": "Session start. [fixture record]",
+   "payload": {
+    "tasks": [
+     {
+      "taskId": "T1",
+      "title": "Deploy the site",
+      "owner": "p",
+      "goalKey": "deploy the site"
+     }
+    ]
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-02",
+   "sequence": 2,
+   "timestamp": "2026-01-02T09:02:00Z",
+   "agentId": "p",
+   "taskId": "T1",
+   "type": "tool_result",
+   "provenance": "declared",
+   "text": "command fail [fixture record]",
+   "payload": {
+    "tool": "npm",
+    "runId": "run-2",
+    "category": "execution",
+    "rule": "exit-code",
+    "outcome": "fail",
+    "output": "exit 1"
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-03",
+   "sequence": 3,
+   "timestamp": "2026-01-02T09:03:00Z",
+   "agentId": "p",
+   "taskId": null,
+   "type": "task_created",
+   "provenance": "declared",
+   "text": "Session start. [fixture record]",
+   "payload": {
+    "tasks": [
+     {
+      "taskId": "T2",
+      "title": "Deploy the site",
+      "owner": "p",
+      "goalKey": "deploy the site"
+     }
+    ]
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-04",
+   "sequence": 4,
+   "timestamp": "2026-01-02T09:04:00Z",
+   "agentId": "p",
+   "taskId": "T2",
+   "type": "tool_result",
+   "provenance": "declared",
+   "text": "command fail [fixture record]",
+   "payload": {
+    "tool": "npm",
+    "runId": "run-4",
+    "category": "execution",
+    "rule": "exit-code",
+    "outcome": "fail",
+    "output": "exit 1"
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-05",
+   "sequence": 5,
+   "timestamp": "2026-01-02T09:05:00Z",
+   "agentId": "p",
+   "taskId": null,
+   "type": "task_created",
+   "provenance": "declared",
+   "text": "Session start. [fixture record]",
+   "payload": {
+    "tasks": [
+     {
+      "taskId": "T3",
+      "title": "Deploy the site",
+      "owner": "p",
+      "goalKey": "deploy the site"
+     }
+    ]
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-06",
+   "sequence": 6,
+   "timestamp": "2026-01-02T09:06:00Z",
+   "agentId": "q",
+   "taskId": null,
+   "type": "tool_result",
+   "provenance": "declared",
+   "text": "Unrelated build (in-span filler for the withhold assertion) [fixture record]",
+   "payload": {
+    "tool": "make",
+    "runId": "run-6",
+    "category": "build",
+    "outcome": "pass",
+    "output": "built"
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-07",
+   "sequence": 7,
+   "timestamp": "2026-01-02T09:07:00Z",
+   "agentId": "p",
+   "taskId": "T3",
+   "type": "tool_result",
+   "provenance": "declared",
+   "text": "command fail [fixture record]",
+   "payload": {
+    "tool": "npm",
+    "runId": "run-7",
+    "category": "execution",
+    "rule": "exit-code",
+    "outcome": "fail",
+    "output": "exit 1"
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-08",
+   "sequence": 8,
+   "timestamp": "2026-01-02T09:08:00Z",
+   "agentId": "p",
+   "taskId": null,
+   "type": "task_created",
+   "provenance": "declared",
+   "text": "Session start. [fixture record]",
+   "payload": {
+    "tasks": [
+     {
+      "taskId": "T4",
+      "title": "Deploy the site",
+      "owner": "p",
+      "goalKey": "deploy the site"
+     }
+    ]
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-09",
+   "sequence": 9,
+   "timestamp": "2026-01-02T09:09:00Z",
+   "agentId": "p",
+   "taskId": "T4",
+   "type": "tool_result",
+   "provenance": "declared",
+   "text": "command pass [fixture record]",
+   "payload": {
+    "tool": "npm",
+    "runId": "run-9",
+    "category": "execution",
+    "rule": "exit-code",
+    "outcome": "pass",
+    "output": "exit 0"
+   },
+   "evidenceRefs": []
+  }
+ ],
+ "fixture": {
+  "monitor": "U",
+  "expect": [
+   {
+    "atCursor": 6,
+    "count": 0
+   },
+   {
+    "atCursor": 7,
+    "state": "active",
+    "count": 1,
+    "evidenceIds": [
+     "ev-01",
+     "ev-02",
+     "ev-03",
+     "ev-04",
+     "ev-05",
+     "ev-07"
+    ]
+   },
+   {
+    "atCursor": 9,
+    "state": "resolved",
+    "count": 1,
+    "evidenceIds": [
+     "ev-09"
+    ]
+   },
+   {
+    "withhold": [
+     "ev-06"
+    ],
+    "atCursor": 7,
+    "state": "insufficient",
+    "count": 1,
+    "missing": [
+     "ev-06"
+    ]
+   }
+  ],
+  "quiet": [
+   "A",
+   "B",
+   "V",
+   "BD",
+   "BC",
+   "X"
+  ]
+ }
+}

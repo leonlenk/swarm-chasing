@@ -4,10 +4,16 @@ from __future__ import annotations
 
 from swarm_mcp.scope.adapters.ai_village import AiVillageAdapter
 from swarm_mcp.scope.adapters.base import Adapter
+from swarm_mcp.scope.adapters.claude_code import ClaudeCodeAdapter
 from swarm_mcp.scope.adapters.git_repo import GitRepoAdapter
 from swarm_mcp.scope.adapters.wiki_db import WikiAdapter
 
-ADAPTERS: dict[str, type] = {"ai_village": AiVillageAdapter, "git": GitRepoAdapter, "wiki": WikiAdapter}
+ADAPTERS: dict[str, type] = {
+    "ai_village": AiVillageAdapter,
+    "claude_code": ClaudeCodeAdapter,
+    "git": GitRepoAdapter,
+    "wiki": WikiAdapter,
+}
 
 
 def get_adapter(name: str, source: str | None = None) -> Adapter:

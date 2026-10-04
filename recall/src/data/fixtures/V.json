@@ -1,0 +1,204 @@
+{
+ "id": "fixture-V",
+ "label": "Fixture V \u00b7 two agents run the same goal at once",
+ "kind": "synthetic",
+ "description": "Synthetic sabotage fixture. Pia and Quinn run sessions with the same goal concurrently. Rae starts the same goal after both ended (no overlap, must not count).",
+ "meta": {
+  "origin": "synthetic"
+ },
+ "agents": [
+  {
+   "id": "p",
+   "name": "Pia",
+   "role": "Build",
+   "color": "#2f6a4f"
+  },
+  {
+   "id": "q",
+   "name": "Quinn",
+   "role": "Deploy",
+   "color": "#2c5d86"
+  },
+  {
+   "id": "r",
+   "name": "Rae",
+   "role": "QA",
+   "color": "#a8761b"
+  }
+ ],
+ "events": [
+  {
+   "id": "ev-01",
+   "sequence": 1,
+   "timestamp": "2026-01-02T09:01:00Z",
+   "agentId": "p",
+   "taskId": null,
+   "type": "task_created",
+   "provenance": "declared",
+   "text": "Session start. [fixture record]",
+   "payload": {
+    "tasks": [
+     {
+      "taskId": "T1",
+      "title": "Publish the quarterly report",
+      "owner": "p",
+      "goalKey": "publish the quarterly report"
+     }
+    ]
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-02",
+   "sequence": 2,
+   "timestamp": "2026-01-02T09:02:00Z",
+   "agentId": "r",
+   "taskId": null,
+   "type": "task_created",
+   "provenance": "declared",
+   "text": "Session start. [fixture record]",
+   "payload": {
+    "tasks": [
+     {
+      "taskId": "T9",
+      "title": "Tidy the wiki",
+      "owner": "r",
+      "goalKey": "tidy the wiki"
+     }
+    ]
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-03",
+   "sequence": 3,
+   "timestamp": "2026-01-02T09:03:00Z",
+   "agentId": "r",
+   "taskId": "T9",
+   "type": "status_updated",
+   "provenance": "declared",
+   "text": "status in_progress [fixture record]",
+   "payload": {
+    "status": "in_progress"
+   },
+   "evidenceRefs": [],
+   "statusAfter": "in_progress"
+  },
+  {
+   "id": "ev-04",
+   "sequence": 4,
+   "timestamp": "2026-01-02T09:04:00Z",
+   "agentId": "q",
+   "taskId": null,
+   "type": "task_created",
+   "provenance": "declared",
+   "text": "Session start. [fixture record]",
+   "payload": {
+    "tasks": [
+     {
+      "taskId": "T2",
+      "title": "Publish the quarterly report",
+      "owner": "q",
+      "goalKey": "publish the quarterly report"
+     }
+    ]
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-05",
+   "sequence": 5,
+   "timestamp": "2026-01-02T09:05:00Z",
+   "agentId": "p",
+   "taskId": "T1",
+   "type": "status_updated",
+   "provenance": "declared",
+   "text": "Session ended (stop) [fixture record]",
+   "payload": {
+    "status": "ended",
+    "endReason": "stop"
+   },
+   "evidenceRefs": [],
+   "statusAfter": "ended"
+  },
+  {
+   "id": "ev-06",
+   "sequence": 6,
+   "timestamp": "2026-01-02T09:06:00Z",
+   "agentId": "q",
+   "taskId": "T2",
+   "type": "status_updated",
+   "provenance": "declared",
+   "text": "Session ended (stop) [fixture record]",
+   "payload": {
+    "status": "ended",
+    "endReason": "stop"
+   },
+   "evidenceRefs": [],
+   "statusAfter": "ended"
+  },
+  {
+   "id": "ev-07",
+   "sequence": 7,
+   "timestamp": "2026-01-02T09:07:00Z",
+   "agentId": "r",
+   "taskId": null,
+   "type": "task_created",
+   "provenance": "declared",
+   "text": "Session start. [fixture record]",
+   "payload": {
+    "tasks": [
+     {
+      "taskId": "T3",
+      "title": "Publish the quarterly report",
+      "owner": "r",
+      "goalKey": "publish the quarterly report"
+     }
+    ]
+   },
+   "evidenceRefs": []
+  }
+ ],
+ "fixture": {
+  "monitor": "V",
+  "expect": [
+   {
+    "atCursor": 3,
+    "count": 0
+   },
+   {
+    "atCursor": 4,
+    "state": "active",
+    "count": 1,
+    "evidenceIds": [
+     "ev-01",
+     "ev-04"
+    ]
+   },
+   {
+    "atCursor": 7,
+    "state": "active",
+    "count": 1
+   },
+   {
+    "withhold": [
+     "ev-03"
+    ],
+    "atCursor": 4,
+    "state": "insufficient",
+    "count": 1,
+    "missing": [
+     "ev-03"
+    ]
+   }
+  ],
+  "quiet": [
+   "A",
+   "B",
+   "U",
+   "BD",
+   "BC",
+   "X"
+  ]
+ }
+}
