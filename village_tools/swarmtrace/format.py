@@ -450,7 +450,7 @@ def _validate(trace, max_bytes):
         err.at(k, "missing")
     for k in sorted(trace.keys() - _TOP):
         err.at(k, "unknown field")
-    if trace.get("version") != VERSION:
+    if trace.get("version") != VERSION or isinstance(trace.get("version"), bool):     # false == 0 in Python
         err.at("version", f"expected {VERSION}, got {trace.get('version')!r}")
     if not (isinstance(trace.get("id"), str) and _SLUG_RX.match(trace["id"])):
         err.at("id", f"not a lowercase slug: {trace.get('id')!r}")
@@ -505,7 +505,7 @@ def _validate(trace, max_bytes):
 
     ids = set()
     for p, e in items("events"):
-        if not isinstance(e.get("id"), str) or not e.get("id"):
+        if not isinstance(e.get("id"), str) or not e["id"].strip():
             err.at(f"{p}.id", "expected a non-empty string")
         else:
             if e["id"] in ids:
@@ -591,7 +591,7 @@ def validate_index(index):
     err = _Errors()
     if not isinstance(index, dict):
         return ["index: expected an object"]
-    if index.get("version") != VERSION:
+    if index.get("version") != VERSION or isinstance(index.get("version"), bool):
         err.at("version", f"expected {VERSION}, got {index.get('version')!r}")
     err.time("generated", index.get("generated"))
     tr = index.get("traces")

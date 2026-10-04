@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "swarmtrace/trace.schema.json",
   "title": "Idea trace v0",
-  "description": "One idea followed through a multi-agent swarm. Cross-references (agent names, event ids) and start <= end are checked by swarmtrace.format.validate(), not by this schema. The index.json format is under $defs/index.",
+  "description": "One idea followed through a multi-agent swarm. Cross-references (agent names, event ids), start <= end, real calendar dates and the 1.5 MB size limit are checked by swarmtrace.format.validate(), not by this schema; otherwise the two (and the viewer's validator in trace_viz_template.html) accept the same traces, see swarmtrace/tests/test_validators_agree.py. The index.json format is under $defs/index.",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "id", "title", "kind", "statement", "source", "start", "end", "agents", "events",
@@ -39,9 +39,9 @@
     },
     "iso_or_null": {"anyOf": [{"$ref": "#/$defs/iso"}, {"type": "null"}]},
     "slug": {"type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"},
-    "text": {"type": "string", "minLength": 1},
+    "text": {"type": "string", "pattern": "\\S", "description": "Text with at least one non-space character."},
     "kind": {"enum": ["belief", "norm", "term"]},
-    "agent_name": {"type": "string", "minLength": 1, "description": "Must match an agents[].name."},
+    "agent_name": {"type": "string", "pattern": "\\S", "description": "Must match an agents[].name."},
     "agent": {
       "type": "object",
       "additionalProperties": false,
@@ -133,7 +133,7 @@
       "properties": {
         "t": {"$ref": "#/$defs/iso"},
         "agent": {"$ref": "#/$defs/agent_name"},
-        "text": {"type": "string", "minLength": 1, "maxLength": 160},
+        "text": {"type": "string", "pattern": "\\S", "maxLength": 160},
         "note": {"type": ["string", "null"]}
       }
     },
