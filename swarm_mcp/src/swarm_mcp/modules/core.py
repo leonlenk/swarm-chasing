@@ -7,7 +7,7 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from swarm_mcp.info import server_info
-from swarm_mcp.toolkit import ResponseBudget, ToolInputError
+from swarm_mcp.toolkit import HARD_MAX_CHARS, MIN_MAX_CHARS, ResponseBudget, ToolInputError
 
 NAME = "core"
 DESCRIPTION = (
@@ -54,7 +54,12 @@ def register(mcp, ctx) -> None:
         after: Annotated[int, Field(description="Neighbouring records after each one.", ge=0, le=50)] = 0,
         max_chars: Annotated[
             int | None,
-            Field(description="Truncate each record's text to this many characters (default 500).", ge=80, le=50000),
+            Field(
+                description=f"Truncate each record's text to this many characters ({MIN_MAX_CHARS}..{HARD_MAX_CHARS}, "
+                "default 500).",
+                ge=MIN_MAX_CHARS,
+                le=HARD_MAX_CHARS,
+            ),
         ] = None,
     ) -> dict[str, Any]:
         """Resolve any id to its full record: a message (time, channel, author, named recipients, content), an

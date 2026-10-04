@@ -14,7 +14,7 @@ from typing import Annotated, Any, Literal
 from pydantic import Field
 
 from swarm_mcp.scope import findings as lib
-from swarm_mcp.toolkit import ResponseBudget
+from swarm_mcp.toolkit import HARD_MAX_CHARS, MIN_MAX_CHARS, ResponseBudget
 
 NAME = "findings"
 DESCRIPTION = (
@@ -107,7 +107,13 @@ def register(mcp, ctx) -> None:
         ] = None,
         seed: Annotated[int, Field(description="Random seed for `sample`; same seed, same sample.")] = 0,
         max_chars: Annotated[
-            int | None, Field(description="With sample: max chars per evidence snippet (default 200).")
+            int | None,
+            Field(
+                description=f"With sample: max chars per evidence snippet ({MIN_MAX_CHARS}..{HARD_MAX_CHARS}, "
+                f"default {SNIPPET_CHARS}).",
+                ge=MIN_MAX_CHARS,
+                le=HARD_MAX_CHARS,
+            ),
         ] = None,
     ) -> dict[str, Any]:
         """List recorded findings, newest first, with their evidence ids. With `sample`, return a seeded random
@@ -121,7 +127,7 @@ def register(mcp, ctx) -> None:
                 picked = lib.spotcheck_sample(
                     store, kind="findings", n=n, seed=seed, findings_dir=findings_dir, status=status
                 )
-            snip = SNIPPET_CHARS if max_chars is None else min(SNIPPET_CHARS, max_chars)
+            snip = SNIPPET_CHARS if max_chars is None else max_chars
             items, budget = [], ResponseBudget()
             for s in picked:
                 item = {

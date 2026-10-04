@@ -16,7 +16,7 @@ from swarm_mcp.scope import db
 from swarm_mcp.scope.analysis import graph as graph_analysis
 from swarm_mcp.scope.analysis import timeline as timeline_analysis
 from swarm_mcp.server import build_server
-from swarm_mcp.toolkit import ToolInputError
+from swarm_mcp.toolkit import HARD_MAX_CHARS, MIN_MAX_CHARS, ToolInputError
 
 OPUS = f"village:agent:{A_OPUS}"
 GPT = f"village:agent:{A_GPT}"
@@ -713,3 +713,46 @@ def test_periods_counts_match_and_use_few_queries(many_periods_app, store_path: 
     finally:
         con.close()
     assert sum(p["agent_messages"] for p in out["periods"]) > 0 and sum(p["messages"] for p in out["periods"]) > 0
+
+
+# ----------------------------------------------------------------------------- one max_chars range for every tool
+
+MAX_CHARS_TOOLS = {
+    "core_get": {"ids": "village:msg:m0007"},
+    "scope_search": {"query": "THE END"},
+    "scope_agents": {"name": "Opus 4.5"},
+    "findings_list": {"sample": 1},
+}
+
+
+def test_max_chars_range_is_shared(app):
+    call(app, "findings_record", claim="m0007 is long", evidence_ids=["village:msg:m0007"])
+    for tool, args in MAX_CHARS_TOOLS.items():
+        for bad in (-5, 0, MIN_MAX_CHARS - 1, HARD_MAX_CHARS + 1, 50000):
+            assert "max_chars" in call_error(app, tool, **args, max_chars=bad), (tool, bad)
+        for ok in (MIN_MAX_CHARS, 80, HARD_MAX_CHARS):
+            call(app, tool, **args, max_chars=ok)
+
+    async def schemas():
+        async with Client(app) as client:
+            return {t.name: t.input_schema for t in (await client.list_tools()).tools}
+
+    tools = run(schemas())
+    for tool in MAX_CHARS_TOOLS:
+        prop = tools[tool]["properties"]["max_chars"]
+        bounds = [b for b in prop.get("anyOf", [prop]) if b.get("type") == "integer"][0]
+        assert (bounds["minimum"], bounds["maximum"]) == (MIN_MAX_CHARS, HARD_MAX_CHARS), tool
+        assert f"{MIN_MAX_CHARS}..{HARD_MAX_CHARS}" in prop["description"], tool
+
+
+def test_findings_sample_max_chars_raises_and_lowers_the_snippet(app):
+    call(app, "findings_record", claim="m0007 is long", evidence_ids=["village:msg:m0007"])
+
+    def snippet(**kw):
+        return call(app, "findings_list", sample=1, **kw)["items"][0]["evidence"][0]["content"]
+
+    assert len(snippet()["content"]) < 260 and snippet()["truncated"] is True  # default 200
+    wide = snippet(max_chars=2000)
+    assert 2000 <= len(wide["content"]) < 2100 and wide["truncated"] is True
+    assert len(snippet(max_chars=MIN_MAX_CHARS)["content"]) < 80
+    assert snippet(max_chars=HARD_MAX_CHARS)["content"].endswith("THE END")

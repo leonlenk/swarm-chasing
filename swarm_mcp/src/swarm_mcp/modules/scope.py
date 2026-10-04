@@ -33,7 +33,7 @@ from swarm_mcp.scope.analysis import timeline as timeline_analysis
 from swarm_mcp.scope.analysis.timeline import record_filters, ts_iso
 from swarm_mcp.scope.db import HUMAN, Store, label_for
 from swarm_mcp.scope.records import StoreRecordProvider
-from swarm_mcp.toolkit import ResponseBudget, ToolInputError, parse_time
+from swarm_mcp.toolkit import HARD_MAX_CHARS, MIN_MAX_CHARS, ResponseBudget, ToolInputError, parse_time
 
 NAME = "scope"
 DESCRIPTION = (
@@ -54,10 +54,10 @@ def requires(ctx) -> list[str]:
 MaxChars = Annotated[
     int | None,
     Field(
-        ge=20,
-        le=20000,
-        description="Max characters per returned text field (default 500). Longer text is cut and marked "
-        "truncated=true with total_chars; raise this or use core_get to read more.",
+        ge=MIN_MAX_CHARS,
+        le=HARD_MAX_CHARS,
+        description=f"Max characters per returned text field ({MIN_MAX_CHARS}..{HARD_MAX_CHARS}, default 500). "
+        "Longer text is cut and marked truncated=true with total_chars; raise this or use core_get to read more.",
     ),
 ]
 Source = Annotated[str | None, Field(description="Restrict to one source (e.g. 'village'); see core_info.")]
