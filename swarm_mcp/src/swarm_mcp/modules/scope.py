@@ -682,17 +682,36 @@ def register(mcp, ctx) -> None:
 
     # ------------------------------------------------------------------ periods
 
+    # every period of a source with its 1-based list index (stable across kind filters and pages)
     _PERIODS_SQL = """
-    SELECT p.evidence_id, p.source, p.kind, p.label, p.start_ts, p.end_ts, p.meta,
-           (SELECT count(*) FROM messages m
-             WHERE m.source = p.source AND m.ts >= p.start_ts AND (p.end_ts IS NULL OR m.ts < p.end_ts)) AS messages,
-           (SELECT count(DISTINCT m.author_id) FROM messages m
-             WHERE m.source = p.source AND m.author_id NOT LIKE 'human:%'
-               AND m.ts >= p.start_ts AND (p.end_ts IS NULL OR m.ts < p.end_ts)) AS active_agents
-    FROM periods p
-    WHERE (CAST(? AS TEXT) IS NULL OR p.source = ?)
-    ORDER BY p.source, p.start_ts NULLS LAST, p.evidence_id
+    SELECT evidence_id, source, kind, label, start_ts, end_ts, meta,
+           row_number() OVER (ORDER BY source, start_ts NULLS LAST, evidence_id) AS idx
+    FROM periods
+    WHERE (CAST(? AS TEXT) IS NULL OR source = ?)
     """
+    # chat volume of a set of periods (by evidence_id) in one GROUP BY
+    _PERIOD_VOLUME_SQL = """
+    SELECT p.evidence_id, count(m.evidence_id) AS messages,
+           count(DISTINCT m.author_id) FILTER (WHERE m.author_id NOT LIKE 'human:%') AS active_agents
+    FROM periods p
+    LEFT JOIN messages m ON m.source = p.source AND m.ts >= p.start_ts AND (p.end_ts IS NULL OR m.ts < p.end_ts)
+    WHERE list_contains(?, p.evidence_id)
+    GROUP BY 1
+    """
+    # one agent's messages in each of a set of periods, in one GROUP BY
+    _PERIOD_AGENT_SQL = """
+    SELECT p.evidence_id, count(m.evidence_id) AS n
+    FROM periods p
+    LEFT JOIN messages m ON m.author_id = ? AND m.ts >= p.start_ts AND (p.end_ts IS NULL OR m.ts < p.end_ts)
+    WHERE list_contains(?, p.evidence_id)
+    GROUP BY 1
+    """
+
+    def _with_volume(s: Store, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not rows:
+            return rows
+        vol = {r["evidence_id"]: r for r in s.all(_PERIOD_VOLUME_SQL, [[r["evidence_id"] for r in rows]])}
+        return [{**r, **{k: vol.get(r["evidence_id"], {}).get(k, 0) for k in ("messages", "active_agents")}} for r in rows]
 
     def _period_dict(r: dict[str, Any], i: int) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -738,7 +757,7 @@ def register(mcp, ctx) -> None:
             str | None,
             Field(
                 description="A period's index (from the list), evidence_id, or a substring of its label for its "
-                "detail; omit to list all periods."
+                "detail; omit to list the periods (one page; see limit/offset)."
             ),
         ] = None,
         source: Source = None,
@@ -747,18 +766,27 @@ def register(mcp, ctx) -> None:
             Field(description="List only: also count this agent's messages per period (name, alias or agent_id)."),
         ] = None,
         top: Annotated[int, Field(description="Detail only: top speakers/channels to return.", ge=1, le=50)] = 10,
+        kind: Annotated[
+            str | None,
+            Field(description="List only: only periods of this kind (e.g. 'village_goal'; see core_info kinds)."),
+        ] = None,
+        limit: Annotated[int | None, Field(description="List only: periods per page (default 50, max 200).")] = 50,
+        offset: Annotated[
+            int, Field(ge=0, description="List only: skip this many periods (for paging; see next_offset).")
+        ] = 0,
     ) -> dict[str, Any]:
         """Dataset-defined periods (AI Village: the weekly goals) in time order.
-        Without `name`: index, evidence_id, label, kind, start/end (UTC), duration, chat volume (messages, active
-        agents) and, for AI Village goals, a heuristic goal type (holiday, self_directed, competitive,
-        collaborative, individual, assigned_individual, open_task).
+        Without `name`: one page of periods (total, has_more, next_offset), each with its index, evidence_id,
+        label, kind, start/end (UTC), duration, chat volume (messages, active agents) and, for AI Village goals,
+        a heuristic goal type (holiday, self_directed, competitive, collaborative, individual, assigned_individual,
+        open_task). `kind` filters the list; indexes stay those of the unfiltered list.
         With `name`: one period's activity: top speakers, channels, busiest day, human messages and action counts.
         Use start/end as since/until for scope_search, scope_timeline and scope_graph."""
         with ctx.store() as s:
             _check_source(s, source)
-            rows = s.all(_PERIODS_SQL, [source, source])
             if name is not None and name.strip():
-                i, r = _find_period(rows, name)
+                i, r = _find_period(s.all(f"{_PERIODS_SQL} ORDER BY idx", [source, source]), name)
+                r = _with_volume(s, [r])[0]
                 window = "source = ? AND ts >= ? AND (? IS NULL OR ts < ?)"
                 params = [r["source"], r["start_ts"], r["end_ts"], r["end_ts"]]
                 names = s.display_names()
@@ -805,26 +833,49 @@ def register(mcp, ctx) -> None:
                     }
                 )
                 return d
+            limit, note = ctx.limit(limit, default=50)
+            listed = f"FROM ({_PERIODS_SQL}) WHERE (CAST(? AS TEXT) IS NULL OR kind = ?)"
+            lparams = [source, source, kind, kind]
+            total = s.scalar(f"SELECT count(*) {listed}", lparams) or 0
+            rows = _with_volume(s, s.all(f"SELECT * {listed} ORDER BY idx LIMIT ? OFFSET ?", [*lparams, limit, offset]))
             per_agent: dict[str, int] = {}
             label = None
             if agent:
                 a = s.resolve_agent(agent, source)
                 label = a["display_name"]
-                for r in rows:
-                    per_agent[r["evidence_id"]] = s.scalar(
-                        "SELECT count(*) FROM messages WHERE author_id = ? AND ts >= ? AND (? IS NULL OR ts < ?)",
-                        [a["agent_id"], r["start_ts"], r["end_ts"], r["end_ts"]],
-                    )
+                if rows:
+                    per_agent = {
+                        x["evidence_id"]: x["n"]
+                        for x in s.all(_PERIOD_AGENT_SQL, [a["agent_id"], [r["evidence_id"] for r in rows]])
+                    }
         out = []
-        for i, r in enumerate(rows, 1):
-            d = _period_dict(r, i)
+        for r in rows:
+            d = _period_dict(r, r["idx"])
             if agent:
                 d["agent_messages"] = per_agent.get(r["evidence_id"], 0)
             out.append(d)
+        has_more = offset + len(out) < total
         notes = ["Pass name=<index> for one period's detail."]
+        if note:
+            notes.append(note)
+        if offset and not out and total:
+            notes.append(f"offset {offset} is past the last period ({total} total).")
         if any("type" in d for d in out):
             notes.append("'type' (AI Village goals) is a keyword heuristic from the goal text, not a dataset field")
-        return {"count": len(out), "agent": label, "periods": out, "notes": notes}
+        res: dict[str, Any] = {
+            "count": total,
+            "total": total,
+            "returned": len(out),
+            "offset": offset,
+            "has_more": has_more,
+            "filters": _filters(source=source, kind=kind),
+            "agent": label,
+            "periods": out,
+        }
+        if has_more:
+            res["next_offset"] = offset + len(out)
+        res["notes"] = notes
+        return res
 
     # ------------------------------------------------------------------ timeline
 
