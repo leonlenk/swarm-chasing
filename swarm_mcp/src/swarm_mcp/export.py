@@ -33,7 +33,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import sys
+import tempfile
 from collections import Counter
 from collections.abc import Iterable, Iterator
 from dataclasses import asdict, dataclass, field
@@ -116,14 +118,60 @@ def export(
     ``event_id``); it is consumed once, streaming. ``filters_desc`` (text or a JSON-able
     dict) is redacted before it is written. An existing ``agents.jsonl`` from an earlier
     export into the same directory is removed when ``agents`` is None.
+
+    The files are written to a hidden staging directory inside ``out_dir`` and moved into
+    place only once everything succeeded. A failed export (a bad record, or a lazy store
+    provider raising on an unknown source or a missing store) leaves an existing export
+    untouched and removes the directories it created.
     """
     out = Path(out_dir)
     if out.exists() and not out.is_dir():
         raise ExportError(f"--out {out} exists and is not a directory")
-    out.mkdir(parents=True, exist_ok=True)
-    # The manifest is written last, so a failed export never leaves a manifest next to partial files.
-    (out / MANIFEST_FILE).unlink(missing_ok=True)
+    created = _missing_dirs(out)
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+        stage = Path(tempfile.mkdtemp(prefix=".export-", suffix=".partial", dir=out))
+        try:
+            manifest = _write(records, stage, redactor, agents, filters_desc)
+            # an old manifest must never describe new files: drop it first, move the new one in last
+            (out / MANIFEST_FILE).unlink(missing_ok=True)
+            for name in (EVENTS_FILE, AGENTS_FILE):
+                if (stage / name).exists():
+                    os.replace(stage / name, out / name)
+                else:
+                    (out / name).unlink(missing_ok=True)
+            os.replace(stage / MANIFEST_FILE, out / MANIFEST_FILE)
+        finally:
+            shutil.rmtree(stage, ignore_errors=True)
+    except BaseException:
+        for d in created:  # deepest first; rmdir only removes them while they are empty
+            try:
+                d.rmdir()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                break
+        raise
+    return manifest
 
+
+def _missing_dirs(path: Path) -> list[Path]:
+    """``path`` and its ancestors that do not exist yet, deepest first."""
+    missing = []
+    while not path.exists() and path != path.parent:
+        missing.append(path)
+        path = path.parent
+    return missing
+
+
+def _write(
+    records: Iterable[dict[str, Any]],
+    out: Path,
+    redactor: Redactor,
+    agents: Iterable[dict[str, Any]] | None,
+    filters_desc: str | dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Write all export files into the (empty) directory ``out``; return the manifest."""
     redactions: Counter[str] = Counter()
     by_field: Counter[str] = Counter()
     by_source: dict[str, Counter[str]] = {}
@@ -181,8 +229,6 @@ def export(
         redactions.update(agent_counts)
         if agent_counts:
             by_field["<agents>"] += sum(agent_counts.values())
-    elif (out / AGENTS_FILE).exists():
-        (out / AGENTS_FILE).unlink()
 
     filters_clean = None
     if filters_desc is not None:
