@@ -7,9 +7,9 @@
     swarm-mcp export --out DIR [filters]   export a redacted subset of the store, then check it
 
 ``add --adapter auto`` (the default) picks the adapter from the path: ``--mapping``
-given -> mapped; the AI Village file set -> ai_village; a bare git repository
-(a directory with HEAD, objects/ and refs/ that git takes for a repository root) -> git;
-anything else is mapped with ``mappings/<source>.json`` when it exists (re-runs
+given -> mapped; the AI Village file set -> ai_village; a git repository root
+(a bare repository with HEAD, objects/ and refs/, or the top folder of a working
+tree, that git takes for a repository root) -> git; anything else is mapped with ``mappings/<source>.json`` when it exists (re-runs
 keep hand edits; delete it to redraft), else profiled and mapped by a draft
 from ``--agent``, checked (it stops with the report on failure) and then
 ingested. ``--adapter wiki`` (the collusion.wiki explorer SQLite schema) is
@@ -126,11 +126,28 @@ def git_root(path: Path) -> Path | None:
 
 
 def git_repo_dir(path: Path) -> Path | None:
-    """``path`` if it is a bare git repository (auto-detect): HEAD, objects/ and refs/, and git agrees it is a
-    repository root (e.g. ``data/ai-village/repos/rpg-game.git``)."""
-    if not ((path / "HEAD").is_file() and (path / "objects").is_dir() and (path / "refs").is_dir()):
+    """The git directory to read when auto-detecting: ``path`` for a bare repository (HEAD, objects/ and refs/,
+    e.g. ``data/ai-village/repos/rpg-game.git``), ``path/.git`` for the top folder of a working tree; only when
+    git agrees it is a repository root (``git_root``)."""
+    bare = (path / "HEAD").is_file() and (path / "objects").is_dir() and (path / "refs").is_dir()
+    if not (bare or (path / ".git").exists()):
         return None
-    return path if git_root(path) == path else None
+    return git_root(path)
+
+
+def enclosing_repo(path: Path) -> Path | None:
+    """The top folder of the git working tree that contains ``path`` (None if there is none)."""
+    import subprocess
+
+    try:
+        res = subprocess.run(
+            ["git", "-C", str(path if path.is_dir() else path.parent), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=30,
+        )  # fmt: skip
+    except (OSError, subprocess.SubprocessError):
+        return None
+    top = res.stdout.strip() if res.returncode == 0 else ""
+    return Path(top) if top else None
 
 
 def default_name(path: Path) -> str:
@@ -150,10 +167,27 @@ def _counts(res: dict[str, Any]) -> str:
     return ", ".join(f"{c.get(k, 0):,} {k}" for k in keys)
 
 
-def _next_steps(source: str) -> list[str]:
+def _db_flag(args: argparse.Namespace) -> list[str]:
+    """``--db <store>`` (absolute) when the command was given one, so printed commands use the same store."""
+    return ["--db", str(resolve_output(args.db))] if getattr(args, "db", None) else []
+
+
+def _add_cmd(args: argparse.Namespace, path: Path, mapping: Path | None = None) -> str:
+    """The ``swarm-mcp add`` command to run next, shell-quoted, with this run's --name/--db/--replace."""
+    parts = ["swarm-mcp", "add", str(path)]
+    if mapping is not None:
+        parts += ["--mapping", str(mapping)]  # the mapping names the source
+    elif args.name:
+        parts += ["--name", args.name]
+    parts += _db_flag(args) + (["--replace"] if args.replace else [])
+    return shlex.join(parts)
+
+
+def _next_steps(source: str, args: argparse.Namespace | None = None) -> list[str]:
+    info = shlex.join(["swarm-mcp", "info", *_db_flag(args)]) if args is not None else "swarm-mcp info"
     return [
         "Next:",
-        "  swarm-mcp info                       # check what is in the store",
+        f"  {info:<36} # check what is in the store",
         "  restart the 'swarm' MCP server (in Claude Code: /mcp) so the tools see the new data",
         f"  then try core_info and scope_search(source='{source}')",
     ]
@@ -164,6 +198,8 @@ def cmd_add(args: argparse.Namespace, config: Config) -> int:
     if not path.exists():
         raise CommandError(f"dataset not found: {path}")
     db = _db(args, config)
+    if db.is_dir():
+        raise CommandError(f"the store path {db} is a directory; pass a file, e.g. --db {db / 'swarmscope.duckdb'}")
     adapter = args.adapter
     if args.mapping and adapter not in ("auto", "mapped"):
         raise CommandError(f"--mapping only applies to mapped datasets (got --adapter {adapter})")
@@ -206,7 +242,7 @@ def _add_village(args: argparse.Namespace, path: Path, db: Path, *, detected: bo
     res = _guarded(args, lambda replace: ingest("ai_village", path, db, progress=_say, replace=replace))
     print(f"ingested source '{res['source']}' into {res['db']}: {_counts(res)} ({res['seconds']}s)")
     print(_replaced_note(res))
-    print("\n".join(_next_steps(res["source"])))
+    print("\n".join(_next_steps(res["source"], args)))
     return 0
 
 
@@ -237,6 +273,13 @@ def _replaced_note(res: dict[str, Any]) -> str:
 _BUILTIN_LABEL = {"git": "a bare git repository", "wiki": "a wiki database"}
 
 
+def _label(name: str, path: Path) -> tuple[str, Path]:
+    """(what the dataset is, the folder to name) for the messages: a working tree is named by its top folder."""
+    if name == "git" and path.name == ".git":
+        return "a git working tree", path.parent
+    return _BUILTIN_LABEL[name], path
+
+
 def _inspect_counts(info: dict[str, Any]) -> list[str]:
     """Counts from an adapter's ``inspect``: numbers as is, lists by length, dicts of numbers flattened."""
     out = []
@@ -264,12 +307,12 @@ def _add_builtin(args: argparse.Namespace, name: str, path: Path, db: Path, *, d
     source = args.name
     if source is None and name == "git":  # the repo's name as a slug; a working tree's .git: the tree's name
         source = _slugify((path.parent if path.name == ".git" else path).name.removesuffix(".git"))
-    how = f"detected {_BUILTIN_LABEL[name]}" if detected else _BUILTIN_LABEL[name]
-    print(f"{how} in {path}: using the built-in {name} adapter")
+    label, shown = _label(name, path)
+    print(f"{'detected ' if detected else ''}{label} in {shown}: using the built-in {name} adapter")
     try:
         info = get_adapter(name, source).inspect(path)
     except Exception as e:  # noqa: BLE001 - not a repository / not a database: a user error, not a crash
-        raise CommandError(f"{path} is not readable as {_BUILTIN_LABEL[name]}: {type(e).__name__}: {e}") from None
+        raise CommandError(f"{shown} is not readable as {label}: {type(e).__name__}: {e}") from None
     final = source or info.get("source")
     if not _PART.match(str(final or "")):  # it prefixes every evidence id
         raise CommandError(f"source name {final!r} is not usable in evidence ids; pass --name SLUG")
@@ -281,7 +324,7 @@ def _add_builtin(args: argparse.Namespace, name: str, path: Path, db: Path, *, d
     print(f"ingested source '{res['source']}' ({res['adapter']} adapter) into {res['db']}: {_counts(res)} "
           f"({res['seconds']}s)")  # fmt: skip
     print(_replaced_note(res))
-    print("\n".join(_next_steps(res["source"])))
+    print("\n".join(_next_steps(res["source"], args)))
     return 0
 
 
@@ -296,6 +339,11 @@ def _add_mapped(args: argparse.Namespace, config: Config, path: Path, db: Path) 
         if not _SLUG.match(source):
             raise CommandError(f"--name must be a lowercase slug (letters, digits, _ or -), got {source!r}")
         if (mappings_dir / f"{source}.json").is_file():  # never redraft over the user's edits
+            owner = _mapping_owner(mappings_dir, source)
+            if owner is not None and owner != path.resolve():  # another dataset's mapping: editing it breaks that one
+                raise CommandError(
+                    f"mappings/{source}.json belongs to {owner}, not {path}; pick another --name or pass --mapping"
+                )
             mapping_path = mappings_dir / f"{source}.json"
             print(f"using existing mapping mappings/{source}.json (delete it to redraft)")
     if mapping_path is not None:
@@ -317,13 +365,11 @@ def _add_mapped(args: argparse.Namespace, config: Config, path: Path, db: Path) 
     if report["status"] != "pass":
         print(
             f"\nThe mapping does not pass the check, so nothing was ingested. Fix {mapping_path} "
-            f"(see the report and the TODO notes), then run:\n  swarm-mcp add {path} --mapping {mapping_path}"
+            f"(see the report and the TODO notes), then run:\n  {_add_cmd(args, path, mapping_path)}"
         )
         return 1
     if args.dry_run:
-        print(
-            f"\ndry run: the mapping passes; nothing ingested. Ingest with:\n  swarm-mcp add {path} --mapping {mapping_path}"
-        )
+        print(f"\ndry run: the mapping passes; nothing ingested. Ingest with:\n  {_add_cmd(args, path, mapping_path)}")
         return 0
     from swarm_mcp.scope.ingest import ingest_mapped
 
@@ -335,8 +381,53 @@ def _add_mapped(args: argparse.Namespace, config: Config, path: Path, db: Path) 
     )
     print(f"\ningested source '{res['source']}' into {res['db']}: {_counts(res)} ({res['seconds']}s)")
     print(f"mapping: {mapping_path} {_replaced_note(res)}")
-    print("\n".join(_next_steps(res["source"])))
+    print("\n".join(_next_steps(res["source"], args)))
     return 0
+
+
+def _mapping_owner(mappings_dir: Path, source: str) -> Path | None:
+    """The dataset folder mappings/<source>.json was drafted for, from the (gitignored) <source>.setup.json log;
+    None when unknown (no log: a hand-written, committed or older mapping)."""
+    try:
+        root = json.loads((mappings_dir / f"{source}.setup.json").read_text(encoding="utf-8")).get("root")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return Path(root).resolve() if isinstance(root, str) and root else None
+
+
+def _drop_invalid_draft(res: dict[str, Any], path: Path) -> None:
+    """A draft that is not a valid mapping (e.g. no record table found) is never kept as mappings/<source>.json,
+    where every re-run would reuse it: delete it (and the task file), show the report and stop."""
+    from swarm_mcp.setup.check import format_report
+
+    mapping_path = Path(res["mapping_path"])
+    try:
+        records = json.loads(mapping_path.read_text(encoding="utf-8")).get("records")
+    except (OSError, ValueError, AttributeError):
+        records = None
+    for key in ("mapping_path", "task_path"):
+        if res.get(key):
+            Path(res[key]).unlink(missing_ok=True)
+    print(format_report(res["report"]))
+    if not records:
+        msg = f"found no table of timestamped records in {path}, so there is nothing to map; no mapping was written"
+    else:
+        msg = "the drafted mapping does not match the mapping schema (see the report), so it was not written"
+    msg += " (to map it anyway, write a mapping by hand and pass --mapping FILE)"
+    from swarm_mcp.setup.readers import discover, skipped_note
+
+    note = skipped_note(discover(path)[2])  # e.g. the data is behind symlinks to outside the folder
+    if note:
+        msg += f"\n{note}"
+    top = enclosing_repo(path)
+    if top is not None and top.resolve() != path.resolve():
+        msg += (
+            f"\n{path} is inside the git repository {top}: to add that repository, point at its root: "
+            f"swarm-mcp add {shlex.quote(str(top))}"
+        )
+    elif path.is_dir() and (path / "HEAD").is_file() and (path / "objects").is_dir():
+        msg += f"\n{path} looks like a git directory, but git does not read it as a repository"
+    raise CommandError(msg)
 
 
 def _draft(args: argparse.Namespace, path: Path, source: str, mappings_dir: Path):
@@ -344,10 +435,13 @@ def _draft(args: argparse.Namespace, path: Path, source: str, mappings_dir: Path
 
     print(f"no known layout in {path}: profiling it and drafting a mapping (--agent {args.agent})")
     try:
-        res = setup_dataset(source, path, agent=args.agent, mappings_dir=mappings_dir)
+        extra = [*_db_flag(args), *(["--replace"] if getattr(args, "replace", False) else [])]
+        res = setup_dataset(source, path, agent=args.agent, mappings_dir=mappings_dir, extra_args=extra)
     except SetupError as e:
         raise CommandError(str(e)) from None
     mapping_path = Path(res["mapping_path"])
+    if any(p["code"] == "spec_invalid" for p in res["report"]["problems"]):
+        _drop_invalid_draft(res, path)
     print(f"wrote {mapping_path} and {res['log_path']}")
     for n in res.get("notes") or []:
         print(f"  note: {n}")
@@ -355,7 +449,7 @@ def _draft(args: argparse.Namespace, path: Path, source: str, mappings_dir: Path
         print(
             f"\nwrote {res['task_path']}. In Claude Code run:\n  /swarm-setup {source} {shlex.quote(str(path))}\n"
             "It refines the mapping until the check passes, then runs "
-            f"`swarm-mcp add {shlex.quote(str(path))} --mapping {shlex.quote(str(mapping_path))}`."
+            f"`{_add_cmd(args, path, mapping_path)}`."
         )
         return mapping_path, None
     if res.get("rationale"):
@@ -531,7 +625,8 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("path", help="dataset folder or file, e.g. data/ai-village or data/ai-village/repos/rpg-game.git")
     a.add_argument(
         "--adapter", choices=ADD_ADAPTERS, default="auto",
-        help="auto = --mapping given -> mapped, the AI Village file set -> village, a bare git repo -> git, "
+        help="auto = --mapping given -> mapped, the AI Village file set -> village, a git repo root (bare or "
+        "working tree) -> git, "
         "else mapped with a drafted mapping; wiki (a collusion.wiki explorer SQLite db) is used only when given",
     )  # fmt: skip
     a.add_argument(
@@ -609,6 +704,12 @@ def main(argv: list[str] | None = None) -> None:
         code = args.fn(args, config)
     except (ValueError, FileNotFoundError, ConfigError) as e:  # ToolInputError and CommandError are ValueErrors
         print(f"error: {e}", file=sys.stderr)
+        code = 2
+    except Exception as e:  # a store DuckDB cannot open (locked by another process, not a DuckDB file): one line
+        if not type(e).__module__.lstrip("_").startswith("duckdb"):
+            raise
+        first = (str(e).strip().splitlines() or [""])[0]
+        print(f"error: the store could not be used: {type(e).__name__}: {first}", file=sys.stderr)
         code = 2
     sys.exit(code)
 

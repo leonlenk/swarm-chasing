@@ -14,7 +14,7 @@ from test_git_subtasks import make_repo
 from test_mapped_ingest import BOARD_SPEC
 from test_wiki import make_wiki
 
-from swarm_mcp.cli import main
+from swarm_mcp.cli import default_name, main
 from swarm_mcp.scope import db
 
 EMAIL = "bob.smith@gmail.com"
@@ -120,7 +120,9 @@ def test_add_drafts_a_mapping(project: Path, capsys):
     assert counts(project / "data" / "swarmscope.duckdb", "crew2")["messages"] == 0  # nothing ingested
 
     assert cli("add", "data/crew", "--name", "crew3", "--agent", "api") == 2  # no mapping yet and no key
-    assert "--agent none" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "--agent none" in err and "export it in your shell" in err  # not only "restart the server"
+    assert "server's environment" not in err
     assert cli("add", "data/crew", "--agent", "api") == 0  # mappings/crew.json exists: no draft, no key needed
     assert "using existing mapping mappings/crew.json" in capsys.readouterr().out
     assert cli("add", "data/crew", "--name", "Bad Name") == 2
@@ -321,10 +323,10 @@ def test_add_git_needs_a_repository_root(project: Path, capsys):
     assert not store.exists()
 
     assert git_repo_dir(bare) == bare and git_root(bare) == bare  # a bare repo
-    assert git_repo_dir(tree) is None and git_root(tree) == tree / ".git"  # a working tree: only when asked
+    assert git_repo_dir(tree) == tree / ".git" and git_root(tree) == tree / ".git"  # a working tree's top folder
     assert cli("add", "data/work-repo", "--adapter", "git", "--dry-run") == 0
     out = capsys.readouterr().out
-    assert f"in {tree / '.git'}" in out and "dry run: source 'work-repo'" in out
+    assert f"a git working tree in {tree}:" in out and "dry run: source 'work-repo'" in out
     assert cli("add", "data/work-repo", "--adapter", "git") == 0
     assert "ingested source 'work-repo' (git adapter)" in capsys.readouterr().out
     assert table_count(store, "periods", "work-repo") == 0 and table_count(store, "agents", "work-repo") > 0
@@ -405,3 +407,123 @@ def test_add_wiki_needs_a_db_in_the_given_folder(project: Path, capsys, monkeypa
     assert cli("add", "data/My Wiki", "--adapter", "wiki") == 2  # default source 'My Wiki': not an id part
     assert "pass --name" in capsys.readouterr().err
     assert [c[0] for c in calls] == ["inspect"]
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_add_auto_detects_a_working_tree_and_never_keeps_an_empty_draft(project: Path, capsys):
+    """Regression: auto-detect only knew bare repositories, so a working tree, a folder inside one or a fake
+    *.git fell through to the mapping drafter, which wrote mappings/<name>.json with no records (spec_invalid);
+    every re-run then reused that junk mapping. A working tree was also labelled 'a bare git repository'."""
+    make_repo(project / "data" / "repos")  # also leaves the working tree data/work-repo (with commits)
+    tree = project / "data" / "work-repo"
+    mappings = project / "mappings"
+    assert cli("add", "data/work-repo", "--dry-run") == 0
+    out = capsys.readouterr().out
+    assert f"detected a git working tree in {tree}: using the built-in git adapter" in out
+    assert "bare" not in out and "dry run: source 'work-repo'" in out
+
+    lookalike = project / "data" / "lookalike.git"  # HEAD, objects/ and refs/, but not a repository
+    for d in ("objects", "refs"):
+        (lookalike / d).mkdir(parents=True)
+    (lookalike / "HEAD").write_text("")
+    for sub, hint in ((tree / "src", f"inside the git repository {tree}"), (lookalike, "git does not read it")):
+        for _ in range(2):  # a re-run drafts again: nothing junk was kept to be reused
+            assert cli("add", str(sub), "--dry-run") == 2
+            out, err = capsys.readouterr()
+            assert "spec_invalid" in out and "using existing mapping" not in out
+            assert "found no table of timestamped records" in err and "no mapping was written" in err and hint in err
+            assert not (mappings / f"{default_name(sub)}.json").exists()
+    assert not list(mappings.glob("*.json")) or all(f.name.endswith(".setup.json") for f in mappings.glob("*"))
+
+
+def test_add_reuses_a_drafted_mapping_only_for_its_own_dataset(project: Path, capsys):
+    """Regression: `add <another dataset> --name crew` reused mappings/crew.json (drafted for data/crew), then
+    advised editing it, which would break the dataset it belongs to."""
+    make_nested_jsonl(project / "data" / "crew")
+    make_sqlite_board(project / "data" / "board")
+    make_nested_jsonl(project / "data" / "elsewhere" / "crew")  # same layout, same default name, another folder
+    mapping = project / "mappings" / "crew.json"
+    assert cli("add", "data/crew", "--dry-run") == 0 and mapping.exists()
+    drafted = mapping.read_text()
+    capsys.readouterr()
+    for other in (("data/board", "--name", "crew"), ("data/elsewhere/crew",)):
+        assert cli("add", *other, "--dry-run") == 2
+        err = capsys.readouterr().err
+        assert f"mappings/crew.json belongs to {(project / 'data' / 'crew').resolve()}" in err
+        assert "pick another --name or pass --mapping" in err
+    assert mapping.read_text() == drafted
+    assert cli("add", "data/crew", "--dry-run") == 0  # its own dataset still reuses it
+    assert "using existing mapping mappings/crew.json" in capsys.readouterr().out
+    (project / "mappings" / "crew.setup.json").unlink()  # no record of the dataset (e.g. a committed mapping)
+    assert cli("add", "data/elsewhere/crew", "--dry-run") == 0
+    assert "using existing mapping mappings/crew.json" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_add_hints_keep_db_name_and_replace(project: Path, capsys):
+    """Regression: the printed follow-up commands (dry-run 'Ingest with:', check failure 'then run:', the
+    claude-code hand-off, 'swarm-mcp info') dropped --db, so they ran against the default store; paths were
+    not shell-quoted."""
+    import shlex
+
+    make_nested_jsonl(project / "data" / "my crew")
+    store = project / "other store" / "s.duckdb"
+    store.parent.mkdir()
+    db = ["--db", str(store)]
+    mapping = project / "mappings" / "crew.json"
+    want = shlex.join(["swarm-mcp", "add", str(project / "data" / "my crew"), "--mapping", str(mapping), *db])
+    assert cli("add", "data/my crew", "--name", "crew", *db, "--dry-run") == 0
+    assert f"Ingest with:\n  {want}\n" in capsys.readouterr().out
+
+    broken = json.loads(mapping.read_text())
+    broken["records"][0]["text"] = "no_such_field"
+    mapping.write_text(json.dumps(broken))
+    assert cli("add", "data/my crew", "--name", "crew", *db, "--replace") == 1
+    assert f"then run:\n  {want} --replace\n" in capsys.readouterr().out
+
+    assert cli("add", "data/my crew", "--name", "crew2", "--agent", "claude-code", *db) == 0
+    out = capsys.readouterr().out
+    assert f"/swarm-setup crew2 {shlex.quote(str(project / 'data' / 'my crew'))}" in out
+    assert f"--mapping {project / 'mappings' / 'crew2.json'} --db '{store}'" in out
+
+    make_repo(project / "data" / "repos")
+    assert cli("add", "data/repos/rpg.git", *db) == 0
+    assert f"swarm-mcp info --db '{store}'" in capsys.readouterr().out
+
+
+def test_add_reports_a_bad_store_path_in_one_line(project: Path, capsys):
+    """Regression: `add --db <a directory>` (or a file that is not a DuckDB store) ended in a raw duckdb
+    traceback: main() only caught ValueError, FileNotFoundError and ConfigError."""
+    make_nested_jsonl(project / "data" / "crew")
+    folder = project / "data" / "stores"
+    folder.mkdir()
+    assert cli("add", "data/crew", "--db", str(folder)) == 2
+    err = capsys.readouterr().err
+    assert f"the store path {folder} is a directory" in err and "Traceback" not in err
+    junk = project / "data" / "junk.duckdb"
+    junk.write_text("not a database\n")
+    assert cli("add", "data/crew", "--db", str(junk)) == 2
+    err = capsys.readouterr().err
+    assert "error: the store could not be used: IOException" in err and "not a valid DuckDB" in err
+    assert junk.read_text() == "not a database\n"
+
+
+def test_add_says_which_files_it_skipped(project: Path, tmp_path: Path, capsys):
+    """Regression: `add` skipped symlinks to outside the dataset folder silently (files and folders), so data
+    reached through a link just went missing."""
+    make_nested_jsonl(project / "data" / "crew")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "more.jsonl").write_text('{"id": 1, "text": "synthetic"}\n')
+    (project / "data" / "crew" / "more.jsonl").symlink_to(outside / "more.jsonl")
+    (project / "data" / "crew" / "linked").symlink_to(outside, target_is_directory=True)
+    note = "skipped 2 files or folders (not read): symlink to outside the dataset folder: linked/, more.jsonl"
+    assert cli("add", "data/crew", "--dry-run") == 0  # the draft's check
+    assert f"note: {note}" in capsys.readouterr().out
+    assert cli("add", "data/crew") == 0  # an existing mapping's check, before ingesting
+    assert f"note: {note}" in capsys.readouterr().out
+
+    (project / "data" / "links").mkdir()
+    (project / "data" / "links" / "more.jsonl").symlink_to(outside / "more.jsonl")
+    assert cli("add", "data/links", "--dry-run") == 2  # nothing left to map: the refusal says why
+    assert "symlink to outside the dataset folder: more.jsonl" in capsys.readouterr().err

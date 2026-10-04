@@ -199,14 +199,15 @@ def get_client(config: "Config | None" = None) -> LLMClient:
     config = _config(config)
     if not config.api_key:
         raise LLMUnavailable(
-            "No LLM configured: ANTHROPIC_API_KEY is not set in the server's environment, so no model calls "
-            "were made. Set it (e.g. in .mcp.json's env block or your shell) and restart the server."
+            "No LLM configured: ANTHROPIC_API_KEY is not set, so no model calls were made. For the swarm-mcp "
+            "command line, export it in your shell; for the MCP server, set it in .mcp.json's env block (or the "
+            "shell that starts it) and restart the server."
         )
     try:
         import anthropic  # noqa: F401
     except ImportError as e:
         raise LLMUnavailable(
-            "The 'anthropic' package is not installed in the server's environment. Run `uv sync --directory swarm_mcp`."
+            "The 'anthropic' package is not installed in this environment. Run `uv sync --directory swarm_mcp`."
         ) from e
     effort = (config.llm_effort or DEFAULT_EFFORT).strip().lower()
     return AnthropicClient(
