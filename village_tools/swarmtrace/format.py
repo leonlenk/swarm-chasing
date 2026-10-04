@@ -235,11 +235,17 @@ def dumps(obj):
 
 # --- PII scrubbing -------------------------------------------------------------------------------
 
-EMAIL_RX = re.compile(r"(?<![\w.%+-])[A-Za-z0-9._%+-]+@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})(?![\w-])")
+# Boundaries are ASCII (Python's \w is Unicode, so a CJK or accented letter next to an address or number used to hide
+# it). The email local part takes letters of scripts written with spaces (jöhn, иван) but not Han, kana, Hangul, Thai
+# and the like, so in "連絡はbob@example.comまで" the address starts at "bob".
+_NO_SPACE_SCRIPTS = "\u0e00-\u0eff\u1000-\u109f\u1780-\u17ff\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff66-\uff9f"
+_LOCAL = f"(?:[^\\W{_NO_SPACE_SCRIPTS}]|[.%+-])"
+EMAIL_RX = re.compile(rf"(?<!{_LOCAL}){_LOCAL}+@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{{2,}})(?![A-Za-z0-9-])")
 # Phone-like: 3-3-4 digit groups with separators (optionally +country / (area)), or +country followed by 2-4
 # separated groups. Separators are required so dates, versions, IPs, ids and hashes don't match.
-PHONE_RX = re.compile(r"(?<![\w.+/-])(?:\+\d{1,3}[\s.-]?)?(?:\(\d{3}\)\s?|\d{3}[\s.-])\d{3}[\s.-]\d{4}(?![\w.-]*\d)"
-                      r"|(?<![\w+])\+\d{1,3}(?:[\s.-]\d{2,4}){2,4}(?![\w-])")
+PHONE_RX = re.compile(r"(?<![A-Za-z0-9_.+/-])(?:\+\d{1,3}[\s.-]?)?(?:\(\d{3}\)\s?|\d{3}[\s.-])\d{3}[\s.-]\d{4}"
+                      r"(?![A-Za-z0-9_.-]*\d)"
+                      r"|(?<![A-Za-z0-9_+])\+\d{1,3}(?:[\s.-]\d{2,4}){2,4}(?![A-Za-z0-9_-])")
 # Free-text fields that can carry raw agent/human content.
 _TEXT_FIELDS = {"events": ("snippet",), "quotes": ("text", "note"), "edges": ("evidence",), "annotations": ("label",)}
 _TEXT_LIMITS = {("events", "snippet"): SNIPPET_MAX, ("quotes", "text"): QUOTE_MAX}

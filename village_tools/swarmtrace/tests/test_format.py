@@ -180,6 +180,15 @@ def test_scrub_tracking_moves_marks():
     assert out[a:b] == "[email] "
 
 
+@pytest.mark.parametrize("raw,want", [
+    ("連絡はbob@example.comまで", "連絡は[email]まで"), ("jöhn@example.com", "[email]"),
+    ("émail bob@example.comé", "émail [email]é"), ("電話+81 90 1234 5678です", "電話[phone]です"),
+    ("電話555-867-5309です", "電話[phone]です"),
+])
+def test_scrub_next_to_non_ascii_letters(raw, want):
+    assert scrub(raw) == want and pii_hits(want) == []
+
+
 @pytest.mark.parametrize("raw,allow,want", [
     ("mail jane.doe+x@gmail.com now", (), "mail [email] now"),
     ("bot is claude-3.7@agentvillage.org", ("agentvillage.org",), "bot is claude-3.7@agentvillage.org"),
