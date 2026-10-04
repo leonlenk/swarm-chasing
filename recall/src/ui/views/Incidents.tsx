@@ -6,10 +6,13 @@ import { Avatar, EvidencePill, StatePill, StatusPill } from '../Pills';
 import { Record, UnavailableRecord } from '../Record';
 import { findingAgents, findingLabel, groupFindings, plain, STATE_ORDER, subjectLabel } from '../labels';
 import { eventTone } from '../format';
+import { bucketOf, remediationFor, triage } from '../../engine/triage';
 import { IAlert, IChevronR, IExternal, ISearch, IShield, ITasks, IUsers } from '../icons';
 
 const hm = (iso: string) => new Date(iso).toISOString().slice(11, 16);
-type Tab = 'active' | 'insufficient' | 'resolved';
+type Tab = 'open' | 'needs' | 'patterns' | 'resolved';
+const TAB_LABEL: Record<Tab, string> = { open: 'Open', needs: 'Needs evidence', patterns: 'Patterns', resolved: 'Resolved' };
+const TAB_EMPTY: Record<Tab, string> = { open: 'contradicted', needs: 'unchecked', patterns: 'pattern', resolved: 'resolved' };
 
 function roleOf(f: Finding, agentId: string, ws: ReturnType<typeof useRecall>['ws']): string {
   const roles = f.evidence.filter((e) => ws.byId.get(e.eventId)?.agentId === agentId).map((e) => e.role.toLowerCase());
@@ -24,20 +27,30 @@ function roleOf(f: Finding, agentId: string, ws: ReturnType<typeof useRecall>['w
 
 export function Incidents() {
   const { findings, ws, param, navigate, name, agents, reviewed, toggleReviewed, openRecord, seek, source } = useRecall();
-  const counts = { active: 0, insufficient: 0, resolved: 0 };
-  findings.forEach((f) => counts[f.state]++);
+  const tri = useMemo(() => triage(findings, ws), [findings, ws]);
+  const counts = { open: tri.open.length, needs: tri.needs.length, patterns: tri.patterns.length, resolved: tri.resolved.length };
   const selected = findings.find((f) => f.id === param);
-  const [tab, setTab] = useState<Tab>(selected?.state ?? (counts.active ? 'active' : counts.insufficient ? 'insufficient' : 'resolved'));
+  const selBucket = selected ? bucketOf(selected, ws) : undefined;
+  const [tab, setTab] = useState<Tab>(selBucket && selBucket !== 'count' ? selBucket : counts.open ? 'open' : counts.needs ? 'needs' : counts.patterns ? 'patterns' : 'resolved');
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const toggleAgent = (a: string) => setCollapsed((prev) => { const n = new Set(prev); if (n.has(a)) n.delete(a); else n.add(a); return n; });
   const [q, setQ] = useState('');
   const [monitor, setMonitor] = useState<string>('all');
 
   const list = useMemo(() => findings
-    .filter((f) => f.state === tab)
+    .filter((f) => bucketOf(f, ws) === tab)
     .filter((f) => monitor === 'all' || f.monitor === monitor)
     .filter((f) => !q || `${f.title} ${f.summary} ${ws.claims.get(f.claimId)?.text ?? ''}`.toLowerCase().includes(q.toLowerCase()))
     .sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state] || b.detectedAt - a.detectedAt), [findings, tab, monitor, q, ws]);
   const current = selected ?? list[0];
   const groups = useMemo(() => groupFindings(list, (f) => ws.claims.get(f.claimId)?.subject?.artifact ?? ''), [list, ws]);
+  // Needs evidence: collapsible by agent, then grouped by subject (+N similar).
+  const agentSections = useMemo(() => {
+    const by = new Map<string, Finding[]>();
+    for (const f of list) by.set(f.agentId, [...(by.get(f.agentId) ?? []), f]);
+    return [...by.entries()].sort((a, b) => b[1].length - a[1].length)
+      .map(([agent, fs]) => ({ agent, groups: groupFindings(fs, (f) => ws.claims.get(f.claimId)?.subject?.artifact ?? '') }));
+  }, [list, ws]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const toggle = (k: string) => setExpanded((prev) => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n; });
 
@@ -58,9 +71,10 @@ export function Incidents() {
       </div>
 
       <div className="tabs" role="tablist">
-        {(['active', 'insufficient', 'resolved'] as const).map((t) => (
-          <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)}>
-            {t === 'active' ? 'Open' : t === 'insufficient' ? 'Needs evidence' : 'Resolved'} <span className="count">{counts[t]}</span>
+        {(['open', 'needs', 'patterns', 'resolved'] as const).map((t) => (
+          <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)}
+            title={t === 'open' ? 'Records contradict what was claimed (A, D, E, G, J, W, Y, AO, AP, AQ, AR, AY)' : t === 'needs' ? 'Claims the records cannot confirm yet (C, Z, AM, AC, BM, BJ, BK)' : t === 'patterns' ? 'Process, swarm, session and human patterns' : undefined}>
+            {TAB_LABEL[t]} <span className="count">{counts[t]}</span>
           </button>
         ))}
       </div>
@@ -68,7 +82,7 @@ export function Incidents() {
       <div className="kpis boxed three">
         <div className="kpi"><span className="kpi-icon"><IUsers /></span><div><div className="kpi-label">Agents involved</div><div className="kpi-value">{affected.size}<small>/ {source?.agents.length}</small></div></div></div>
         <div className="kpi" title="Downstream tasks reachable through dependencies. Structural reach, not proven damage."><span className="kpi-icon"><ITasks /></span><div><div className="kpi-label">Tasks in dependency reach</div><div className="kpi-value">{reach.size}</div></div></div>
-        <div className="kpi"><span className="kpi-icon"><IShield /></span><div><div className="kpi-label">Monitors active</div><div className="kpi-value">2</div></div></div>
+        <div className="kpi" title="Needs evidence: claims the records cannot confirm yet"><span className="kpi-icon"><IShield /></span><div><div className="kpi-label">Unchecked claims</div><div className="kpi-value">{counts.needs}<small> · {tri.count.length} count-grade</small></div></div></div>
       </div>
 
       <div className="split">
@@ -82,11 +96,20 @@ export function Incidents() {
           </div>
           {list.length === 0 && (
             <div className="empty-state">
-              <b>No {tab === 'active' ? 'open' : tab === 'insufficient' ? 'insufficient-evidence' : 'resolved'} incidents at #{ws.cursor}</b>
+              <b>No {TAB_EMPTY[tab]} findings at #{ws.cursor}</b>
               {findings.length ? 'Try another tab.' : 'Scrub forward, or switch to a source with detected incidents.'}
             </div>
           )}
-          {groups.map((g) => {
+          {(tab === 'needs' ? agentSections : [{ agent: '', groups }]).map((sec) => (
+          <div key={sec.agent || 'all'}>
+            {sec.agent && (
+              <button className="agent-section" onClick={() => toggleAgent(sec.agent)} aria-expanded={!collapsed.has(sec.agent)}>
+                <IChevronR className={collapsed.has(sec.agent) ? '' : 'rot'} size={16} />
+                <Avatar name={name(sec.agent)} color={agents.get(sec.agent)?.color} size="sm" />
+                <b>{name(sec.agent)}</b><span className="muted small">{sec.groups.reduce((n, g) => n + 1 + g.rest.length, 0)} unchecked</span>
+              </button>
+            )}
+          {!collapsed.has(sec.agent) && sec.groups.map((g) => {
             const open = expanded.has(g.key);
             const row = (f: Finding, sub = false) => {
               const ag = findingAgents(f, ws);
@@ -118,6 +141,8 @@ export function Incidents() {
               </div>
             );
           })}
+          </div>
+          ))}
         </section>
 
         <aside className="card" aria-label="Incident detail">
@@ -131,6 +156,12 @@ export function Incidents() {
                   <h2 style={{ fontSize: 22, fontWeight: 500, letterSpacing: '-0.01em', marginTop: 4 }}>{findingLabel(current)}</h2>
                   <div className="muted small" style={{ marginTop: 4, wordBreak: 'break-all' }}>{current.title}</div>
                   {current.attributes?.length ? <div className="row" style={{ marginTop: 6, flexWrap: 'wrap' }}>{current.attributes.map((a) => <span key={a} className="tag disputed">{a}</span>)}</div> : null}
+                  {(() => { const r = remediationFor(current, ws); return r ? (
+                    <div className="remedy">
+                      <div className="row"><b>Suggested remediation</b><span className="spacer" /><span className="muted small">rule template · owner: {r.owner}</span></div>
+                      <ol>{r.steps.map((st) => <li key={st}>{st}</li>)}</ol>
+                      <div className="muted small">Resolves when: {r.resolvesWith}.</div>
+                    </div>) : null; })()}
                 </div>
                 <span className="spacer" />
                 <StatePill state={current.state} reviewed={reviewed.has(current.id)} />

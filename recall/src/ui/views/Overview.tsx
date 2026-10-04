@@ -11,6 +11,7 @@ import { Timeline } from '../Timeline';
 import { Spark, StatePill } from '../Pills';
 import { findingAgents, findingLabel, headline, plain, STATE_ORDER, timeAgo } from '../labels';
 import { eventTone, TYPE_LABEL } from '../format';
+import { bucketOf, type Bucket } from '../../engine/triage';
 import { IAlert, IArrowR, IChat, IChevron, IClock, IDoc, IFork, IPie, IPlay, IUsers } from '../icons';
 
 const hms = (iso: string) => new Date(iso).toISOString().slice(11, 19);
@@ -28,7 +29,8 @@ function useSeries() {
       return {
         agents: new Set(w.visible.map((e) => e.agentId)).size,
         claims: w.claims.size,
-        open: f.filter((x) => x.state !== 'resolved').length,
+        open: f.filter((x) => bucketOf(x, w) === 'open').length,
+        needs: f.filter((x) => bucketOf(x, w) === 'needs').length,
         coverage: progressed.length ? Math.round((progressed.filter((t) => t.evidenceStatus === 'supported').length / progressed.length) * 100) : 0,
       };
     });
@@ -36,15 +38,18 @@ function useSeries() {
   }, [source, input, cursor, minSeq]);
 }
 
+const RANK: Record<Bucket, number> = { open: 0, needs: 1, patterns: 2, resolved: 3, count: 9 };
+
 function NeedsAttention() {
   const { findings, ws, name, navigate, reviewed, source } = useRecall();
-  const sorted = useMemo(() => [...findings].sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state] || b.detectedAt - a.detectedAt), [findings]);
+  // Contradicted first, then unchecked, then patterns; count-grade claims are counts, never attention items.
+  const sorted = useMemo(() => findings.filter((f) => bucketOf(f, ws) !== 'count').sort((a, b) => RANK[bucketOf(a, ws)] - RANK[bucketOf(b, ws)] || STATE_ORDER[a.state] - STATE_ORDER[b.state] || b.detectedAt - a.detectedAt), [findings, ws]);
   const [openId, setOpenId] = useState<string | null>(null);
   const open = openId ?? sorted[0]?.id ?? null;
   const now = ws.visible[ws.visible.length - 1]?.timestamp ?? '';
   return (
     <section className="card attention" aria-label="Needs attention">
-      <div className="card-head"><h2>Needs attention</h2><span className="spacer" /><span className="muted small">{findings.length} finding{findings.length === 1 ? '' : 's'}</span></div>
+      <div className="card-head"><h2>Needs attention</h2><span className="spacer" /><span className="muted small">{sorted.length} finding{sorted.length === 1 ? '' : 's'}</span></div>
       <div className="attention-list">
         {sorted.length === 0 && (
           <div className="empty-state">
@@ -126,7 +131,8 @@ export function Overview() {
   const effectiveScope = scope ?? (findings.length && (source?.agents.length ?? 0) > 6 ? 'incidents' : 'all');
   const hasMentions = useMemo(() => events.some((e) => e.mentions?.length), [events]);
   const positions = useMemo(() => computeLayout(events), [events]);
-  const h = headline(findings, cursor);
+  // Headline: contradicted first, then unchecked, then patterns; count-grade claims never headline.
+  const h = headline([...findings].filter((f) => bucketOf(f, ws) !== 'count').sort((a, b) => RANK[bucketOf(a, ws)] - RANK[bucketOf(b, ws)] || b.detectedAt - a.detectedAt).slice(0, 1).concat(findings.filter((f) => bucketOf(f, ws) !== 'count').slice(1)), cursor);
   const now = ws.visible[ws.visible.length - 1];
   const s = series?.rows ?? [];
 
@@ -145,10 +151,11 @@ export function Overview() {
         </div>
       </div>
 
-      <div className="kpis">
+      <div className="kpis five">
         <div className="kpi"><span className="kpi-icon"><IUsers /></span><div><div className="kpi-label">Active agents</div><div className="kpi-value">{series?.last.agents ?? 0}<small>/ {source?.agents.length ?? 0}</small></div></div><Spark width={104} values={s.map((x) => x.agents)} /></div>
         <div className="kpi"><span className="kpi-icon"><IChat /></span><div><div className="kpi-label">Tracked claims</div><div className="kpi-value">{series?.last.claims ?? 0}</div></div><Spark width={104} values={s.map((x) => x.claims)} /></div>
-        <div className="kpi"><span className="kpi-icon"><IAlert /></span><div><div className="kpi-label">Open incidents</div><div className="kpi-value">{series?.last.open ?? 0}</div></div><Spark width={104} values={s.map((x) => x.open)} tone={series?.last.open ? 'amber' : 'green'} /></div>
+        <div className="kpi" title="Contradicted-class findings: the records contradict what was claimed (A, D, E, G, J, W, Y, AO, AP, AQ, AR, AY)."><span className="kpi-icon"><IAlert /></span><div><div className="kpi-label">Open incidents</div><div className="kpi-value">{series?.last.open ?? 0}</div></div><Spark width={104} values={s.map((x) => x.open)} tone={series?.last.open ? 'amber' : 'green'} /></div>
+        <div className="kpi" title="Needs evidence: claims the records cannot confirm yet (C on external subjects, Z, AM, AC, BM, BJ, BK)."><span className="kpi-icon"><IChat /></span><div><div className="kpi-label">Unchecked claims</div><div className="kpi-value">{series?.last.needs ?? 0}</div></div><Spark width={104} values={s.map((x) => x.needs)} /></div>
         <div className="kpi" title="Share of tasks with reported progress whose status is backed by a record (tool output or observed system event)."><span className="kpi-icon"><IPie /></span><div><div className="kpi-label">Evidence coverage</div><div className="kpi-value">{series?.last.coverage ?? 0}<small>%</small></div></div><Spark width={104} values={s.map((x) => x.coverage)} /></div>
       </div>
 

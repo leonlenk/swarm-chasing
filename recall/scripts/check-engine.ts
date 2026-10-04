@@ -6,7 +6,7 @@
 //      (skipped, not failed, when public/data has not been built).
 // Exit code 1 on any failure. `npm run check -- --trace [--withhold]` prints the old synthetic trace.
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseRecallDocument } from '../src/adapters/syntheticAdapter';
 import { reconstruct } from '../src/engine/reconstruct';
@@ -14,6 +14,8 @@ import { assertFinding, findingProblems, register, registry, runMonitors, type F
 import type { FixtureBlock, FixtureExpect } from '../src/data/fixtures';
 import { goalChurn, longSessionNoVerdict } from '../src/engine/meta';
 import { adaptAiVillageWindow } from '../src/adapters/aiVillageHf';
+import { bucketOf, remediationFor } from '../src/engine/triage';
+const ws0 = (w: ReturnType<typeof reconstruct>, claimId: string) => w.claims.get(claimId)?.subject?.artifact ?? '';
 import type { DataSource } from '../src/model/types';
 
 const ROOT = join(import.meta.dirname, '..');
@@ -207,6 +209,54 @@ for (const id of [...onDisk].sort()) if (!registry.some((m) => m.id === id) && r
   record('push keying', 'AE and F do not fire across different pushes of one repo', hits.length === 0, hits.map((f) => f.id).join(', '));
 }
 
+// ---------------------------------------------------------------- 2e. triage (C grading, Open vs Needs evidence)
+{
+  const fx = parseRecallDocument(load('src/data/fixtures/C.json'));
+  const asRepo = { ...fx, events: fx.events.map((e) => (e.type === 'claim' ? { ...e, payload: { ...e.payload, subject: { artifact: 'repo:https://github.com/o/r.git', version: 'aaaa..bbbb' } } } : e)) } as DataSource;
+  const at = (d: DataSource) => { const w = world(d, 3); return runMonitors(w, ['C']).map((f) => bucketOf(f, w)); };
+  record('triage', 'C on a URL subject is incident-grade (Needs evidence)', at(fx).join() === 'needs', at(fx).join());
+  record('triage', 'C on a repo-pushed subject is count-grade (counts only)', at(asRepo).join() === 'count', at(asRepo).join());
+  const a = parseRecallDocument(load('src/data/fixtures/A.json'));
+  const last = a.events[a.events.length - 1].sequence;
+  const open = runMonitors(world(a, last), ['A']).filter((f) => f.state === 'active');
+  record('triage', 'an active A finding is Open (contradicted class)', open.every((f) => bucketOf(f, world(a, last)) === 'open'));
+  const remedies = registry.map((m) => m.id).filter((id) => !remediationFor({ id: 'x', monitor: id, title: '', summary: '', explanation: '', detectedAt: 1, detectedEventId: 'x', taskId: '', claimId: '', agentId: 'x', evidence: [], reach: [], missing: [], state: 'active' }, world(a, 1)));
+  record('triage', 'every registered monitor has a remediation template', remedies.length === 0, remedies.join(', '));
+}
+
+// ---------------------------------------------------------------- 2f. mutation suite (brief): scripted aberrations through the adapter
+{
+  const curl = (id: string, sid: string, at: string, url: string, code: number) => ({ id, session_id: sid, created_at: at, agent_action: { command: `curl -sI ${url}` }, output: `HTTP/2 ${code}\n`, error: '' });
+  const pytest = (id: string, sid: string, at: string, line: string) => ({ id, session_id: sid, created_at: at, agent_action: { command: 'cd /work/app && pytest' }, output: `${line}\n`, error: '' });
+  const chat = (id: string, who: string, at: string, content: string) => ({ id, speaker_type: 'agent', agent_speaker_id: who, content, created_at: at, room_id: 'room' });
+  const U = 'https://game.example.test/play'; const U2 = 'https://docs.example.test/guide';
+  const doc = adaptAiVillageWindow({
+    id: 'mutation', label: 'mutation suite', window: { from: '2026-01-02T09:00:00Z', to: '2026-01-02T13:00:00Z' }, generatedAt: '2026-01-02T00:00:00Z',
+    agents: [{ id: 'a1', name: 'Agent One' }, { id: 'a2', name: 'Agent Two' }], boundaries: [],
+    sessions: [{ id: 's1-000000', agent_id: 'a1', created_at: '2026-01-02 09:00:00', short_displayed_session_goal: 'Ship the game' }, { id: 's2-000000', agent_id: 'a2', created_at: '2026-01-02 09:00:10', short_displayed_session_goal: 'Review the game' }],
+    turns: [curl('k1', 's2-000000', '2026-01-02 09:02:00', U, 404), pytest('p1', 's1-000000', '2026-01-02 09:10:00', '==== 2 failed, 10 passed in 1.0s ====')],
+    chats: [
+      chat('m1-0000', 'a1', '2026-01-02 09:01:00', `The game is live at ${U}`),
+      chat('m2-0000', 'a1', '2026-01-02 09:03:00', `Reminder: the game is live at ${U}`),
+      chat('m3-0000', 'a2', '2026-01-02 09:04:00', `${U} is broken for me, it returns 404.`),
+      chat('m4-0000', 'a1', '2026-01-02 09:05:00', `Again, the game is live at ${U}`),
+      chat('m5-0000', 'a1', '2026-01-02 09:06:00', `The guide is live at ${U2}`), chat('m6-0000', 'a1', '2026-01-02 09:07:00', `Guide is live at ${U2}`), chat('m7-0000', 'a1', '2026-01-02 09:08:00', `The guide is published at ${U2}`),
+      chat('m8-0000', 'a1', '2026-01-02 09:11:00', 'All tests pass now.'),
+    ],
+  });
+  const firstFire = new Map<string, number>();
+  for (const e of doc.events) {
+    const w = reconstruct({ events: doc.events, withheld: new Set(), agents: doc.agents }, e.sequence);
+    for (const f of runMonitors(w, ['C', 'A', 'D', 'F'])) if (f.state === 'active' && !firstFire.has(f.monitor)) firstFire.set(f.monitor, e.sequence);
+  }
+  const order = [...firstFire.entries()].sort((x, y) => x[1] - y[1]).map(([m]) => m);
+  record('mutation', 'claim → failing check → repeat → failure posted → repeat: C, A, D, F light up in that order', order.join(',') === 'C,A,D,F', order.join(','));
+  const last = doc.events[doc.events.length - 1].sequence;
+  const w = reconstruct({ events: doc.events, withheld: new Set(), agents: doc.agents }, last);
+  const t = runMonitors(w, ['A']).find((f) => ws0(w, f.claimId).startsWith('tests:'));
+  record('mutation', 'a tests-pass claim after a failing pytest line is an Open A finding', !!t && t.state === 'active' && bucketOf(t, w) === 'open', t ? `${t.id}[${t.state}]` : 'no A finding on the tests subject');
+}
+
 // ---------------------------------------------------------------- 3. integration
 runFixture('integration', 'src/data/synthetic-release.json', load('src/data/synthetic-release.json'));
 
@@ -267,6 +317,23 @@ for (const r of results) {
   console.log(`${mark} ${r.name}${r.ok !== true && r.detail ? `\n      ${r.detail}` : ''}`);
 }
 console.log(`\n${pass} passed · ${fail.length} failed · ${skip} skipped\n`);
+
+// Monitor liveness (AK): per-monitor fixture results, written next to the data for the Monitors view.
+if (dataBuilt) {
+  const monitors: Record<string, { fixtures: number; passed: boolean; live: boolean; failures: string[] }> = {};
+  for (const m of registry) monitors[m.id] = { fixtures: 0, passed: true, live: false, failures: [] };
+  for (const r of results) {
+    const m = /^fixture (\S+)(?: \(extra, (\S+)\))?$/.exec(r.suite);
+    if (!m) continue;
+    const id = m[2] ?? m[1];
+    const row = monitors[id];
+    if (!row) continue;
+    if (r.name.startsWith('fires') || r.name.startsWith('withhold')) row.fixtures++;
+    if (r.ok === false) { row.passed = false; row.failures.push(r.name); }
+    if (r.name.startsWith('live') && r.ok === true) row.live = true;
+  }
+  writeFileSync(join(dataDir, 'check.json'), JSON.stringify({ generatedAt: new Date().toISOString(), passed: pass, failed: fail.length, monitors }, null, 1));
+}
 
 // ---------------------------------------------------------------- optional trace
 if (args.includes('--trace')) {

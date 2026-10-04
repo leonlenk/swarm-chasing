@@ -26,7 +26,8 @@ export const STATE_ORDER = { active: 0, insufficient: 1, resolved: 2 } as const;
 
 export function headline(findings: Finding[], cursor: number): { text: string; tone: Finding['state'] | 'calm'; finding?: Finding } {
   if (!findings.length) return { text: `No discrepancies detected in events #1–#${cursor}.`, tone: 'calm' };
-  const top = [...findings].sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state] || b.detectedAt - a.detectedAt)[0];
+  // Callers may pre-rank (Overview ranks by triage bucket); otherwise rank by state.
+  const top = findings[0]?.state === 'active' ? findings[0] : [...findings].sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state] || b.detectedAt - a.detectedAt)[0];
   const more = findings.length - 1;
   return { text: top.summary + (more ? ` (+${more} more finding${more > 1 ? 's' : ''})` : ''), tone: top.state, finding: top };
 }

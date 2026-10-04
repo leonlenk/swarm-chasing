@@ -1,6 +1,7 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRecall } from '../context';
 import { isInvariantFailure, needsMet, registry } from '../../engine/monitors';
+import { CountGrade } from '../CountGrade';
 import { BE_MIN_TURNS, goalChurn, longSessionNoVerdict, unverifiableByConstruction, verifyGoalNoClaim } from '../../engine/meta';
 import { TYPE_LABEL } from '../format';
 import type { EventType } from '../../model/types';
@@ -11,8 +12,17 @@ const FAMILY_LABEL: Record<string, string> = {
 };
 const NEED_LABEL = (n: string) => (n === 'subject' ? 'claim/check subjects' : n === 'dependency' ? 'task dependencies' : (TYPE_LABEL as Record<string, string>)[n] ?? n);
 
+type Liveness = { generatedAt: string; monitors: Record<string, { fixtures: number; passed: boolean; live: boolean; failures: string[] }> };
+
 export function Monitors() {
   const { source, ws, findings, allFindings, navigate, experimentOn, setExperimentOn, sourceEntry } = useRecall();
+  // Monitor liveness (AK): the last `npm run check` result, written to public/data/check.json. Absent → no tag.
+  const [liveness, setLiveness] = useState<Liveness | null>(null);
+  useEffect(() => {
+    let off = false;
+    fetch(`${import.meta.env.BASE_URL}data/check.json`, { cache: 'no-cache' }).then((r) => (r.ok ? r.json() : null)).then((j) => { if (!off) setLiveness(j); }).catch(() => {});
+    return () => { off = true; };
+  }, []);
   const byType = useMemo(() => {
     const m = new Map<EventType, number>();
     source?.events.forEach((e) => m.set(e.type, (m.get(e.type) ?? 0) + 1));
@@ -57,6 +67,12 @@ export function Monitors() {
               <div className="row">
                 <span className="tag real">Monitor {m.id}</span>
                 <span className="tag">{FAMILY_LABEL[m.family] ?? m.family}</span>
+                {liveness?.monitors[m.id] && (
+                  <span className={`tag ${liveness.monitors[m.id].passed && liveness.monitors[m.id].live ? 'real' : 'disputed'}`}
+                    title={`npm run check · ${liveness.generatedAt.slice(0, 16).replace('T', ' ')} UTC · ${liveness.monitors[m.id].fixtures} fixture assertions${liveness.monitors[m.id].failures.length ? ` · failing: ${liveness.monitors[m.id].failures.join('; ')}` : ''}`}>
+                    {liveness.monitors[m.id].passed ? (liveness.monitors[m.id].live ? 'fixture live' : 'vacuous') : 'fixture failing'}
+                  </span>
+                )}
                 <span className="spacer" />
                 {app.met
                   ? <span className="muted small">{now.length} at #{ws.cursor} · {all.length} in full log</span>
@@ -71,6 +87,7 @@ export function Monitors() {
               )}
               <pre className="rule" style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{m.rule}</pre>
               {m.ruling && <p className="ruling"><b>Owner ruling (2026-10-03):</b> {m.ruling}</p>}
+              {m.id === 'C' && <div><div className="section-title">Count-grade claims (not incidents)</div><CountGrade /></div>}
               <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>
                 <span className="muted xs">Needs</span>
                 {m.needs.map((n) => <span key={n} className={`filter ${app.unmet.includes(n) ? '' : 'on'}`} style={{ height: 24, fontSize: 12 }}>{NEED_LABEL(n)}</span>)}

@@ -6,6 +6,7 @@ import {
 import { Record, RefLink, UnavailableRecord } from './Record';
 import { findingLabel, VIEW_LABEL } from './labels';
 import { TYPE_LABEL } from './format';
+import { triage } from '../engine/triage';
 
 const NAV: { group: string; items: { view: View; label: string; icon: ReactNode }[] }[] = [
   { group: 'Observe', items: [
@@ -22,8 +23,9 @@ const NAV: { group: string; items: { view: View; label: string; icon: ReactNode 
 ];
 export function Sidebar() {
   const { view, navigate, findings, source, sourceEntry, ws } = useRecall();
-  const active = findings.filter((f) => f.state === 'active').length;
-  const insufficient = findings.filter((f) => f.state === 'insufficient').length;
+  const tri = triage(findings, ws);
+  const active = tri.open.length;
+  const insufficient = tri.needs.length;
   const real = source?.meta?.origin === 'huggingface';
   return (
     <aside className="sidebar">
@@ -34,8 +36,8 @@ export function Sidebar() {
           {g.items.map((it) => (
             <button key={it.view} className={`nav-item ${view === it.view ? 'active' : ''}`} onClick={() => navigate(it.view)} aria-current={view === it.view ? 'page' : undefined}>
               {it.icon}<span className="nav-text">{it.label}</span>
-              {it.view === 'incidents' && active > 0 && <span className="nav-badge" title={`${active} active`}>{active}</span>}
-              {it.view === 'incidents' && !active && insufficient > 0 && <span className="nav-badge warn" title={`${insufficient} insufficient`}>{insufficient}</span>}
+              {it.view === 'incidents' && active > 0 && <span className="nav-badge" title={`${active} open (contradicted)`}>{active}</span>}
+              {it.view === 'incidents' && !active && insufficient > 0 && <span className="nav-badge warn" title={`${insufficient} unchecked claims`}>{insufficient}</span>}
             </button>
           ))}
         </nav>

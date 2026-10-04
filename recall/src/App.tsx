@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect } from 'react';
 import { RecallProvider } from './ui/store';
 import { useRecall } from './ui/context';
 import { Drawer, Palette, Sidebar, TopBar } from './ui/Shell';
+import { AlertStream } from './ui/AlertStream';
 const Overview = lazy(() => import('./ui/views/Overview').then((m) => ({ default: m.Overview })));
 const Propagation = lazy(() => import('./ui/views/Propagation').then((m) => ({ default: m.Propagation })));
 const TasksView = lazy(() => import('./ui/views/TasksView').then((m) => ({ default: m.TasksView })));
@@ -79,6 +80,7 @@ function Screen() {
       </div>
       <Drawer />
       <Palette />
+      <AlertStream />
     </div>
   );
 }
