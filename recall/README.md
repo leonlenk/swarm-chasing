@@ -73,6 +73,27 @@ stderr is never treated as failure on its own, because a successful `git push` w
 
 **What monitor A means on this data:** an agent said a URL is live/deployed/fixed after an observed check of that exact URL failed, and no passing check of it is on record in between. That is a fact about the record, not a judgement of the agent. The page may have gone live through a deploy that nobody re-checked with a tool RECALL can read. Browser checks leave screenshots, not verdicts.
 
+### SwarmScope store and live Claude Code sessions — `swarm-mcp render recall`
+
+`uv run --directory swarm_mcp swarm-mcp render recall` (from the repo root) writes `public/data/scope/`:
+`index.json`, one explorer payload per store source with messages, one subtask payload per source with artifact
+touches, and `live/<session>.json` for each Claude Code session recorded by the swarm-live hooks. Add `--watch` to keep
+the live sessions current; RECALL re-reads the index every 3 s.
+
+| View | Shows |
+|---|---|
+| **Live sessions** | each recorded session as a delegation tree (main agent → subagents), with a strip of tool calls per agent (failures marked), a run timeline, and the monitor findings for the session. *Open in replay* loads it as a source; while it records, the replay follows the newest step unless you scrub back |
+| **Explorer** | the `render timeline` payload: messages per agent per day with goals along the top and notable moments marked; goal recaps (rising terms, most active, busiest threads, who names whom), moments with their excerpts and evidence ids, agent arcs, and metrics with 95% bands |
+| **Subtasks** | the `render subtasks` payload: subtasks per method (combined, code, title, files, chat, refs) and granularity, named with keywords, on a compressed time axis; links between subtasks, typed handoffs with evidence ids, why a unit sits with its neighbours, and method agreement |
+
+**Live session mapping** (`src/adapters/claudeCode.ts`): a session is mapped onto the AI Village window shape and runs
+through the same adapter, so every verdict, claim and monitor rule applies unchanged. Agent runs (the main session and
+each subagent run) are tasks, and a subagent's task is a prerequisite of the run that spawned it. Bash commands with
+their output are turns, so verdict rules apply. Every tool call is an action. Prompts are human messages. A delegation
+is `@subagent <prompt>` (rule `directive`), and agent text goes through the claim and correction rules. Each event keeps
+its SwarmScope evidence id (`storeId`, shown in the record drawer). `src/data/claude-code-session.json` (synthetic) is
+pinned in `npm run check`.
+
 ### Synthetic demo
 
 `src/data/synthetic-release.json` is a hand-written fixture with 17 events and three agents preparing ledger-api 2.4.0. **It is not an AI Village incident**, and no deployment or publication was executed. It exercises every monitor path, including monitor B and the evidence visibility experiment.

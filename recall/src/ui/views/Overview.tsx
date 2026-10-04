@@ -54,7 +54,7 @@ function NeedsAttention() {
         {sorted.length === 0 && (
           <div className="empty-state">
             <b>Nothing flagged at #{ws.cursor}</b>
-            {source?.meta?.origin === 'huggingface'
+            {source?.meta?.origin === 'huggingface' || source?.meta?.origin === 'live'
               ? 'Monitors only fire on explicit, checkable links (a claim naming a URL and an observed check of that URL).'
               : 'Monitors only see events up to the cursor. Scrub forward or jump to the first discrepancy.'}
           </div>

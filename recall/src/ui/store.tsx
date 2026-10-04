@@ -5,6 +5,8 @@ import { loadSyntheticRelease, parseRecallDocument } from '../adapters/synthetic
 import { adaptAiVillage, readRows } from '../adapters/aiVillageAdapter';
 import { reconstruct, type AnalysisInput } from '../engine/reconstruct';
 import { runMonitors } from '../engine/monitors';
+import { adaptClaudeCodeSession } from '../adapters/claudeCode';
+import type { LiveSession, LiveSessionEntry, ScopeIndex } from '../model/scope';
 
 const synthetic = loadSyntheticRelease();
 const SYNTHETIC_ENTRY: SourceEntry = {
@@ -13,6 +15,36 @@ const SYNTHETIC_ENTRY: SourceEntry = {
 };
 const DATA_BASE = `${import.meta.env.BASE_URL}data/`;
 const PLAY_MS = 1400;
+/** How often the scope index is re-read, to follow live sessions (`swarm-mcp render recall --watch`). */
+const LIVE_POLL_MS = 3000;
+export const LIVE_GROUP = 'Claude Code · live sessions';
+
+async function fetchScope(): Promise<ScopeIndex | null> {
+  try {
+    const res = await fetch(`${DATA_BASE}scope/index.json`, { cache: 'no-cache' });
+    if (!res.ok) return null;
+    const idx = (await res.json()) as ScopeIndex;
+    return idx && idx.v === 1 ? idx : null;
+  } catch {
+    return null;
+  }
+}
+
+function liveEntry(s: LiveSessionEntry): SourceEntry {
+  return {
+    id: `live:${s.id}`, label: s.label, group: LIVE_GROUP, origin: 'live', live: s,
+    description: `${s.synthetic ? 'Synthetic demo recording' : 'Recorded Claude Code session'}${s.folder ? ` · ${s.folder}` : ''}`,
+    window: s.start && s.updated ? { from: s.start, to: s.updated } : undefined,
+    counts: { events: s.actions + s.messages, agents: s.agents },
+    highlight: [s.status === 'running' ? '● Recording now' : null, `${s.subagents} subagent${s.subagents === 1 ? '' : 's'}`, `${s.actions} tool calls`,
+      s.errors ? `${s.errors} failed` : null, s.synthetic ? 'synthetic demo' : null].filter(Boolean).join(' · '),
+    load: async () => {
+      const r = await fetch(`${DATA_BASE}${s.file}`, { cache: 'no-cache' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return adaptClaudeCodeSession((await r.json()) as LiveSession);
+    },
+  };
+}
 const NO_WITHHELD: ReadonlySet<string> = new Set();
 
 // ---------- routing: #/view/param?src=…&t=… ----------
@@ -64,9 +96,11 @@ export function RecallProvider({ children }: { children: ReactNode }) {
   const [drawer, setDrawer] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [reviewed, setReviewed] = useState<Set<string>>(() => new Set(readLocal<string[]>('recall.reviewed', [])));
+  const [scope, setScope] = useState<ScopeIndex | null>(null);
+  const [following, setFollowing] = useState(true);
   const pendingT = useRef<number | undefined>(initial.t);
 
-  const loadEntry = useCallback(async (entry: SourceEntry, keepCursor = false) => {
+  const loadEntry = useCallback(async (entry: SourceEntry, keepCursor = false): Promise<boolean> => {
     setLoading(`Loading ${entry.label}…`);
     setError(null);
     try {
@@ -81,8 +115,10 @@ export function RecallProvider({ children }: { children: ReactNode }) {
       pendingT.current = undefined;
       setCursor(Math.max(first, Math.min(last, t)));
       setRoute((r) => ({ ...r, src: s.id }));
+      return true;
     } catch (e) {
       setError(`Could not load ${entry.label}: ${e instanceof Error ? e.message : String(e)}`);
+      return false;
     } finally {
       setLoading(null);
     }
@@ -110,14 +146,56 @@ export function RecallProvider({ children }: { children: ReactNode }) {
           }));
         }
       } catch { /* no HF data generated yet */ }
+      const idx = await fetchScope();
       if (cancelled) return;
-      const all = [...hf, SYNTHETIC_ENTRY];
+      setScope(idx);
+      const live = (idx?.live.sessions ?? []).map(liveEntry);
+      const all = [...hf, ...live, SYNTHETIC_ENTRY];
       setSources(all);
+      // Start on the requested source; if it cannot be read (e.g. a slice built by another RECALL version), fall back
+      // to the next source that loads, keeping the error visible as a banner rather than a blank screen.
       const wanted = all.find((s) => s.id === initial.src) ?? all[0];
-      await loadEntry(wanted, true);
+      const order = [wanted, ...all.filter((s) => s !== wanted)];
+      let firstError: string | null = null;
+      for (const entry of order) {
+        if (cancelled) return;
+        if (await loadEntry(entry, entry === wanted)) break;
+        firstError ??= `Could not load ${entry.label}; showing the next readable source.`;
+      }
+      if (firstError) setError(firstError);
     })();
     return () => { cancelled = true; };
   }, [loadEntry, initial]);
+
+  // Follow live sessions: re-read the scope index; when the open session recorded more, reload it in place
+  // (cursor stays put unless following, which keeps it on the newest record).
+  const sourceRef = useRef<DataSource | null>(null);
+  const followRef = useRef(following);
+  const cursorAtEnd = useRef(true);
+  useEffect(() => {
+    if (!scope) return;
+    let off = false;
+    const tick = async () => {
+      const idx = await fetchScope();
+      if (off || !idx || idx.generatedAt === scope.generatedAt) return;
+      setScope(idx);
+      setSources((prev) => [...prev.filter((x) => x.origin !== 'live'), ...idx.live.sessions.map(liveEntry)]
+        .sort((a, b) => (a.origin === 'synthetic' ? 1 : 0) - (b.origin === 'synthetic' ? 1 : 0)));
+      const cur = sourceRef.current;
+      const was = cur?.meta?.live;
+      const now = cur && idx.live.sessions.find((x) => `live:${x.id}` === cur.id);
+      if (!cur || !was || !now || now.updated === was.updated) return;
+      try {
+        const next = await liveEntry(now).load();
+        if (off || sourceRef.current?.id !== next.id) return;
+        const end = next.events[next.events.length - 1]?.sequence ?? 0;
+        setSource(next);
+        setCursor((c) => (followRef.current && cursorAtEnd.current ? end : Math.min(c, end)));
+      } catch { /* a half-written session file: the next tick retries */ }
+    };
+    const t = setInterval(tick, LIVE_POLL_MS);
+    return () => { off = true; clearInterval(t); };
+  }, [scope]);
 
   // Keep the hash in sync (replaceState: scrubbing shouldn't flood history).
   useEffect(() => {
@@ -148,6 +226,11 @@ export function RecallProvider({ children }: { children: ReactNode }) {
   const events = useMemo(() => source?.events ?? [], [source]);
   const minSeq = events[0]?.sequence ?? 0;
   const maxSeq = events[events.length - 1]?.sequence ?? 0;
+  useEffect(() => {
+    sourceRef.current = source;
+    followRef.current = following;
+    cursorAtEnd.current = cursor >= maxSeq;
+  }, [source, following, cursor, maxSeq]);
   // Window parts keep original sequence numbers, so sequences can have gaps: snap to a record that exists,
   // in the direction of travel.
   const seqs = useMemo(() => events.map((e) => e.sequence), [events]);
@@ -220,6 +303,7 @@ export function RecallProvider({ children }: { children: ReactNode }) {
 
   const value: RecallState = {
     sources, source, sourceEntry: sources.find((s) => s.id === source?.id) ?? null, loading, error, selectSource, importFile,
+    scope, following, setFollowing,
     view: route.view, param: route.param, navigate,
     cursor, minSeq, maxSeq, seek, playing: isPlaying, togglePlay, replay,
     experimentOn: experimentActive, setExperimentOn, input, ws, findings, allFindings, agents, name,

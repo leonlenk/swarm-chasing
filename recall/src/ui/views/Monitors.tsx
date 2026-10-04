@@ -143,7 +143,7 @@ export function Monitors() {
           <h3>Source</h3>
           <dl className="kv">
             <dt>Label</dt><dd>{source?.label}</dd>
-            <dt>Origin</dt><dd>{meta?.origin === 'huggingface' ? 'Hugging Face dataset (real records)' : meta?.origin === 'file' ? 'Imported file' : 'Synthetic demonstration'}</dd>
+            <dt>Origin</dt><dd>{meta?.origin === 'huggingface' ? 'Hugging Face dataset (real records)' : meta?.origin === 'file' ? 'Imported file' : meta?.origin === 'live' ? (meta.live?.synthetic ? 'swarm-live demo recording (synthetic)' : 'Claude Code session recorded by the swarm-live hooks') : 'Synthetic demonstration'}</dd>
             {meta?.dataset && <><dt>Dataset</dt><dd><a className="link" href={`https://huggingface.co/datasets/${meta.dataset}`} target="_blank" rel="noreferrer">{meta.dataset}</a></dd></>}
             {meta?.goal && <><dt>Village goal</dt><dd>{meta.goal}</dd></>}
             {(meta?.window ?? sourceEntry?.window) && <><dt>Window</dt><dd className="mono">{(meta?.window ?? sourceEntry!.window)!.from} → {(meta?.window ?? sourceEntry!.window)!.to}</dd></>}

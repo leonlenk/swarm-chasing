@@ -24,6 +24,6 @@ dist-ssr
 *.sw?
 
 # AI Village extracts: research-use terms, do not commit
-public/data/
-.hf/
+public/data
+.hf
 dist-preview

@@ -169,6 +169,8 @@ interface BaseEvent<T extends EventType> {
   room?: string;
   /** Adapter rule 'refs': URLs and file paths named in the record's text, command or output (normalized). */
   refs?: string[];
+  /** SwarmScope evidence id of the underlying record (e.g. `claude-code:msg:…`), citable with findings_record. */
+  storeId?: string;
 }
 
 export type RecallEvent = { [K in EventType]: BaseEvent<K> }[EventType];
@@ -190,13 +192,14 @@ export interface ReferenceSeen {
 export interface DataSource {
   id: string;
   label: string;
-  kind: 'synthetic' | 'ai-village';
+  kind: 'synthetic' | 'ai-village' | 'claude-code';
   description: string;
   agents: Agent[];
   events: RecallEvent[];
   /** Provenance of the whole source: where it came from and which slice it covers. */
   meta?: {
-    origin: 'synthetic' | 'huggingface' | 'file';
+    /** 'live': a Claude Code session recorded by the swarm-live hooks (via `swarm-mcp render recall`). */
+    origin: 'synthetic' | 'huggingface' | 'file' | 'live';
     dataset?: string;
     citation?: string;
     window?: { from: string; to: string };
@@ -207,6 +210,8 @@ export interface DataSource {
     notes?: string[];
     /** Set when a window was split to respect the event cap. */
     part?: { parent: string; parentLabel: string; index: number; count: number; carried: number; carriedActions?: number; inRange: number };
+    /** Live sources: the recorded session, whether it is still running, and whether it is a synthetic demo recording. */
+    live?: { session: string; status: 'running' | 'stopped'; updated: string | null; synthetic: boolean; folder: string | null };
   };
   /**
    * Lightweight reference_seen records carried into a window part: every URL/path named in a message or

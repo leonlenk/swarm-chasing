@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useRecall, type View } from './context';
 import {
-  IBranch, IChevron, IDb, IDoc, IExternal, IHome, IPulse, ISearch, IShield, ITasks, IUpload, IUsers, IX, Logo,
+  IBranch, IChevron, IDb, IDoc, IExternal, IGrid, IHome, ILive, IMap, IPulse, ISearch, IShield, ITasks, IUpload, IUsers, IX, Logo,
 } from './icons';
+import { copyText } from './scopeData';
 import { Record, RefLink, UnavailableRecord } from './Record';
 import { findingLabel, VIEW_LABEL } from './labels';
 import { TYPE_LABEL } from './format';
@@ -10,6 +11,7 @@ import { triage } from '../engine/triage';
 
 const NAV: { group: string; items: { view: View; label: string; icon: ReactNode }[] }[] = [
   { group: 'Observe', items: [
+    { view: 'sessions', label: 'Live sessions', icon: <ILive /> },
     { view: 'overview', label: 'Overview', icon: <IHome /> },
     { view: 'propagation', label: 'Propagation', icon: <IBranch /> },
     { view: 'tasks', label: 'Tasks', icon: <ITasks /> },
@@ -21,13 +23,20 @@ const NAV: { group: string; items: { view: View; label: string; icon: ReactNode 
     { view: 'monitors', label: 'Monitors', icon: <IPulse /> },
     { view: 'evidence', label: 'Evidence', icon: <IDoc /> },
   ] },
+  { group: 'SwarmScope store', items: [
+    { view: 'explorer', label: 'Explorer', icon: <IMap /> },
+    { view: 'subtasks', label: 'Subtasks', icon: <IGrid /> },
+  ] },
 ];
+
+const ORIGIN_LABEL = { huggingface: 'Real records · Hugging Face', file: 'Imported file', synthetic: 'Synthetic demonstration', live: 'Claude Code · swarm-live' } as const;
 export function Sidebar() {
-  const { view, navigate, findings, source, sourceEntry, ws } = useRecall();
+  const { view, navigate, findings, source, sourceEntry, ws, scope } = useRecall();
+  const recording = (scope?.live.sessions ?? []).filter((s) => s.status === 'running').length;
   const tri = triage(findings, ws);
   const active = tri.open.length;
   const insufficient = tri.needs.length;
-  const real = source?.meta?.origin === 'huggingface';
+  const real = source?.meta?.origin === 'huggingface' || (source?.meta?.origin === 'live' && !source.meta.live?.synthetic);
   return (
     <aside className="sidebar">
       <div className="logo"><Logo /><span className="logo-word">RECALL</span></div>
@@ -39,15 +48,17 @@ export function Sidebar() {
               {it.icon}<span className="nav-text">{it.label}</span>
               {it.view === 'incidents' && active > 0 && <span className="nav-badge" title={`${active} open (contradicted)`}>{active}</span>}
               {it.view === 'incidents' && !active && insufficient > 0 && <span className="nav-badge warn" title={`${insufficient} unchecked claims`}>{insufficient}</span>}
+              {it.view === 'sessions' && recording > 0 && <span className="nav-badge live" title={`${recording} session${recording === 1 ? '' : 's'} recording now`}><span className="live-dot on" />{recording}</span>}
+              {it.view === 'sessions' && !recording && (scope?.live.sessions.length ?? 0) > 0 && <span className="nav-count">{scope!.live.sessions.length}</span>}
             </button>
           ))}
         </nav>
       ))}
       <div className="sidebar-foot">
         <button className="source-health" onClick={() => navigate('monitors')} title="Source and monitor details">
-          <span className={`health-dot ${real ? '' : 'demo'}`} />
+          <span className={`health-dot ${real ? '' : 'demo'} ${source?.meta?.live?.status === 'running' ? 'pulse' : ''}`} />
           <div>
-            <b>{real ? 'Real records · Hugging Face' : source?.meta?.origin === 'file' ? 'Imported file' : 'Synthetic demonstration'}</b>
+            <b>{source?.meta?.live?.synthetic ? 'Demo recording · swarm-live' : ORIGIN_LABEL[source?.meta?.origin ?? 'synthetic']}</b>
             <span>{source ? `${source.events.length} events · ${source.agents.length} agents` : 'Loading…'}</span>
             {sourceEntry?.window && <span>{sourceEntry.window.from.slice(0, 10)}</span>}
             {ws.withheld.length > 0 && <span style={{ color: 'var(--withheld)' }}>{ws.withheld.length} record withheld</span>}
@@ -73,12 +84,12 @@ function SourceMenu() {
   }, [open]);
   const groups = [...new Set(sources.map((s) => s.group))];
   const cur = sources.find((s) => s.id === source?.id);
-  const kind = source?.meta?.origin === 'huggingface' ? 'real' : source?.meta?.origin === 'file' ? 'file' : 'demo';
+  const kind = source?.meta?.origin === 'huggingface' ? 'real' : source?.meta?.origin === 'file' ? 'file' : source?.meta?.origin === 'live' ? (source.meta.live?.synthetic ? 'demo' : 'live') : 'demo';
   return (
     <div className="menu-wrap" ref={ref}>
       <button className="source-btn" onClick={() => setOpen((o) => !o)} aria-haspopup="listbox" aria-expanded={open}>
         <IDb />
-        <span className={`tag ${kind === 'real' ? 'real' : 'demo'}`}>{kind === 'real' ? 'Real' : kind === 'file' ? 'File' : 'Demo'}</span>
+        <span className={`tag ${kind === 'real' || kind === 'live' ? 'real' : 'demo'}`}>{kind === 'real' ? 'Real' : kind === 'live' ? 'Live' : kind === 'file' ? 'File' : 'Demo'}</span>
         <span className="lbl">{cur?.label ?? source?.label ?? 'Choose data source'}</span>
         <IChevron />
       </button>
@@ -90,7 +101,7 @@ function SourceMenu() {
               {sources.filter((s) => s.group === g).map((s) => (
                 <button key={s.id} role="option" aria-selected={s.id === source?.id} className={`menu-item ${s.id === source?.id ? 'on' : ''}`}
                   onClick={() => { selectSource(s.id); setOpen(false); }}>
-                  <b>{s.label}{s.counts?.findingsActive ? <span className="state-pill state-active">{s.counts.findingsActive} active</span> : null}</b>
+                  <b>{s.live && <span className={`live-dot ${s.live.status === 'running' ? 'on' : ''}`} />}{s.label}{s.counts?.findingsActive ? <span className="state-pill state-active">{s.counts.findingsActive} active</span> : null}</b>
                   <span>
                     {[s.window ? `${s.window.from.slice(0, 16).replace('T', ' ')} → ${s.window.to.slice(11, 16)} UTC` : null,
                       s.counts?.events ? `${s.counts.events} events` : null,
@@ -217,6 +228,28 @@ function PaletteDialog() {
   );
 }
 
+/** The SwarmScope evidence id behind a RECALL record: explicit for live sources; AI Village chat ids map 1:1. */
+function storeIdOf(e: { id: string; storeId?: string }): string | null {
+  if (e.storeId) return e.storeId;
+  const m = /^chat\/([0-9a-f-]{36})(?:#\d+)?$/.exec(e.id);
+  return m ? `village:msg:${m[1]}` : null;
+}
+
+function StoreIdRow({ id }: { id: string | null }) {
+  const [copied, setCopied] = useState(false);
+  if (!id) return null;
+  return (
+    <>
+      <dt>Store id</dt>
+      <dd>
+        <button className="link mono small" title="Copy: cite with findings_record, read with core_get (swarm MCP server)"
+          onClick={async () => { setCopied(await copyText(id)); setTimeout(() => setCopied(false), 1400); }}>{id}</button>
+        {copied && <span className="muted xs"> copied</span>}
+      </dd>
+    </>
+  );
+}
+
 /** Source-record drawer: the exact record, its references, and who cites it. */
 export function Drawer() {
   const { drawer, openRecord, ws, agents, name, navigate, seek, source } = useRecall();
@@ -262,6 +295,7 @@ export function Drawer() {
                 {e.evidenceRefs.length > 0 && <><dt>Cites</dt><dd className="refs">{e.evidenceRefs.map((r) => <RefLink key={r} id={r} status={ws.refStatus(r)} onInspect={openRecord} />)}</dd></>}
                 {source?.meta?.dataset && <><dt>Dataset</dt><dd>{source.meta.dataset}</dd></>}
                 {e.sourceUrl && <><dt>Original</dt><dd><a href={e.sourceUrl} target="_blank" rel="noreferrer" className="link">Open in AI Village <IExternal /></a></dd></>}
+                <StoreIdRow id={storeIdOf(e)} />
               </dl>
               {e.type === 'claim' && <button className="btn btn-secondary btn-sm" onClick={() => { openRecord(null); navigate('propagation', e.payload.claimId); }}>Trace claim lineage →</button>}
               {e.type === 'correction' && <button className="btn btn-secondary btn-sm" onClick={() => { openRecord(null); navigate('propagation', e.payload.supersedes); }}>See who acknowledged this correction →</button>}

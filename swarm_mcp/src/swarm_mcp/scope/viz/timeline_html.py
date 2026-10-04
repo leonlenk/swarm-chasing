@@ -136,6 +136,65 @@ def render_timeline(
 ) -> dict[str, Any]:
     """Render the explorer HTML to ``out_path`` and return a summary dict.
 
+    The arguments are those of ``build_timeline``, which computes the page's data; this only writes the page.
+    """
+    payload, meta = build_timeline(
+        db_path,
+        top=top,
+        since=since,
+        until=until,
+        channel=channel,
+        source=source,
+        scrub=scrub,
+        snippet_chars=snippet_chars,
+        max_marks=max_marks,
+        day_one=day_one,
+        annotations=annotations,
+        sweeps=sweeps,
+        explore=explore,
+    )
+    out = Path(out_path).expanduser()
+    page = _page(payload, meta)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(page, encoding="utf-8", errors="replace")
+    days = payload["days"]
+    return {
+        "out": str(out),
+        "agents": [ln["name"] for ln in payload["lanes"]],
+        "marks": meta["marks"],
+        "sampled": meta["sampled"],
+        "total_messages_in_filter": meta["total"],
+        "range": meta["range"],
+        "bytes": out.stat().st_size,
+        "messages_in_lanes": meta["lane_total"],
+        "human_messages_excluded": meta["humans"],
+        "max_marks": meta["max_marks"],
+        "snippet_chars": meta["snippet_chars"],
+        "context_messages": meta["context"],
+        "periods": len(payload["periods"]),
+        "day_one": days["day_one"] if days else None,
+    }
+
+
+def build_timeline(
+    db_path: Path | str,
+    *,
+    top: int = 12,
+    since: str | None = None,
+    until: str | None = None,
+    channel: str | None = None,
+    source: str | None = None,
+    scrub: Scrubber | None = None,
+    snippet_chars: int = 160,
+    max_marks: int = DEFAULT_MAX_MARKS,
+    day_one: str | bool | None = None,
+    annotations: list[dict[str, Any]] | None = None,
+    sweeps: list[Path | str] | None = None,
+    explore: bool = True,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The explorer's data: ``(payload, meta)``. ``render_timeline`` embeds it in the HTML page; ``render recall``
+    writes the same payload for RECALL's Explorer view.
+
     ``since``/``until`` are already-parsed UTC strings (``toolkit.parse_time``),
     the window is [since, until). ``scrub=None`` means the default (enabled)
     ``Scrubber``; pass ``Scrubber(enabled=False)`` to disable masking.
@@ -151,7 +210,6 @@ def render_timeline(
     max_marks = max(1, int(max_marks))
     snippet_chars = max(0, min(int(snippet_chars), MAX_SNIPPET_CHARS))
     scrub = scrub if scrub is not None else Scrubber()
-    out = Path(out_path).expanduser()
 
     with db.connect(Path(db_path)) as store:
         if source:
@@ -442,26 +500,7 @@ def render_timeline(
         "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     payload["meta"] = meta
-    page = _page(payload, meta)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(page, encoding="utf-8", errors="replace")
-
-    return {
-        "out": str(out),
-        "agents": [ln["name"] for ln in lanes],
-        "marks": marks,
-        "sampled": sampled,
-        "total_messages_in_filter": total,
-        "range": rng,
-        "bytes": out.stat().st_size,
-        "messages_in_lanes": lane_total,
-        "human_messages_excluded": humans,
-        "max_marks": max_marks,
-        "snippet_chars": snippet_chars,
-        "context_messages": len(ctx_rows),
-        "periods": len(payload["periods"]),
-        "day_one": day_spec["day_one"] if day_spec else None,
-    }
+    return payload, meta
 
 
 # --------------------------------------------------------------------------- data for the linked views

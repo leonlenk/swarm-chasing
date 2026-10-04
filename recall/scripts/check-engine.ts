@@ -18,6 +18,8 @@ import { bucketOf, remediationFor } from '../src/engine/triage';
 import { recheckSuggestions, subjectIncidents, swarmRates } from '../src/engine/subjects';
 const ws0 = (w: ReturnType<typeof reconstruct>, claimId: string) => w.claims.get(claimId)?.subject?.artifact ?? '';
 import type { DataSource } from '../src/model/types';
+import type { LiveSession } from '../src/model/scope';
+import { adaptClaudeCodeSession } from '../src/adapters/claudeCode';
 
 const ROOT = join(import.meta.dirname, '..');
 const args = process.argv.slice(2);
@@ -291,6 +293,36 @@ for (const id of [...onDisk].sort()) if (!registry.some((m) => m.id === id) && r
 
 // ---------------------------------------------------------------- 3. integration
 runFixture('integration', 'src/data/synthetic-release.json', load('src/data/synthetic-release.json'));
+
+// ---------------------------------------------------------------- 3b. Claude Code sessions (swarm-live, anand/live-plugin)
+// src/data/claude-code-session.json: a synthetic recording (swarm_mcp/examples/live_demo.py) as `render recall` writes it.
+{
+  const doc = JSON.parse(readFileSync(join(ROOT, 'src/data/claude-code-session.json'), 'utf8')) as LiveSession;
+  const src = parseRecallDocument(JSON.parse(JSON.stringify(adaptClaudeCodeSession(doc))));
+  const ev = src.events;
+  const last = ev[ev.length - 1].sequence;
+  const claim = ev.find((e) => e.type === 'claim');
+  const fA = (cursor: number) => runMonitors(world(src, cursor), ['A']);
+  record('claude-code', 'the session validates as a RECALL document', ev.length > 0);
+  record('claude-code', 'every event cites its SwarmScope evidence id', ev.every((e) => e.type === 'dependency_created' || e.storeId?.startsWith('claude-code:')),
+    ev.filter((e) => !e.storeId).map((e) => e.id).slice(0, 3).join(', '));
+  record('claude-code', 'each subagent run is a prerequisite of the run that spawned it (3 delegations)',
+    ev.filter((e) => e.type === 'dependency_created').length === 3);
+  const verdicts = ev.filter((e) => e.type === 'tool_result').map((e) => `${e.payload.rule}:${e.payload.outcome}`);
+  record('claude-code', 'Bash output becomes verdicts: failed pytest, 404, then 200',
+    JSON.stringify(verdicts) === JSON.stringify(['test-summary:fail', 'http-status:fail', 'http-status:pass']), verdicts.join(' '));
+  record('claude-code', 'the main agent’s “docs are live” is a claim on the URL (claim-sentence)',
+    claim?.type === 'claim' && claim.payload.rule === 'claim-sentence' && claim.payload.subject?.artifact === 'https://calc-docs.example.dev/guide');
+  const atClaim = claim ? fA(claim.sequence) : [];
+  record('claude-code', 'A is active at the claim (a subagent’s check of the same URL had failed)', atClaim.length === 1 && atClaim[0].state === 'active',
+    atClaim.map((f) => f.state).join());
+  const atEnd = fA(last);
+  record('claude-code', 'A resolves after the main agent’s own passing re-check', atEnd.length === 1 && atEnd[0].state === 'resolved', atEnd.map((f) => f.state).join());
+  record('claude-code', 'delegations to subagents are directives addressed to them',
+    ev.some((e) => e.type === 'directive' && e.payload.to.some((t) => t.endsWith(':t1'))));
+  record('claude-code', 'run boundaries are worded for agent runs, not computer-use sessions',
+    !ev.some((e) => /Computer-use session/.test(e.text)));
+}
 
 // ---------------------------------------------------------------- 4. regression
 interface RegCase { name: string; slice: string; monitor?: string; claimId?: string; claimEventId?: string; subject?: string; expect?: Record<string, 'none' | 'allowed'>; reason?: string; state: 'active' | 'resolved' | 'insufficient' | 'none' }

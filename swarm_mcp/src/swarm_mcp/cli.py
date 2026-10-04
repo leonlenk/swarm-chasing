@@ -3,7 +3,8 @@
     swarm-mcp                              run the MCP server on stdio (what Claude Code launches)
     swarm-mcp info [--json]                modules, sources, findings health and config (exit 1 on bad findings)
     swarm-mcp add <path> [options]         add a dataset to the SwarmScope store (idempotent)
-    swarm-mcp render <view> [options]      write a self-contained HTML view (views: timeline, subtasks)
+    swarm-mcp render <view> [options]      write a self-contained HTML view (views: timeline, subtasks), or
+                                           the data for the RECALL UI (view: recall)
     swarm-mcp export --out DIR [filters]   export a redacted subset of the store, then check it
 
 ``add --adapter auto`` (the default) picks the adapter from the path: ``--mapping``
@@ -459,6 +460,51 @@ def _subtasks_run(args: argparse.Namespace, config: Config) -> Any:
     )
 
 
+def _recall_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--top", type=int, default=12, help="explorer: number of agents (by message count) per source")
+    p.add_argument("--max-marks", type=int, default=12_000, help="explorer: messages kept for hover per source")
+    p.add_argument(
+        "--recordings", help="swarm-live recordings db (default: SWARM_LIVE_DB, the plugin's, ~/.swarm-live)"
+    )
+    p.add_argument("--no-explorer", action="store_true", help="skip the explorer payloads")
+    p.add_argument("--no-subtasks", action="store_true", help="skip the subtask payloads")
+    p.add_argument(
+        "--watch",
+        action="store_true",
+        help="after writing, keep rewriting the live sessions whenever the recordings change (Ctrl-C to stop)",
+    )
+
+
+def _recall_run(args: argparse.Namespace, config: Config) -> Any:
+    from swarm_mcp.live.store import default_db
+    from swarm_mcp.scope.viz.recall_bundle import render_recall, watch
+    from swarm_mcp.toolkit import Scrubber
+
+    out = resolve_output(args.out) if args.out else find_project_root(Path.cwd()) / "recall" / "public" / "data"
+    recordings = Path(args.recordings).expanduser() if args.recordings else default_db()
+    scrub = Scrubber(config.scrub, config.email_allowlist)
+    res = render_recall(
+        _db(args, config),
+        out,
+        recordings=recordings,
+        scrub=scrub,
+        sources=[args.source] if args.source else None,
+        top=args.top,
+        max_marks=args.max_marks,
+        explorer=not args.no_explorer,
+        subtasks=not args.no_subtasks,
+        progress=_say,
+    )
+    if args.watch:
+        print(json.dumps(res, indent=2, default=str))
+        _say(f"watching {recordings} (Ctrl-C to stop)")
+        try:
+            watch(_db(args, config), out, recordings=recordings, scrub=scrub, progress=_say)
+        except KeyboardInterrupt:
+            pass
+    return res
+
+
 RENDER_VIEWS: dict[str, RenderView] = {
     "timeline": (
         "HTML explorer: activity per agent over time (Village days when the store has village goals), who names "
@@ -467,6 +513,12 @@ RENDER_VIEWS: dict[str, RenderView] = {
         _timeline_run,
     ),
     "subtasks": ("HTML subtask map: inferred clusters of work, handoffs between agents", _subtasks_args, _subtasks_run),
+    "recall": (
+        "data for the RECALL UI (recall/): explorer and subtask payloads per source plus the recorded Claude Code "
+        "sessions, under <out>/scope/ (--out is a directory; default recall/public/data)",
+        _recall_args,
+        _recall_run,
+    ),
 }
 
 

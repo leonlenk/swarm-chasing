@@ -11,6 +11,9 @@ const Incidents = lazy(() => import('./ui/views/Incidents').then((m) => ({ defau
 const Monitors = lazy(() => import('./ui/views/Monitors').then((m) => ({ default: m.Monitors })));
 const Swarm = lazy(() => import('./ui/views/Swarm').then((m) => ({ default: m.Swarm })));
 const Evidence = lazy(() => import('./ui/views/Evidence').then((m) => ({ default: m.Evidence })));
+const Sessions = lazy(() => import('./ui/views/Sessions').then((m) => ({ default: m.Sessions })));
+const Explorer = lazy(() => import('./ui/views/Explorer').then((m) => ({ default: m.Explorer })));
+const Subtasks = lazy(() => import('./ui/views/Subtasks').then((m) => ({ default: m.Subtasks })));
 import { Logo } from './ui/icons';
 
 function useShortcuts() {
@@ -46,7 +49,10 @@ function Screen() {
     );
   }
 
-  const crumb = view === 'propagation' || view === 'incidents' || view === 'tasks' || view === 'agents' ? param : undefined;
+  const crumb = view === 'propagation' || view === 'incidents' || view === 'tasks' || view === 'agents' || view === 'explorer' || view === 'subtasks' ? param : undefined;
+  // Store-wide views are about SwarmScope sources, not the loaded replay source: no replay banners there.
+  const storeView = view === 'explorer' || view === 'subtasks' || view === 'sessions';
+  const live = source.meta?.live;
   return (
     <div className="shell">
       <Sidebar />
@@ -54,12 +60,20 @@ function Screen() {
         <TopBar crumb={crumb} />
         {loading && <div className="loading-bar" />}
         {error && <div className="error-banner">{error}</div>}
-        {source.meta?.origin === 'synthetic' && (
+        {!storeView && live && (
+          <div className={`demo-banner live-banner ${live.status === 'running' ? 'on' : ''}`}>
+            <span className={`live-dot ${live.status === 'running' ? 'on' : ''}`} />
+            <span className={`tag ${live.synthetic ? 'demo' : 'real'}`}>{live.synthetic ? 'Synthetic demo recording' : 'Live · Claude Code'}</span>
+            {live.status === 'running' ? 'This session is still recording; new steps appear as they happen.' : 'Recorded Claude Code session (main agent and subagents).'}
+            {live.synthetic && <span className="muted"> Written by examples/live_demo.py through the real recorder; nothing in it ran.</span>}
+          </div>
+        )}
+        {!storeView && source.meta?.origin === 'synthetic' && (
           <div className="demo-banner"><span className="tag demo">Synthetic demonstration</span>Hand-written fixture for illustration. Not an AI Village incident; no deployments or publications were executed.
             {!sources.some((x) => x.origin === 'huggingface') && <span className="muted"> · Real AI Village slices appear in the source menu after <span className="mono">npm run fetch:ai-village</span>.</span>}
           </div>
         )}
-        {experimentOn && source.experiment && (
+        {!storeView && experimentOn && source.experiment && (
           <div className="experiment-banner">
             <span className="exp-badge">Experiment on</span>
             <span>Withheld from analysis: <span className="mono">{ws.withheld.length ? ws.withheld.join(', ') : source.experiment.withhold.join(', ')}</span> — {source.experiment.label}.</span>
@@ -77,6 +91,9 @@ function Screen() {
           {view === 'monitors' && <Monitors />}
           {view === 'evidence' && <Evidence />}
           {view === 'swarm' && <Swarm />}
+          {view === 'sessions' && <Sessions />}
+          {view === 'explorer' && <Explorer />}
+          {view === 'subtasks' && <Subtasks />}
           </Suspense>
         </main>
       </div>
