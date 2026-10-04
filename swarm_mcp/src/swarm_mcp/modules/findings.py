@@ -14,6 +14,7 @@ from typing import Annotated, Any, Literal
 from pydantic import Field
 
 from swarm_mcp.scope import findings as lib
+from swarm_mcp.toolkit import HARD_MAX_CHARS, MIN_MAX_CHARS, ResponseBudget
 
 NAME = "findings"
 DESCRIPTION = (
@@ -106,7 +107,13 @@ def register(mcp, ctx) -> None:
         ] = None,
         seed: Annotated[int, Field(description="Random seed for `sample`; same seed, same sample.")] = 0,
         max_chars: Annotated[
-            int | None, Field(description="With sample: max chars per evidence snippet (default 200).")
+            int | None,
+            Field(
+                description=f"With sample: max chars per evidence snippet ({MIN_MAX_CHARS}..{HARD_MAX_CHARS}, "
+                f"default {SNIPPET_CHARS}).",
+                ge=MIN_MAX_CHARS,
+                le=HARD_MAX_CHARS,
+            ),
         ] = None,
     ) -> dict[str, Any]:
         """List recorded findings, newest first, with their evidence ids. With `sample`, return a seeded random
@@ -120,17 +127,21 @@ def register(mcp, ctx) -> None:
                 picked = lib.spotcheck_sample(
                     store, kind="findings", n=n, seed=seed, findings_dir=findings_dir, status=status
                 )
-            snip = SNIPPET_CHARS if max_chars is None else min(SNIPPET_CHARS, max_chars)
-            items = [
-                {
+            snip = SNIPPET_CHARS if max_chars is None else max_chars
+            items, budget = [], ResponseBudget()
+            for s in picked:
+                item = {
                     "line": s["line"],
                     "finding": _wrap_finding(ctx, s["finding"]),
                     "evidence": [_wrap_evidence(ctx, v, snip) for v in s["evidence"]],
                 }
-                for s in picked
-            ]
+                if not budget.admit(item):
+                    break
+                items.append(item)
             notes = [x for x in [note] if x]
-            if len(items) < n:
+            if budget.exhausted:
+                notes.append(budget.note("lower sample or max_chars"))
+            elif len(items) < n:
                 notes.append(f"only {len(items)} findings matched; returned all of them")
             return {"sample": n, "seed": seed, "returned": len(items), "items": items, "notes": notes}
         limit, note = ctx.limit(limit, default=50)
@@ -141,13 +152,21 @@ def register(mcp, ctx) -> None:
                 f"{len(out['parse_errors'])} corrupt line(s) in findings.jsonl were skipped; "
                 "run `swarm-mcp info` for details."
             )
-        if out["has_more"]:
+        findings, budget = [], ResponseBudget()
+        for f in out["findings"]:
+            wrapped = _wrap_finding(ctx, f)
+            if not budget.admit(wrapped):
+                break
+            findings.append(wrapped)
+        if budget.exhausted:
+            notes.append(budget.note(f"showing {len(findings)} of {out['total_matching']}; filter by status"))
+        elif out["has_more"]:
             notes.append(f"showing {out['returned']} of {out['total_matching']}; raise limit to see more")
         return {
-            "findings": [_wrap_finding(ctx, f) for f in out["findings"]],
+            "findings": findings,
             "total_matching": out["total_matching"],
-            "returned": out["returned"],
-            "has_more": out["has_more"],
+            "returned": len(findings),
+            "has_more": len(findings) < out["total_matching"],
             "parse_errors": out["parse_errors"],
             "findings_file": str(lib.findings_file(findings_dir)),
             "notes": notes,

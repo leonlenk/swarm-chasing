@@ -133,3 +133,43 @@ def test_cli_exit_codes(csv_root, tmp_path, capsys):
     with pytest.raises(SystemExit) as e:
         cli.main(["add", str(csv_root), "--mapping", str(tmp_path / "missing.json"), "--dry-run"])
     assert e.value.code == 2
+
+
+def _padded_ids(root):
+    root.mkdir(parents=True)
+    rows = [{"id": f"{i} ", "ts": f"2024-01-0{i}T00:00:00Z", "who": "a", "body": f"hello {i}", "re": f" {i - 1}"}
+            for i in range(1, 6)]  # fmt: skip
+    (root / "msgs.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    spec = {
+        "source": "pad",
+        "agents": {"derive_from_actors": True},
+        "records": [{"from": "msgs.jsonl", "kind": "msg", "local_id": "id", "time": "ts", "actor": "who",
+                     "text": "body", "reply_to": "re"}],
+    }  # fmt: skip
+    return spec
+
+
+def test_ids_with_stray_whitespace_are_stripped_and_resolve(tmp_path):
+    """Regression: an id "42 " was stored with the space, but citations are parsed (stripped), so the
+    id never resolved while the check still passed."""
+    from swarm_mcp.scope import db, evidence
+    from swarm_mcp.scope.ingest import ingest_mapped
+
+    spec = _padded_ids(tmp_path / "pad")
+    r = run_check(spec, tmp_path / "pad")
+    assert r["status"] == "pass", format_report(r)
+    (tmp_path / "pad.json").write_text(json.dumps(spec))
+    ingest_mapped(tmp_path / "pad.json", tmp_path / "pad", tmp_path / "s.duckdb")
+    with db.connect(tmp_path / "s.duckdb") as s:
+        ids = [row["evidence_id"] for row in s.all("SELECT evidence_id FROM messages ORDER BY evidence_id")]
+        assert ids == [f"pad:msg:msg/{i}" for i in range(1, 6)]
+        assert evidence.resolve(s, "pad:msg:msg/3")["record"]["reply_to"] == "pad:msg:msg/2"
+
+
+def test_check_flags_ids_that_do_not_round_trip(tmp_path, monkeypatch):
+    from swarm_mcp.setup import mapping
+
+    monkeypatch.setattr(mapping, "_scalar", lambda v: None if v in (None, "") else str(v))  # the old, unstripped
+    r = run_check(_padded_ids(tmp_path / "pad"), tmp_path / "pad")
+    p = _problem(r, "id_unparseable")
+    assert r["status"] == "fail" and p["count"] == 5 and "stray whitespace" in p["message"]

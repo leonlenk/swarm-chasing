@@ -162,9 +162,15 @@ def _looks_token(v: str, min_len: int = 16) -> bool:
 # --------------------------------------------------------------------------- url_credential
 
 _URL_CRED = re.compile(
-    # scheme://userinfo@  ; userinfo may itself contain an unencoded '@' (greedy to the last one
-    # before the host), but never whitespace, '/', '?', '#', brackets or quotes.
-    r"(?<![A-Za-z0-9+.-])([A-Za-z][A-Za-z0-9+.-]{1,30}://)([^\s/?#\[\]<>\"'`@]+(?:@[^\s/?#\[\]<>\"'`@]+)*)@(?=[A-Za-z0-9\[])"
+    r"(?<![A-Za-z0-9+.-])([A-Za-z][A-Za-z0-9+.-]{1,30}://)("
+    # user:password, where the unencoded password may hold '/', '?', '#' or '@': greedy to the
+    # last '@' in the URL. Skipped when what follows ':' is a port (digits, then '/', '?', '#'
+    # or the end), so host:port/path@x is left to the email rule.
+    r"[^\s/?#\[\]<>\"'`@:]+:(?![0-9]+(?:[/?#\s]|$))[^\s<>\"'`]*"
+    # or userinfo with no ':'; it may itself contain an unencoded '@' (greedy to the last one
+    # before the host), but never whitespace, '/', '?', '#', brackets or quotes
+    r"|[^\s/?#\[\]<>\"'`@]+(?:@[^\s/?#\[\]<>\"'`@]+)*"
+    r")@(?=[A-Za-z0-9\[])"
 )
 
 
@@ -174,8 +180,13 @@ def _r_url_credential(m: re.Match[str], r: Redactor) -> str | None:
     The whole userinfo is masked (usernames are often identities or tokens too).
     Userinfo *without* a colon is masked only when it looks like a token
     (``https://<token>@github.com``); ``ssh://git@github.com`` is kept.
+    A password with an unencoded ``/``, ``?``, ``#`` or ``@`` is masked too
+    (``postgres://admin:pa/ss@db``): with a password, everything up to the last ``@``
+    in the URL is masked, so a later ``@`` in the path also hides the host and path
+    before it (over-masking, never a leak).
     False negatives: credentials passed as query parameters (``?token=...``) are left
-    to ``keyword_secret``; schemeless ``user:pass@host`` is not matched.
+    to ``keyword_secret``; schemeless ``user:pass@host`` is not matched; a password
+    that starts with digits followed by ``/`` (read as a port).
     """
     userinfo = m.group(2)
     if ":" in userinfo or _looks_token(userinfo, 16):
@@ -187,7 +198,9 @@ def _r_url_credential(m: re.Match[str], r: Redactor) -> str | None:
 
 _PRIVATE_KEY = re.compile(
     r"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----"
-    r"(?:[\s\S]*?-----END (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----"  # a complete block
+    # a complete block: the body can't run past another BEGIN/END line and is at most 20000 chars,
+    # so many headers without footers stay linear (an unbounded lazy body was quadratic)
+    r"(?:(?:(?!-----(?:BEGIN|END) )[\s\S]){0,20000}-----END (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----"
     r"|(?:[ \t]*\r?\n?[ \t]*[A-Za-z0-9+/=:,-]{8,})*)"  # or a truncated one: eat the base64 lines
 )
 
@@ -368,7 +381,15 @@ def _r_keyword_secret(m: re.Match[str], r: Redactor) -> str | None:
 # --------------------------------------------------------------------------- email
 
 # The email pattern record-level masking (toolkit.Scrubber, via mask_text) and exports share.
-_EMAIL = re.compile(r"(?<![\w.+%-])[A-Za-z0-9._%+-]+@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})(?![\w-])")
+# Local part: ASCII plus letters of scripts written with spaces (jöhn, иван). Scripts written
+# without spaces (Han, kana, Hangul, Thai, ...) are excluded, so in "連絡はbob@example.comまで"
+# the address starts at "bob". The lookahead is ASCII-only. Both boundaries used Python's
+# Unicode \w, so a CJK character or an accented letter next to an address used to hide it.
+_NO_SPACE_SCRIPTS = (
+    "\u0e00-\u0eff\u1000-\u109f\u1780-\u17ff\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff66-\uff9f"
+)
+_EMAIL_LOCAL = f"(?:[^\\W{_NO_SPACE_SCRIPTS}]|[.%+-])"
+_EMAIL = re.compile(rf"(?<!{_EMAIL_LOCAL}){_EMAIL_LOCAL}+@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{{2,}})(?![A-Za-z0-9-])")
 
 
 def _r_email(m: re.Match[str], r: Redactor) -> str | None:
@@ -378,7 +399,8 @@ def _r_email(m: re.Match[str], r: Redactor) -> str | None:
     ``help@agentvillage.org`` and ``x@mail.agentvillage.org``, but not
     ``x@notagentvillage.org`` or ``x@agentvillage.org.evil.com``.
     False negatives: obfuscated addresses ("bob at example dot com"), addresses
-    without a TLD (``root@localhost``). False positives: ``name@2x.png``-style
+    without a TLD (``root@localhost``), non-ASCII (IDN) domains, and local parts in
+    scripts written without spaces (Han, kana, Thai...). False positives: ``name@2x.png``-style
     asset names whose "TLD" is alphabetic (e.g. ``icon@retina.png``).
     VCS service users (``git@github.com:org/repo.git``, ``ssh://hg@host``) are kept:
     they are not people and repo remotes are common research evidence.
@@ -396,14 +418,14 @@ _VCS_USERS = frozenset({"git", "hg", "svn"})
 # --------------------------------------------------------------------------- phone
 
 _PHONE = re.compile(
-    r"(?<![\w/.:#=@+-])(?:"
+    r"(?<![A-Za-z0-9_/.:#=@+-])(?:"  # ASCII boundaries: '電話+81 ...です' is still a phone number
     # international: '+', then 8-15 digits with at most two separators between digits
     r"\+[1-9](?:[ .()-]{0,2}[0-9]){7,14}"
     # North American 3-3-4: optional leading 1, separators required. Any digits are accepted
     # (not just valid NANP area codes/exchanges), keeping the recall of the old regex-only
     # toolkit.Scrubber, which masked placeholder-style numbers such as 555-123-4567 too.
     r"|(?:1[ .-])?(?:\([0-9]{3}\)[ .-]?|[0-9]{3}[ .-])[0-9]{3}[ .-][0-9]{4}"
-    r")(?![\w-]|\.[0-9])"
+    r")(?![A-Za-z0-9_-]|\.[0-9])"
 )
 
 
@@ -610,9 +632,24 @@ class Redactor:
                 return "[credential]", Counter({"credential": 1})
         return self.redact(value)
 
+    def redact_key(self, key: Any, taken: Iterable[Any] = ()) -> tuple[Any, Counter[str]]:
+        """Redact a dict key (keys can hold data too: ``{"carol@example.com": "reacted"}``).
+        Non-string keys pass through. If the result is already in ``taken`` (two keys that
+        redact alike), `` (2)``, `` (3)``... is appended so no value is overwritten."""
+        if not isinstance(key, str):
+            return key, Counter()
+        out, counts = self.redact(key)
+        taken = taken if isinstance(taken, (set, frozenset, dict)) else set(taken)
+        if out in taken:
+            i = 2
+            while f"{out} ({i})" in taken:
+                i += 1
+            out = f"{out} ({i})"
+        return out, counts
+
     def redact_value(self, value: Any, key: str | None = None) -> tuple[Any, Counter[str]]:
         """Redact every string inside a JSON-like value (str, dict, list; other types pass
-        through). ``key`` is the field name the value sits under, if any."""
+        through), dict keys included. ``key`` is the field name the value sits under, if any."""
         counts: Counter[str] = Counter()
 
         def walk(v: Any, k: str | None) -> Any:
@@ -621,7 +658,12 @@ class Redactor:
                 counts.update(c)
                 return out
             if isinstance(v, dict):
-                return {dk: walk(dv, str(dk)) for dk, dv in v.items()}
+                d: dict[Any, Any] = {}
+                for dk, dv in v.items():
+                    nk, c = self.redact_key(dk, d)
+                    counts.update(c)
+                    d[nk] = walk(dv, str(dk))
+                return d
             if isinstance(v, (list, tuple)):
                 return [walk(x, k) for x in v]
             return v
@@ -630,7 +672,7 @@ class Redactor:
 
     def redact_obj(self, obj: Any, *, skip_keys: Iterable[str] = ()) -> tuple[Any, Counter[str]]:
         """``redact_value`` for a record: top-level keys in ``skip_keys`` are copied
-        unchanged (identity fields such as ``event_id``)."""
+        unchanged (identity fields such as ``event_id``); other keys are redacted too."""
         if not isinstance(obj, dict):
             return self.redact_value(obj)
         skip = frozenset(skip_keys)
@@ -640,7 +682,9 @@ class Redactor:
             if k in skip:
                 out[k] = v
                 continue
-            out[k], c = self.redact_value(v, str(k))
+            nk, c = self.redact_key(k, out)
+            counts.update(c)
+            out[nk], c = self.redact_value(v, str(k))
             counts.update(c)
         return out, counts
 

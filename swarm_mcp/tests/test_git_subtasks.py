@@ -3,12 +3,14 @@ the SwarmScope store next to the synthetic village."""
 
 from __future__ import annotations
 
+import collections
 import gzip
 import json
 import os
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 from conftest import A_GPT, A_OPUS, _msg, build_store, call, call_error, config_for, make_village
@@ -22,6 +24,30 @@ OPUS = ("Claude Opus 4.5", "claude-opus-4.5@agentvillage.org")
 GPT = ("gpt-5-2", "gpt-5.2@agentvillage.org")  # git name differs from the village name: matched via email
 GEM = ("Gemini 2.5 Pro", "gemini-2.5-pro@agentvillage.org")
 OUTSIDER = ("Minuteandone", "someone@example.com")
+CHAT_1 = "PR #1 is up: talent tree core, please review"
+CHAT_2 = "Wired talents in PR #2, builds on PR #1"
+# keys whose values are agent- or human-authored free text (PR/page titles, labels built from them, chat
+# snippets, handoff sentences that name units); each must come back as an untrusted wrapper
+TEXT_KEYS = {"title", "label", "snippet", "summary", "text", "content", "body", "message"}
+
+
+def assert_wrapped(obj: Any, canaries: tuple[str, ...] = (), path: str = "$") -> int:
+    """No free-text field is a bare string, and no bare string anywhere carries a known agent-authored text
+    (``canaries``): each must be {"content": str, "untrusted": True}. Returns how many wrappers were seen."""
+    if isinstance(obj, dict):
+        if obj.get("untrusted") is True:
+            assert isinstance(obj.get("content"), str), f"{path} is a wrapper without string content: {obj!r}"
+            return 1
+        n = 0
+        for k, v in obj.items():
+            assert not (k in TEXT_KEYS and isinstance(v, str)), f"{path}.{k} is a bare string: {v!r}"
+            n += assert_wrapped(v, canaries, f"{path}.{k}")
+        return n
+    if isinstance(obj, list):
+        return sum(assert_wrapped(v, canaries, f"{path}[{i}]") for i, v in enumerate(obj))
+    if isinstance(obj, str):
+        assert not any(c in obj for c in canaries), f"{path} holds agent text outside a wrapper: {obj!r}"
+    return 0
 
 
 def _git(cwd: Path, *args: str, who=OPUS, when="2026-01-06T10:00:00Z") -> str:
@@ -145,8 +171,8 @@ def git_data(tmp_path: Path) -> Path:
     with gzip.open(vdir / "chat_messages.jsonl.gz", "rt") as f:
         rows = [json.loads(x) for x in f]
     rows += [
-        _msg(900, "2026-01-06 10:30:00.000000", "PR #1 is up: talent tree core, please review", A_OPUS),
-        _msg(901, "2026-01-06 12:30:00.000000", "Wired talents in PR #2, builds on PR #1", A_GPT),
+        _msg(900, "2026-01-06 10:30:00.000000", CHAT_1, A_OPUS),
+        _msg(901, "2026-01-06 12:30:00.000000", CHAT_2, A_GPT),
     ]
     with gzip.open(vdir / "chat_messages.jsonl.gz", "wt") as f:
         f.writelines(json.dumps(r) + "\n" for r in rows)
@@ -206,7 +232,7 @@ def test_list_get_and_locate(gapp):
     got = call(gapp, "subtasks_get", subtask_id=sub["subtask_id"])
     members = {m["event_id"] for m in got["members"]}
     assert {"rpg:period:pr-1", "rpg:period:pr-2"} <= members and "rpg:period:pr-4" not in members
-    assert got["label"].startswith("talent") and got["handoffs"]
+    assert got["label"]["content"].startswith("talent") and got["handoffs"]
     assert {"GPT-5.2", "Claude Opus 4.5"} <= {p["actor"] for p in got["participants"]}
     assert got["chat"]["messages_mentioning_members"] == 2
     chat_id = got["chat"]["cited"][1]["event_id"]
@@ -221,3 +247,34 @@ def test_list_get_and_locate(gapp):
     assert located["subtask_id"] == sub["subtask_id"]
     row = {c["corpus"]: c for c in call(gapp, "subtasks_corpora")["corpora"]}["rpg"]
     assert {"unit": "pull request", "units": 5, "artifact": "file"}.items() <= row.items()
+
+
+def test_subtasks_return_agent_text_wrapped(gapp):
+    """Titles, labels, chat snippets and handoff sentences come back as untrusted wrappers from every
+    subtasks_* tool, as the server's UNTRUSTED_NOTICE promises."""
+    titles = tuple(call(gapp, "core_get", ids=f"rpg:period:pr-{n}")["label"]["content"] for n in range(1, 6))
+    canaries = (*titles, CHAT_1, CHAT_2)
+    outs: dict[str, list[dict[str, Any]]] = collections.defaultdict(list)
+    outs["subtasks_corpora"].append(call(gapp, "subtasks_corpora"))
+    for level in ("coarse", "medium", "fine"):  # fine has single-unit subtasks, labelled with the unit's title
+        listed = call(gapp, "subtasks_list", corpus="rpg", granularity=level, min_size=1, limit=200)
+        outs["subtasks_list"].append(listed)
+        for s in listed["subtasks"]:
+            outs["subtasks_get"].append(call(gapp, "subtasks_get", subtask_id=s["subtask_id"]))
+    sub = call(gapp, "subtasks_locate", event_id="rpg:period:pr-1", granularity="coarse")["matches"][0]["subtask"]
+    got = call(gapp, "subtasks_get", subtask_id=sub["subtask_id"])
+    chat_id = got["chat"]["cited"][0]["event_id"]
+    for eid in ("rpg:period:pr-1", "rpg:period:pr-4", chat_id, got["handoffs"][0]["evidence"][-1]):
+        outs["subtasks_locate"].append(call(gapp, "subtasks_locate", event_id=eid, granularity="fine"))
+    for other in ("GPT-5.2", "Gemini 2.5"):
+        outs["subtasks_trace_pair"].append(
+            call(gapp, "subtasks_trace_pair", corpus="rpg", actor_a="Opus 4.5", actor_b=other)
+        )
+    tools = {t.name for t in gapp._tool_manager.list_tools() if t.name.startswith("subtasks_")}
+    assert set(outs) == tools, "a new subtasks tool must be covered here"
+    wrapped = {tool: sum(assert_wrapped(o, canaries) for o in res) for tool, res in outs.items()}
+    assert all(wrapped[t] for t in tools - {"subtasks_corpora"}), wrapped
+    # the reported case: pr-1's coarse subtask had a bare member title and a bare chat snippet
+    assert got["members"][0]["title"]["untrusted"] is True
+    assert {"content": CHAT_1, "untrusted": True} in [c["snippet"] for c in got["chat"]["cited"]]
+    assert {h["summary"]["untrusted"] for h in got["handoffs"]} == {True}

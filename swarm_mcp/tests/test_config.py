@@ -118,3 +118,37 @@ def test_relative_data_dir_resolves_against_project_root(tmp_path: Path):
     # like `uv run --directory swarm_mcp`: cwd is the subdir, data/ lives at the root
     assert resolve_data_dir("data", cwd=sub) == (tmp_path / "data").resolve()
     assert resolve_data_dir(str(tmp_path / "abs"), cwd=sub) == tmp_path / "abs"
+
+
+def test_server_and_cli_resolve_the_same_store(tmp_path: Path):
+    """Regression: .mcp.json always set SWARM_DATA_DIR=data for the MCP server, which overrides swarm.toml's
+    [data] dir, so the server, the CLI and the Stop hook used different stores."""
+    import os
+
+    repo = Path(__file__).resolve().parents[2]
+    server = json.loads((repo / ".mcp.json").read_text())["mcpServers"]["swarm"]
+    assert not any(k.startswith("SWARM") for k in server.get("env") or {})
+    workdir = server["args"][server["args"].index("--directory") + 1]  # the server runs from swarm_mcp/
+
+    project = tmp_path / "proj"
+    (project / workdir).mkdir(parents=True)
+    (project / "swarm.toml").write_text('[data]\ndir = "stores/main"\n')
+    env = {k: v for k, v in os.environ.items() if k != "SWARM_DATA_DIR"}
+    want = (project / "stores" / "main" / "swarmscope.duckdb").resolve()
+    assert Config.load(env=env, cwd=project / workdir).store_path == want  # the MCP server
+    assert Config.load(env=env, cwd=project).store_path == want  # the CLI from the repo root
+    assert Config.load(env={**env, "SWARM_DATA_DIR": ""}, cwd=project / workdir).store_path == want  # empty: toml
+
+    # the Stop hook's check stage (it gets Claude Code's env, never .mcp.json's) checks against the same store
+    import subprocess
+    import sys
+
+    (project / "findings").mkdir()
+    (project / "findings" / "findings.jsonl").write_text("")
+    hook_env = {k: v for k, v in env.items() if not k.startswith("CLAUDE_")} | {"CLAUDE_PROJECT_DIR": str(project)}
+    r = subprocess.run(
+        [sys.executable, str(repo / "hooks" / "require_evidence.py"), "--check"],
+        input="{}", env=hook_env, capture_output=True, text=True, timeout=60,
+    )  # fmt: skip
+    line = next(ln for ln in r.stdout.splitlines() if ln.startswith("@@require_evidence-result@@ "))
+    assert Path(json.loads(line.split(" ", 1)[1])["db_path"]).resolve() == want

@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """PostToolUse hook: append one audit line per swarm MCP tool call.
 
-Registered in .claude/settings.json for matcher ``mcp__swarm__.*``. For every
+Registered in .claude/settings.json for matcher ``mcp__swarm__.*`` as
+``python3 "$CLAUDE_PROJECT_DIR/hooks/audit_log.py" || exit 0``, so even a missing or broken
+script can't block or fail a tool call. For every
 tool named ``mcp__swarm__*`` it appends to ``<findings dir>/audit.jsonl``:
 
-    {ts, session_id, tool_use_id, tool, args, result_sha256, result_chars, is_error?}
+    {ts, session_id, tool_use_id, tool, args, result_sha256, result_chars, is_error?, finding_ids?}
 
 ``result_sha256`` is the sha256 of the canonical JSON (sort_keys, compact
 separators) of ``tool_response`` and ``result_chars`` is that JSON's length, so
 the log proves what a tool returned without storing dataset text.
-``is_error`` is only present when the response carries an explicit flag.
+``is_error`` is only present when the response carries an explicit flag. ``finding_ids``
+(the ``f-<12 hex>`` ids in a ``*findings_record`` response) ties each recorded finding to
+its session, so the Stop hook only blocks a session on its own findings.
 
 Findings dir: ``[data] findings`` in <project root>/swarm.toml (relative to the project
 root), else <project root>/findings. Project root: $CLAUDE_PROJECT_DIR, else
@@ -25,11 +29,13 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 PREFIX = "mcp__swarm__"
+FINDING_ID_RX = re.compile(r"\bf-[0-9a-f]{12}\b")
 
 
 def project_root() -> Path:
@@ -88,6 +94,10 @@ def build_entry(data: dict) -> dict | None:
     err = detect_error(resp)
     if err is not None:
         entry["is_error"] = err
+    if tool.endswith("findings_record"):
+        ids = sorted(set(FINDING_ID_RX.findall(blob)))
+        if ids:
+            entry["finding_ids"] = ids
     return entry
 
 

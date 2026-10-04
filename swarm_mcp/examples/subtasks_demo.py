@@ -61,12 +61,12 @@ async def main() -> None:
         show("its subtask", sub)
 
         got = await call("subtasks_get", subtask_id=sub["subtask_id"], max_chat=2)
-        show("members", [f"{m['event_id']}  {m['state']:8s} {m['actor']}: {m['title'][:60]}" for m in got["members"]])
-        show("handoffs", [f"{h['time']} {h['summary']}" for h in got["handoffs"]])
+        show("members", [f"{m['event_id']}  {m['state']:8s} {m['actor']}: {m['title']['content'][:60]}" for m in got["members"]])
+        show("handoffs", [f"{h['time']} {h['summary']['content']}" for h in got["handoffs"]])
         show(
             "other methods",
             [
-                f"{o['method']}: {o['pieces']} piece(s), largest '{o['largest_piece']['label']}'"
+                f"{o['method']}: {o['pieces']} piece(s), largest '{o['largest_piece']['label']['content']}'"
                 for o in got["other_methods"]
             ],
         )
@@ -83,7 +83,7 @@ async def main() -> None:
         show("pair summary", pair["summary"])
         show(
             "top shared subtasks",
-            [f"{s['label']} ({s['handoffs_between_them']} handoffs)" for s in pair["shared_subtasks"][:4]],
+            [f"{s['label']['content']} ({s['handoffs_between_them']} handoffs)" for s in pair["shared_subtasks"][:4]],
         )
 
 

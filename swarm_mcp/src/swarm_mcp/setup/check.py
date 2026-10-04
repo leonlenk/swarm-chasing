@@ -10,7 +10,8 @@ Checks, each reported with counts and up to 5 masked examples:
 | no_records           | error           | a records entry yields nothing                               |
 | id_missing           | error >5% / warn| rows dropped because local_id is empty                       |
 | id_duplicate         | error           | two records with the same evidence id                        |
-| id_unparseable       | error           | an id (or reply_to) fails ``scope.evidence.parse``           |
+| id_unparseable       | error           | an id (or reply_to) fails ``scope.evidence.parse``, or does  |
+|                      |                 | not parse back to itself (stray whitespace)                  |
 | record_invalid       | error           | ``scope.records.event_record`` rejects a record              |
 | time_unparseable     | error >1% / warn| time present but not parseable with the given format        |
 | time_out_of_range    | error >1% / warn| parsed time outside 1990–2100 (wrong epoch unit?)            |
@@ -165,8 +166,9 @@ def run_check(
             n += 1
             kind = rec.kind
             by_kind[kind] += 1
-            try:
-                evidence.parse(rec.event_id)
+            try:  # an id must parse back to itself, or citations of it never resolve
+                if str(evidence.parse(rec.event_id)) != rec.event_id:
+                    c.hit("id_unparseable", show(rec.event_id))
             except Exception:  # noqa: BLE001
                 c.hit("id_unparseable", show(rec.event_id))
             if rec.event_id in seen_ids:
@@ -202,7 +204,8 @@ def run_check(
                 c.hit("recipient_unmatched", _ex(d.table, d.row, "recipient", v))
             if rec.reply_to:
                 try:
-                    evidence.parse(rec.reply_to)
+                    if str(evidence.parse(rec.reply_to)) != rec.reply_to:
+                        c.hit("id_unparseable", f"{d.table} row {d.row}: reply_to {show(rec.reply_to)}")
                 except Exception:  # noqa: BLE001
                     c.hit("id_unparseable", f"{d.table} row {d.row}: reply_to {show(rec.reply_to)}")
                 replies.append((rec.reply_to, d.table, d.row))
@@ -216,6 +219,11 @@ def run_check(
     try:
         for p in adapter.periods(limit):
             periods += 1
+            try:
+                if str(evidence.parse(p.event_id)) != p.event_id:
+                    c.hit("id_unparseable", show(p.event_id))
+            except Exception:  # noqa: BLE001
+                c.hit("id_unparseable", show(p.event_id))
             if p.event_id in seen_ids:
                 c.hit("id_duplicate", show(p.event_id))
             seen_ids.add(p.event_id)
@@ -249,7 +257,7 @@ def run_check(
         )
     for code, msg in (
         ("id_duplicate", "duplicate evidence ids"),
-        ("id_unparseable", "evidence ids that do not parse"),
+        ("id_unparseable", "evidence ids that do not parse, or not back to themselves (stray whitespace?)"),
         ("record_invalid", "records rejected by scope.records.event_record"),
     ):
         if c.counts[code]:

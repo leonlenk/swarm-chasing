@@ -39,12 +39,16 @@ def _allow(args, adapter=None):
 
 
 def build_index(out):
-    """index.json listing every valid trace file in `out`."""
+    """index.json listing every valid trace file in `out`; unreadable or invalid files are skipped with a warning."""
     entries = []
     for p in sorted(out.glob("*.json")):
         if p.name == "index.json":
             continue
-        tr = json.loads(p.read_text())
+        try:
+            tr = json.loads(p.read_text())
+        except (OSError, ValueError) as e:            # ValueError covers bad JSON and bad UTF-8
+            print(f"  warning: index: skipping {p.name} (unreadable: {e})")
+            continue
         if _is_index(tr) or validate(tr):
             print(f"  index: skipping {p.name} (not a valid trace)")
             continue
