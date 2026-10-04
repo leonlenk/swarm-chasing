@@ -121,6 +121,15 @@ def _z(s):
     return dt.datetime.fromisoformat(s[:-1])
 
 
+MEMORY_CACHE = common.CACHE / "memory_daily_sample.jsonl.gz"
+
+
+def require(path, script):
+    """Stop with a message naming the script that writes `path` when it is missing (instead of a traceback)."""
+    if not Path(path).exists():
+        raise SystemExit(f"missing {path}; run `python3 {script}` in village_tools/ first")
+
+
 def quotes_from_ids(specs, cands, texts):
     """Dated excerpts from (cid, stage, start, end) specs such as tracer_hostility.MUTATION_QUOTES. The excerpt is
     texts[cid][start:end]: texts maps a cid to its candidate's full source text, which tracer_hostility.source_texts
@@ -170,9 +179,35 @@ H_ECHOES = [
 ]
 
 
+def story_notes(retractions, mutation, dates=RETRACTION_DATES):
+    """Annotations for Gemini 2.5 Pro's retraction on each of `dates` (the earliest of that day's results.json
+    retractions and retraction-stage mutation quotes) and for the first relapse-stage quote. Mutation quotes whose
+    text is missing locally were already skipped by quotes_from_ids, so a date or relapse with nothing left is
+    skipped with a message rather than failing the export."""
+    retr = [(_t(r["t"]), r["reason"]) for r in retractions]
+    retr += [(_t(q["t"]), q["quote"]) for q in mutation if "retraction" in q["stage"]]
+    out = []
+    for d in dates:
+        day = [x for x in retr if x[0].date().isoformat() == d]
+        if not day:
+            print(f"hostility: no retraction found on {d}; annotation skipped")
+            continue
+        t, why = min(day)
+        out.append({"t": iso(t), "label": f"Gemini 2.5 Pro retracts: {clip(why, limit=90)}", "kind": "note"})
+    relapse = next((q for q in mutation if "relapse" in q["stage"]), None)
+    if relapse is None:
+        print("hostility: no relapse quote in the local data; annotation skipped")
+    else:
+        out.append({"t": iso(_t(relapse["t"])), "label": f"Relapse: {clip(relapse['quote'], limit=90)}", "kind": "note"})
+    return out
+
+
 def hostility():
     import tracer_hostility as th                    # the analysis module: regexes, CSV readers, memory loader
 
+    for f in ("results.json", "labels.csv", "candidates.csv", "adoption.csv", "exposure_events.csv"):
+        require(HOST / f, "tracer_hostility.py")
+    require(MEMORY_CACHE, "memories.py")              # daily memory sample: quote sources and persistence runs
     world = _world(True)
     res = json.loads((HOST / "results.json").read_text())
     labels = th.read_csv(HOST / "labels.csv")
@@ -262,13 +297,7 @@ def hostility():
     annotations = []
     help_goal = next(g for g in common.load_goals() if g["goal"].startswith("Help Gemini 2.5 Pro"))
     annotations.append({"t": iso(help_goal["start"]), "label": f"Goal: {clip(help_goal['goal'], limit=100)}", "kind": "goal"})
-    retr = [(_t(r["t"]), r["reason"]) for r in res["corrections"]["gemini_retractions"]]
-    retr += [(_t(q["t"]), q["quote"]) for q in mutation if "retraction" in q["stage"]]
-    for d in RETRACTION_DATES:
-        t, why = min(x for x in retr if x[0].date().isoformat() == d)
-        annotations.append({"t": iso(t), "label": f"Gemini 2.5 Pro retracts: {clip(why, limit=90)}", "kind": "note"})
-    relapse = next(q for q in mutation if "relapse" in q["stage"])
-    annotations.append({"t": iso(_t(relapse["t"])), "label": f"Relapse: {clip(relapse['quote'], limit=90)}", "kind": "note"})
+    annotations += story_notes(res["corrections"]["gemini_retractions"], mutation)
     relay = min((c for c in res["corrections"]["others"] if c["reason"].startswith("Relays human concern")),
                 key=lambda c: c["t"])
     annotations.append({"t": iso(_t(relay["t"])), "label": f"Human concern about the narrative relayed by {relay['agent']}",
@@ -384,6 +413,8 @@ def _tip_excerpt(text, rx=r"\btips?\b|verify|claim|receipt|repro|pointer|welcome
 def onboarding():
     import tracer_onboarding as to
 
+    for f in ("results.json", "items.csv", "labels.csv", "rules.csv", "guides.csv"):
+        require(ONB / f, "tracer_onboarding.py")
     world = _world(False)
     res = json.loads((ONB / "results.json").read_text())
     items = {r["item_id"]: r for r in csv.DictReader(open(ONB / "items.csv"))}
@@ -525,6 +556,7 @@ def _term_rx(term):
 def terms(top=T_TOP, stoplist=T_STOPLIST):
     """One trace per term: the `top` terms (by adopters, then messages) from ideas.json's durable + episodic lists
     after dropping `stoplist`."""
+    require(IDEAS, "ideas.py")
     world = _world(True)
     ideas = json.loads(IDEAS.read_text())
     goals = common.load_goals()
