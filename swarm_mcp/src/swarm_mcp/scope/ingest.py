@@ -78,8 +78,25 @@ def ingest(
         say(f"read {', '.join(f'{v:,} {k}' for k, v in counts.items())} in {t_read - t0:.1f}s; loading into {db_path}")
 
         con = db.open_connection(db_path, read_only=False, timeout=30)
+        in_tx = False
         try:
+            not_tables = [
+                t
+                for (t, kind) in con.execute(
+                    "SELECT table_name, table_type FROM information_schema.tables WHERE table_name IN "
+                    f"({', '.join('?' * len(schema.RECORD_MODELS))})",
+                    list(schema.RECORD_MODELS),
+                ).fetchall()
+                if kind != "BASE TABLE"
+            ]
+            if not_tables:
+                what = "is not a table" if len(not_tables) == 1 else "are not tables"
+                raise ValueError(
+                    f"The store at {db_path} uses a different schema ({', '.join(sorted(not_tables))} {what}), "
+                    "so nothing was ingested. Use a separate store (--db) or move that file away."
+                )
             con.execute("BEGIN TRANSACTION")
+            in_tx = True
             for table in schema.RECORD_MODELS:
                 con.execute(f"DELETE FROM {table} WHERE source = ?", [adapter.source])
             for table in schema.RECORD_MODELS:
@@ -111,12 +128,14 @@ def ingest(
                 ],
             )
             con.execute("COMMIT")
+            in_tx = False
             stored = {
                 t: con.execute(f"SELECT count(*) FROM {t} WHERE source = ?", [adapter.source]).fetchone()[0]
                 for t in schema.RECORD_MODELS
             }
         except Exception:
-            con.execute("ROLLBACK")
+            if in_tx:
+                con.execute("ROLLBACK")
             raise
         finally:
             con.close()

@@ -52,6 +52,7 @@ BOARD_SPEC = {
 }
 
 
+@pytest.fixture
 def mapped_store(tmp_path: Path, data_dir: Path):
     """The synthetic village store plus a mapped sqlite board ingested into the same file."""
     root = make_sqlite_board(tmp_path / "board")
@@ -71,16 +72,22 @@ def test_ingest_mapped_converts_records_agents_periods(mapped_store):
     with db.connect(store) as s:
         assert s.scalar("SELECT count(*) FROM messages WHERE source = 'village'") > 0  # other sources untouched
         assert {r["kind"] for r in s.all("SELECT DISTINCT kind FROM actions WHERE source = 'board'")} == {"open"}
+        assert {r["kind"] for r in s.all("SELECT DISTINCT kind FROM periods WHERE source = 'board'")} == {"thread"}
         post = s.one("SELECT * FROM messages WHERE source = 'board' AND reply_to IS NOT NULL LIMIT 1")
-        assert post["evidence_id"].startswith("board:post:") and post["reply_to"].startswith("board:post:")
-        assert post["ts"] is not None and post["channel"] is None
-        assert json.loads(post["meta"])["kind"] == "post"
-        for eid in (post["evidence_id"], "board:open:1", "board:thread:1"):
+        # schema kinds in the id, the dataset kind prefixes the local id and lands in msg_type
+        assert post["evidence_id"].startswith("board:msg:post/") and post["reply_to"].startswith("board:msg:post/")
+        assert post["msg_type"] == "post" and post["ts"] is not None and post["channel"] is None
+        meta = json.loads(post["meta"])
+        assert post["evidence_id"] == f"board:msg:post/{meta['native_id']}" and meta["thread"] >= 1
+        for eid in (post["evidence_id"], "board:event:open/1", "board:period:thread/1", "board:agent:m-ada"):
             assert evidence.resolve(s, eid)["evidence_id"] == eid
         with pytest.raises(evidence.EvidenceError, match="Unknown evidence kind"):
-            evidence.resolve(s, "board:tweet:1")
+            evidence.resolve(s, "board:post:1001")  # dataset kinds are not id kinds
         with pytest.raises(evidence.EvidenceError, match="does not resolve"):
-            evidence.resolve(s, "board:post:nope")
+            evidence.resolve(s, "board:msg:post/nope")
+        src_meta = json.loads(s.one("SELECT meta FROM sources WHERE source = 'board'")["meta"])
+        assert src_meta["categories"] == {"post": "message", "open": "action", "thread": "period"}
+        assert src_meta["mapping"] == str(mapped_store["mapping"]) and "kinds" not in src_meta
     # idempotent: a second ingest replaces the source, counts unchanged
     again = ingest_mapped(mapped_store["mapping"], mapped_store["root"], store)
     assert again["counts"] == res["counts"]
@@ -91,16 +98,24 @@ def test_mapped_ids_resolve_through_the_store_event_source(mapped_store):
     hits = call(app, "scope_search", query="the", source="board", limit=3)
     assert hits["total"] > 0
     eid = hits["results"][0]["evidence_id"]
+    assert eid.startswith("board:msg:post/")
     got = call(app, "core_get", ids=eid, after=1)
-    assert got["event"]["event_id"] == eid and got["event"]["kind"] == "post"
-    thread = call(app, "core_get", ids="board:thread:1")["event"]
-    assert thread["event_id"] == "board:thread:1" and thread["period_kind"] == "thread"
-    assert call(app, "core_get", ids="board:open:1")["event"]["action_kind"] == "open"
+    assert got["evidence_id"] == eid and got["table"] == "messages" and got["source"] == "board"
+    assert got["msg_type"] == "post" and got["author_id"].startswith(("board:agent:", "human:"))
+    assert got["content"]["untrusted"] is True and got["content"]["content"]
+    assert set(got["neighbors"]) >= {"before", "after"}
+    thread = call(app, "core_get", ids="board:period:thread/1")
+    assert thread["table"] == "periods" and thread["kind"] == "thread" and thread["start"]
+    opened = call(app, "core_get", ids="board:event:open/1")
+    assert opened["table"] == "actions" and opened["kind"] == "open" and opened["agent_id"].startswith("board:agent:")
+    batch = call(app, "core_get", ids=[eid, "board:event:open/1", "board:msg:post/nope"])
+    assert (batch["requested"], batch["returned"]) == (3, 2) and batch["errors"][0]["id"] == "board:msg:post/nope"
     periods = call(app, "scope_periods", source="board")
     assert periods["count"] == 12 and periods["periods"][0]["kind"] == "thread"
-    kinds = {k["kind"] for src in call(app, "core_info")["sources"] if src["source"] == "board"
-             for k in src["kinds"]}  # fmt: skip
-    assert {"post", "open", "thread", "agent"} <= kinds
+    assert periods["periods"][0]["evidence_id"].startswith("board:period:thread/")
+    board = next(src for src in call(app, "core_info")["sources"] if src["source"] == "board")
+    assert board["adapter"] == "mapped" and board["row_counts"]["messages"] == 240
+    assert board["ingest_meta"]["categories"]["open"] == "action"
 
 
 def test_ingest_mapped_from_a_heuristic_draft(tmp_path: Path):

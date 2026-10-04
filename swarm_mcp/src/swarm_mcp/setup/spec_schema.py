@@ -135,7 +135,12 @@ MAPPING_SCHEMA: dict[str, Any] = {
                 "additionalProperties": False,
                 "properties": {
                     "from": {"type": "string", "description": "table key or glob"},
-                    "kind": {"type": "string", "pattern": SLUG},
+                    "kind": {
+                        "type": "string",
+                        "pattern": SLUG,
+                        "description": "the dataset's record type, e.g. 'post'. Ids are '<source>:msg:<kind>/<local id>' "
+                        "(category message) or '<source>:event:<kind>/<local id>' (action, other)",
+                    },
                     "category": {"enum": ["message", "action", "other"], "default": "message"},
                     "description": {"type": "string"},
                     "where": _where,
@@ -194,7 +199,7 @@ MAPPING_SCHEMA: dict[str, Any] = {
                                     "kind": {
                                         "type": "string",
                                         "pattern": SLUG,
-                                        "description": "kind of the target (default: this kind)",
+                                        "description": "the records kind of the target (default: this kind)",
                                     },
                                 },
                             },
@@ -234,7 +239,11 @@ MAPPING_SCHEMA: dict[str, Any] = {
                 "additionalProperties": False,
                 "properties": {
                     "from": {"type": "string"},
-                    "kind": {"type": "string", "pattern": SLUG},
+                    "kind": {
+                        "type": "string",
+                        "pattern": SLUG,
+                        "description": "the dataset's period type, e.g. 'thread'; ids are '<source>:period:<kind>/<local id>'",
+                    },
                     "description": {"type": "string"},
                     "where": _where,
                     "local_id": _paths,
