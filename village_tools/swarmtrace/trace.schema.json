@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "swarmtrace/trace.schema.json",
+  "title": "Idea trace v0",
+  "description": "One idea followed through a multi-agent swarm. Cross-references (agent names, event ids) and start <= end are checked by swarmtrace.format.validate(), not by this schema. The index.json format is under $defs/index.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "id", "title", "kind", "statement", "source", "start", "end", "agents", "events",
+               "exposures", "adoptions", "edges", "persistence", "annotations", "quotes", "metrics"],
+  "properties": {
+    "version": {"const": 0},
+    "id": {"$ref": "#/$defs/slug"},
+    "title": {"$ref": "#/$defs/text"},
+    "kind": {"$ref": "#/$defs/kind"},
+    "statement": {"$ref": "#/$defs/text", "description": "One-line description of the idea."},
+    "source": {"$ref": "#/$defs/text", "description": "How this trace was produced (1-2 sentences)."},
+    "start": {"$ref": "#/$defs/iso", "description": "Display window start."},
+    "end": {"$ref": "#/$defs/iso", "description": "Display window end."},
+    "agents": {"type": "array", "items": {"$ref": "#/$defs/agent"}},
+    "events": {"type": "array", "items": {"$ref": "#/$defs/event"}},
+    "exposures": {"type": "array", "items": {"$ref": "#/$defs/exposure"}},
+    "adoptions": {"type": "array", "items": {"$ref": "#/$defs/adoption"}},
+    "edges": {"type": "array", "items": {"$ref": "#/$defs/edge"}},
+    "persistence": {"type": "array", "items": {"$ref": "#/$defs/persistence"}},
+    "annotations": {"type": "array", "items": {"$ref": "#/$defs/annotation"}},
+    "quotes": {"type": "array", "items": {"$ref": "#/$defs/quote"}},
+    "metrics": {
+      "type": "object",
+      "maxProperties": 10,
+      "additionalProperties": {"type": ["number", "string"]},
+      "description": "Free-form, human-readable key -> number or string."
+    }
+  },
+  "$defs": {
+    "iso": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?Z$",
+      "description": "ISO 8601 UTC timestamp, e.g. 2025-12-03T18:04:11Z."
+    },
+    "iso_or_null": {"anyOf": [{"$ref": "#/$defs/iso"}, {"type": "null"}]},
+    "slug": {"type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"},
+    "text": {"type": "string", "minLength": 1},
+    "kind": {"enum": ["belief", "norm", "term"]},
+    "agent_name": {"type": "string", "minLength": 1, "description": "Must match an agents[].name."},
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "lab", "joined", "left"],
+      "properties": {
+        "name": {"$ref": "#/$defs/agent_name"},
+        "lab": {"$ref": "#/$defs/text", "description": "Developer / model family."},
+        "group": {"type": "string", "description": "Optional grouping, e.g. newcomer."},
+        "joined": {"$ref": "#/$defs/iso_or_null"},
+        "left": {"$ref": "#/$defs/iso_or_null", "description": "null if still present at the end of the data."}
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "t", "agent", "channel", "stance", "conf", "room", "snippet"],
+      "properties": {
+        "id": {"$ref": "#/$defs/text"},
+        "t": {"$ref": "#/$defs/iso"},
+        "agent": {"$ref": "#/$defs/agent_name"},
+        "channel": {"enum": ["chat", "memory", "session", "search", "summary"]},
+        "stance": {"enum": ["originates", "endorses", "acts_on", "mentions", "questions", "rejects", "mutates", "uses"]},
+        "conf": {"enum": [1, 2, 3, null], "description": "Label confidence; null when unlabelled."},
+        "room": {"type": ["string", "null"]},
+        "snippet": {"type": "string", "maxLength": 220}
+      }
+    },
+    "exposure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["t", "agent", "source", "via", "event"],
+      "properties": {
+        "t": {"$ref": "#/$defs/iso"},
+        "agent": {"$ref": "#/$defs/agent_name"},
+        "source": {"anyOf": [{"$ref": "#/$defs/agent_name"}, {"type": "null"}]},
+        "via": {"enum": ["room", "named", "search", "other"]},
+        "event": {"type": ["string", "null"], "description": "Event id of the exposing item, if present in events."}
+      }
+    },
+    "adoption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent", "t", "event", "independent", "sources"],
+      "properties": {
+        "agent": {"$ref": "#/$defs/agent_name"},
+        "t": {"$ref": "#/$defs/iso"},
+        "event": {"$ref": "#/$defs/text"},
+        "independent": {"type": "boolean"},
+        "sources": {"type": "array", "items": {"$ref": "#/$defs/agent_name"}}
+      }
+    },
+    "edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to", "t", "kind", "evidence"],
+      "properties": {
+        "from": {"$ref": "#/$defs/agent_name"},
+        "to": {"$ref": "#/$defs/agent_name"},
+        "t": {"$ref": "#/$defs/iso"},
+        "kind": {"enum": ["transmission", "echo", "tip", "correction"]},
+        "evidence": {"type": ["string", "null"]}
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent", "start", "end", "where"],
+      "properties": {
+        "agent": {"$ref": "#/$defs/agent_name"},
+        "start": {"$ref": "#/$defs/iso"},
+        "end": {"$ref": "#/$defs/iso"},
+        "where": {"enum": ["memory"]}
+      }
+    },
+    "annotation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["t", "label", "kind"],
+      "properties": {
+        "t": {"$ref": "#/$defs/iso"},
+        "label": {"$ref": "#/$defs/text"},
+        "kind": {"enum": ["goal", "intervention", "scaffolding", "artifact", "note"]}
+      }
+    },
+    "quote": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["t", "agent", "text", "note"],
+      "properties": {
+        "t": {"$ref": "#/$defs/iso"},
+        "agent": {"$ref": "#/$defs/agent_name"},
+        "text": {"type": "string", "minLength": 1, "maxLength": 160},
+        "note": {"type": ["string", "null"]}
+      }
+    },
+    "index": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "generated", "traces"],
+      "properties": {
+        "version": {"const": 0},
+        "generated": {"$ref": "#/$defs/iso"},
+        "traces": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "title", "kind", "file", "n_agents", "n_events", "start", "end"],
+            "properties": {
+              "id": {"$ref": "#/$defs/slug"},
+              "title": {"$ref": "#/$defs/text"},
+              "kind": {"$ref": "#/$defs/kind"},
+              "file": {"$ref": "#/$defs/text"},
+              "n_agents": {"type": "integer", "minimum": 0},
+              "n_events": {"type": "integer", "minimum": 0},
+              "start": {"$ref": "#/$defs/iso"},
+              "end": {"$ref": "#/$defs/iso"}
+            }
+          }
+        }
+      }
+    }
+  }
+}
