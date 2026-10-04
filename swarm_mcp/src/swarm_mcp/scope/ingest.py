@@ -1,7 +1,9 @@
 """Load a dataset into the SwarmScope store via an adapter.
 
 Idempotent per source: all rows of the adapter's source are replaced inside one
-transaction; findings and other sources are untouched. Rows are validated
+transaction; findings and other sources are untouched. A source that was loaded by a
+different adapter, or by a different mapping, is only replaced with ``replace=True``
+(``SourceConflict`` otherwise), so a mapping named ``village`` can't wipe AI Village. Rows are validated
 against the pydantic models, spooled to temporary NDJSON files next to the
 store (deleted afterwards) and bulk-loaded with DuckDB's ``read_json``, which
 is far faster than row-by-row inserts.
@@ -25,6 +27,7 @@ from typing import Any, Callable
 
 from swarm_mcp.scope import db, schema
 from swarm_mcp.scope.adapters import Adapter, get_adapter
+from swarm_mcp.toolkit import ToolInputError
 
 log = logging.getLogger("swarm_mcp.scope.ingest")
 
@@ -40,6 +43,40 @@ def _columns_struct(table: str) -> str:
     return "{" + ", ".join(f"{_sql_str(c)}: {_sql_str(t.replace('TEXT', 'VARCHAR'))}" for c, t in cols.items()) + "}"
 
 
+class SourceConflict(ToolInputError):
+    """The source already holds data from another adapter or mapping."""
+
+
+def _owner(adapter: Adapter) -> tuple[str, str | None]:
+    """(adapter name, mapping path or None): what a source row's data came from."""
+    mapping = (getattr(adapter, "source_meta", None) or {}).get("mapping")
+    return adapter.name, str(Path(mapping).resolve()) if mapping else None
+
+
+def check_replace(adapter: Adapter, db_path: Path) -> None:
+    """Raise ``SourceConflict`` if ``adapter.source`` is in the store from another adapter or mapping."""
+    if not Path(db_path).exists():
+        return
+    with db.connect(db_path, read_only=True) as store:
+        row = store.con.execute("SELECT adapter, meta FROM sources WHERE source = ?", [adapter.source]).fetchone()
+    if row is None:
+        return
+    try:
+        meta = json.loads(row[1]) if isinstance(row[1], str) else (row[1] or {})
+    except ValueError:
+        meta = {}
+    mapping = meta.get("mapping") if isinstance(meta, dict) else None
+    existing = (row[0], str(Path(mapping).resolve()) if mapping else None)
+    if existing != _owner(adapter):
+        was = f"adapter {existing[0]!r}" + (f", mapping {existing[1]}" if existing[1] else "")
+        now = f"adapter {adapter.name!r}" + (f", mapping {_owner(adapter)[1]}" if _owner(adapter)[1] else "")
+        raise SourceConflict(
+            f"Source {adapter.source!r} in {db_path} was loaded by {was}; this ingest uses {now}. "
+            "Ingesting would delete all of its rows. Rename the mapping's source, or pass replace=True "
+            "to replace it."
+        )
+
+
 def ingest(
     adapter_name: str | Adapter,
     path: Path,
@@ -47,13 +84,17 @@ def ingest(
     *,
     include_events: bool = True,
     progress: Callable[[str], None] | None = None,
+    replace: bool = False,
 ) -> dict[str, Any]:
     """Ingest ``path`` with adapter ``adapter_name`` (a name or an adapter instance) into ``db_path``.
-    Returns counts and timing."""
+    Returns counts and timing. Refuses (``SourceConflict``) to replace a source loaded by another
+    adapter or mapping unless ``replace``."""
     say = progress or (lambda msg: log.info(msg))
     adapter = get_adapter(adapter_name) if isinstance(adapter_name, str) else adapter_name
     path = Path(path)
     db_path = Path(db_path)
+    if not replace:
+        check_replace(adapter, db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     t0 = time.perf_counter()
 
@@ -135,13 +176,15 @@ def ingest_mapped(
     db_path: Path,
     *,
     progress: Callable[[str], None] | None = None,
+    replace: bool = False,
 ) -> dict[str, Any]:
     """Ingest the dataset at ``path`` (default: the mapping's ``root``) through the declarative
-    ``mapping`` JSON into ``db_path``. Idempotent: the mapping's source is replaced as a whole."""
+    ``mapping`` JSON into ``db_path``. Idempotent: the mapping's source is replaced as a whole.
+    A source already loaded by another adapter or mapping needs ``replace=True``."""
     from swarm_mcp.scope.adapters.mapped import MappedStoreAdapter
 
     adapter = MappedStoreAdapter.from_file(mapping, path)
-    result = ingest(adapter, adapter.mapped.root, db_path, progress=progress)
+    result = ingest(adapter, adapter.mapped.root, db_path, progress=progress, replace=replace)
     result["mapping"] = str(mapping)
     stats = {k: v for k, v in adapter.mapped.stats.items() if v}
     if stats:

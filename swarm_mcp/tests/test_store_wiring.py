@@ -14,7 +14,7 @@ from swarm_mcp import export as exp
 from swarm_mcp import llm
 from swarm_mcp.llm import FakeClient
 from swarm_mcp.scope import db, evidence
-from swarm_mcp.scope.ingest import ingest_mapped
+from swarm_mcp.scope.ingest import SourceConflict, ingest_mapped
 from swarm_mcp.scope.records import StoreRecordProvider, export_store, store_records
 from swarm_mcp.server import build_server
 from swarm_mcp.setup.agent import draft_mapping
@@ -91,6 +91,28 @@ def test_ingest_mapped_converts_records_agents_periods(mapped_store):
     # idempotent: a second ingest replaces the source, counts unchanged
     again = ingest_mapped(mapped_store["mapping"], mapped_store["root"], store)
     assert again["counts"] == res["counts"]
+
+
+def test_ingest_mapped_refuses_to_replace_another_adapters_source(mapped_store, tmp_path: Path):
+    """Regression: a mapping whose source is 'village' deleted every AI Village row."""
+    store = mapped_store["store"]
+    with db.connect(store) as s:
+        before = s.scalar("SELECT count(*) FROM messages WHERE source = 'village'")
+    hijack = tmp_path / "village.json"
+    hijack.write_text(json.dumps({**BOARD_SPEC, "source": "village"}))
+    with pytest.raises(SourceConflict, match="loaded by adapter 'ai_village'"):
+        ingest_mapped(hijack, mapped_store["root"], store)
+    with db.connect(store) as s:
+        assert s.scalar("SELECT count(*) FROM messages WHERE source = 'village'") == before > 0
+
+    # another mapping for an already mapped source: also refused
+    other = tmp_path / "other-board.json"
+    other.write_text(json.dumps(BOARD_SPEC))
+    with pytest.raises(SourceConflict, match="mapping"):
+        ingest_mapped(other, mapped_store["root"], store)
+    # ...unless replace=True
+    res = ingest_mapped(other, mapped_store["root"], store, replace=True)
+    assert res["counts"] == mapped_store["result"]["counts"]
 
 
 def test_mapped_ids_resolve_through_the_store_event_source(mapped_store):
