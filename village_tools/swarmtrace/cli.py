@@ -26,7 +26,15 @@ from pathlib import Path
 from .format import MAX_BYTES, check, dumps, index_entry, iso, scrub_trace, validate, validate_index
 
 
+def adapter_names():
+    """Module names in swarmtrace/adapters/ (the valid --adapter values)."""
+    return sorted(p.stem for p in (Path(__file__).parent / "adapters").glob("*.py") if not p.stem.startswith("_"))
+
+
 def load_adapter(name):
+    """The adapter module, or a clean exit listing the valid names (a typo is not a traceback)."""
+    if name not in adapter_names():
+        raise SystemExit(f"unknown adapter {name!r}; valid adapters: {', '.join(adapter_names())}")
     return importlib.import_module(f"swarmtrace.adapters.{name}")
 
 

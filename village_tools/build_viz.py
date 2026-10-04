@@ -20,11 +20,22 @@ def group(family):
     return family if family in ("Anthropic", "OpenAI", "Google", "Human") else "Other labs"
 
 
+INPUTS = {"cooperation.json": "cooperation.py", "ideas.json": "ideas.py", "memories.json": "memories.py"}
+
+
 def load(name):
     return json.loads((OUT / name).read_text())
 
 
+def missing_inputs():
+    """'run python3 <script>' lines for each input JSON not yet written to out/."""
+    return [f"  out/{n} is missing: run `python3 {s}`" for n, s in INPUTS.items() if not (OUT / n).exists()]
+
+
 def main():
+    miss = missing_inputs()
+    if miss:
+        raise SystemExit("build_viz needs the analysis outputs first (from village_tools/):\n" + "\n".join(miss))
     coop, ideas, mem = load("cooperation.json"), load("ideas.json"), load("memories.json")
     goal_keys = ("idx", "goal", "type", "start", "end", "msgs", "human_msgs", "agents", "mention_rate", "reciprocity",
                  "density", "hub", "hub_share", "homophily", "we_share", "requests", "division_of_labour",
