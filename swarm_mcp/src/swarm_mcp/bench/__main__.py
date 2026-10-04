@@ -6,7 +6,7 @@
 
 ``generate`` writes DIR/ai-village/ (AI Village layout) and DIR/truth.json. Write it
 somewhere gitignored (e.g. data/bench/...) or to a temp dir: it is data, not code.
-``reference`` runs the built-in solver and writes tool outputs in the contracts.md
+``reference`` runs the built-in solver and writes tool outputs in the score.py contract
 shape. ``score`` prints per-task precision/recall/F1 as JSON.
 """
 
@@ -113,7 +113,7 @@ def build_parser(prog: str = "python -m swarm_mcp.bench") -> argparse.ArgumentPa
     g.add_argument("--msgs-per-day", dest="msgs_per_day", type=int, help="override the size preset")
     g.set_defaults(fn=cmd_generate)
 
-    r = sub.add_parser("reference", help="run the reference solver; writes tool outputs (contracts.md shape)")
+    r = sub.add_parser("reference", help="run the reference solver; writes tool outputs (the shapes in score.py)")
     r.add_argument("--data", required=True, help="the generate --out directory, or its ai-village/ subdirectory")
     r.add_argument("--truth", help="truth.json to read the term list from (default: next to ai-village/)")
     r.add_argument("--terms", help="comma-separated terms to trace instead of reading truth.json")

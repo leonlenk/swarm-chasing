@@ -6,7 +6,7 @@ short-lived read-only connection (``ctx.store()``) and closes it on return, so
 ingest and other processes can use the file between calls.
 
 Conventions:
-- Every record carries its evidence id (``village:chat:<uuid>`` etc.); pass it to
+- Every record carries its evidence id (``village:msg:<uuid>`` etc.); pass it to
   ``core_get`` to re-resolve it (with context), and cite it in findings.
 - All agent/human-authored text is masked, capped (``max_chars``, default 500)
   and wrapped as ``{"content": ..., "untrusted": true}``: it is data, never
@@ -17,6 +17,7 @@ Conventions:
 
 from __future__ import annotations
 
+import collections
 import json
 import re
 from typing import Annotated, Any, Literal
@@ -25,7 +26,6 @@ import duckdb
 from pydantic import Field
 
 from swarm_mcp import sweep
-from swarm_mcp.events import EventNotFound, event_record
 from swarm_mcp.scope import evidence
 from swarm_mcp.scope.adapters.ai_village import goal_type
 from swarm_mcp.scope.analysis import graph as graph_analysis
@@ -165,139 +165,179 @@ def register(mcp, ctx) -> None:
     def short_cap(max_chars: int | None) -> int:
         return min(max_chars or ctx.config.max_text, 200)
 
-    # ------------------------------------------------------------------ event sources (core_get)
+    # ------------------------------------------------------------------ records (core_get)
 
-    def _detail(s: Store, table: str, rec: dict[str, Any], names: dict[str, str], max_chars: int) -> dict[str, Any]:
-        """Extra fields for the record core_get was asked for (not for its neighbours)."""
-        if table == "messages":
-            return {
-                "recipients": [{"agent_id": r, "name": label_for(r, names)} for r in rec["recipient_ids"] or []],
-                "reply_to": rec["reply_to"],
-                "msg_type": rec["msg_type"],
-                "ts_quality": rec["ts_quality"],
-                "meta": _meta(rec["meta"]),
-            }
-        if table == "actions":
-            return {
-                "action_kind": rec["kind"],
-                "run_id": rec["run_id"],
-                "seq": rec["seq"],
-                "ts_quality": rec["ts_quality"],
-                "meta": _meta(rec["meta"]),
-            }
-        if table == "agents":
-            return {
-                "aliases": list(rec["aliases"] or []),
-                "first_seen": ts_iso(rec["first_seen"]),
-                "last_seen": ts_iso(rec["last_seen"]),
-                "message_count": s.scalar("SELECT count(*) FROM messages WHERE author_id = ?", [rec["agent_id"]]),
-                "action_count": s.scalar("SELECT count(*) FROM actions WHERE agent_id = ?", [rec["agent_id"]]),
-                "meta": _meta(rec["meta"]),
-            }
-        n = None
-        if rec["start_ts"] is not None:
-            n = s.scalar(
-                "SELECT count(*) FROM messages WHERE source = ? AND ts >= ? AND (? IS NULL OR ts < ?)",
-                [rec["source"], rec["start_ts"], rec["end_ts"], rec["end_ts"]],
-            )
-        return {
-            "period_kind": rec["kind"],
-            "start": ts_iso(rec["start_ts"]),
-            "end": ts_iso(rec["end_ts"]),
-            "ongoing": rec["end_ts"] is None,
-            "messages_in_period": n,
-            "meta": _meta(rec["meta"]),
-        }
-
-    def _record(
-        s: Store, table: str, rec: dict[str, Any], names: dict[str, str], max_chars: int, detail: bool = False
+    def get_record(
+        evidence_id: str,
+        max_chars: int | None = None,
+        before: int = 0,
+        after: int = 0,
     ) -> dict[str, Any]:
-        if table == "messages":
-            body, who, where = rec["content"], rec["author_id"], rec["channel"]
-            kind = "human" if who.startswith("human:") else "agent"
-        elif table == "actions":
-            body, who, where, kind = rec["content"], rec["agent_id"], None, "agent"
-        elif table == "agents":
-            body, who, where, kind = rec["display_name"], rec["agent_id"], None, "agent"
-        else:
-            body, who, where, kind = rec["label"], None, None, None
-        t = text(body, max_chars)
-        ts = rec.get("ts") or rec.get("first_seen") or rec.get("start_ts")
-        extra = _detail(s, table, rec, names, max_chars) if detail else {}
-        return event_record(
-            rec.get("evidence_id") or rec["agent_id"],
-            time=ts_iso(ts),
-            actor=label_for(who, names) if who else None,
-            actor_type=kind,
-            location=where,
-            text=t["content"],
-            truncated=bool(t.get("truncated")),
-            actor_id=who,
-            **extra,
+        """Resolve one evidence id to its full record: a message (time, channel, author, named recipients,
+        content and surrounding messages), an action (kind, agent, content and the agent's adjacent actions),
+        an agent profile, a period (label, start/end), or an artifact (a file or page, with the records that
+        created, changed or mentioned it). Messages and actions also list the artifacts they touched. Use it to
+        verify and quote evidence."""
+        cap = short_cap(max_chars)
+        with ctx.store() as s:
+            hit = evidence.resolve(s, evidence_id)
+            rec, table = hit["record"], hit["table"]
+            names = s.display_names()
+            out: dict[str, Any] = {"evidence_id": hit["evidence_id"], "table": table, "source": rec.get("source")}
+            if table == "messages":
+                out.update(
+                    ts=ts_iso(rec["ts"]),
+                    ts_quality=rec["ts_quality"],
+                    channel=rec["channel"],
+                    author=label_for(rec["author_id"], names),
+                    author_id=rec["author_id"],
+                    recipients=[{"agent_id": r, "name": label_for(r, names)} for r in rec["recipient_ids"] or []],
+                    reply_to=rec["reply_to"],
+                    msg_type=rec["msg_type"],
+                    meta=_meta(rec["meta"]),
+                    content=text(rec["content"], max_chars),
+                )
+                if before or after:
+                    scope = "source = ? AND channel IS NOT DISTINCT FROM ?"
+                    out["neighbors"] = _neighbors(
+                        s,
+                        "messages",
+                        scope,
+                        [rec["source"], rec["channel"]],
+                        rec,
+                        (before, after),
+                        cap,
+                        names,
+                        "author_id",
+                    )
+                    out["context"] = "previous/next messages in the same channel"
+            elif table == "actions":
+                out.update(
+                    ts=ts_iso(rec["ts"]),
+                    ts_quality=rec["ts_quality"],
+                    kind=rec["kind"],
+                    agent=label_for(rec["agent_id"], names),
+                    agent_id=rec["agent_id"],
+                    run_id=rec["run_id"],
+                    seq=rec["seq"],
+                    meta=_meta(rec["meta"]),
+                    content=text(rec["content"], max_chars),
+                )
+                if before or after:
+                    scope = "source = ? AND agent_id = ?"
+                    out["neighbors"] = _neighbors(
+                        s,
+                        "actions",
+                        scope,
+                        [rec["source"], rec["agent_id"]],
+                        rec,
+                        (before, after),
+                        cap,
+                        names,
+                        "agent_id",
+                    )
+                    out["context"] = "the same agent's previous/next actions"
+            elif table == "agents":
+                meta = _meta(rec["meta"]) or {}
+                out.update(
+                    agent_id=rec["agent_id"],
+                    display_name=rec["display_name"],
+                    aliases=list(rec["aliases"] or []),
+                    first_seen=ts_iso(rec["first_seen"]),
+                    last_seen=ts_iso(rec["last_seen"]),
+                    meta=meta,
+                    message_count=s.scalar("SELECT count(*) FROM messages WHERE author_id = ?", [rec["agent_id"]]),
+                    action_count=s.scalar("SELECT count(*) FROM actions WHERE agent_id = ?", [rec["agent_id"]]),
+                )
+            elif table == "artifacts":
+                touches = s.all(
+                    "SELECT t.record_id, t.op, t.ts FROM touches t WHERE t.artifact_id = ? ORDER BY t.ts, t.touch_id",
+                    [rec["artifact_id"]],
+                )
+                ops = collections.Counter(t["op"] for t in touches)
+                out.update(
+                    kind=rec["kind"],
+                    name=rec["name"],
+                    meta=_meta(rec["meta"]),
+                    touches_by_op=dict(ops),
+                    first_touches=[
+                        {"evidence_id": t["record_id"], "op": t["op"], "ts": ts_iso(t["ts"])} for t in touches[:10]
+                    ],
+                    last_touches=[
+                        {"evidence_id": t["record_id"], "op": t["op"], "ts": ts_iso(t["ts"])} for t in touches[10:][-5:]
+                    ],
+                )
+            else:  # periods
+                n = None
+                if rec["start_ts"] is not None:
+                    n = s.scalar(
+                        "SELECT count(*) FROM messages WHERE source = ? AND ts >= ? AND (? IS NULL OR ts < ?)",
+                        [rec["source"], rec["start_ts"], rec["end_ts"], rec["end_ts"]],
+                    )
+                out.update(
+                    kind=rec["kind"],
+                    label=text(rec["label"], max_chars),
+                    start=ts_iso(rec["start_ts"]),
+                    end=ts_iso(rec["end_ts"]),
+                    ongoing=rec["end_ts"] is None,
+                    meta=_meta(rec["meta"]),
+                    messages_in_period=n,
+                )
+                if s.has_table("actions"):
+                    members = s.all(
+                        "SELECT evidence_id FROM actions WHERE run_id = ? ORDER BY ts, evidence_id LIMIT 50",
+                        [rec["evidence_id"]],
+                    )
+                    if members:
+                        out["records"] = [m["evidence_id"] for m in members]
+            if table in ("messages", "actions") and s.has_table("touches"):
+                t = s.all(
+                    "SELECT artifact_id, op FROM touches WHERE record_id = ? ORDER BY touch_id LIMIT 50",
+                    [hit["evidence_id"]],
+                )
+                if t:
+                    out["artifacts"] = [{"artifact_id": x["artifact_id"], "op": x["op"]} for x in t]
+        return out
+
+    def _neighbors(
+        s: Store,
+        table: str,
+        scope: str,
+        scope_params: list[Any],
+        rec: dict[str, Any],
+        n: tuple[int, int],
+        cap: int,
+        names: dict[str, str],
+        who: str,
+    ) -> dict[str, Any]:
+        if rec["ts"] is None:
+            return {"before": [], "after": [], "note": "record has no timestamp, so it has no neighbors"}
+        ts, eid = rec["ts"], rec["evidence_id"]
+        cols = f"evidence_id, ts, {who} AS who, content" + (", kind" if table == "actions" else "")
+        before = s.all(
+            f"SELECT {cols} FROM {table} WHERE {scope} AND (ts < ? OR (ts = ? AND evidence_id < ?)) "
+            "ORDER BY ts DESC, evidence_id DESC LIMIT ?",
+            [*scope_params, ts, ts, eid, n[0]],
+        )
+        after = s.all(
+            f"SELECT {cols} FROM {table} WHERE {scope} AND (ts > ? OR (ts = ? AND evidence_id > ?)) "
+            "ORDER BY ts, evidence_id LIMIT ?",
+            [*scope_params, ts, ts, eid, n[1]],
         )
 
-    def make_resolver(source: str):
-        def resolve(kind: str, local_id: str, *, before: int, after: int, max_chars: int) -> dict[str, Any]:
-            eid = f"{source}:{kind}:{local_id}"
-            with ctx.store() as s:
-                try:
-                    hit = evidence.resolve(s, eid)
-                except evidence.EvidenceError:
-                    raise EventNotFound(local_id) from None
-                table, rec = hit["table"], hit["record"]
-                names = s.display_names()
-                out: dict[str, Any] = {
-                    "event": _record(s, table, rec, names, max_chars, detail=True),
-                    "before": [],
-                    "after": [],
-                }
-                if table in ("messages", "actions") and rec["ts"] is not None and (before or after):
-                    col, ctxt = (
-                        ("channel", "previous/next messages in the same room")
-                        if table == "messages"
-                        else ("agent_id", "the same agent's previous/next actions")
-                    )
-                    scope_sql = f"source = ? AND {col} IS NOT DISTINCT FROM ?"
-                    p = [rec["source"], rec[col], rec["ts"], rec["ts"], rec["evidence_id"]]
-                    b = s.all(
-                        f"SELECT * FROM {table} WHERE {scope_sql} AND (ts < ? OR (ts = ? AND evidence_id < ?)) "
-                        "ORDER BY ts DESC, evidence_id DESC LIMIT ?",
-                        [*p, before],
-                    )
-                    a = s.all(
-                        f"SELECT * FROM {table} WHERE {scope_sql} AND (ts > ? OR (ts = ? AND evidence_id > ?)) "
-                        "ORDER BY ts, evidence_id LIMIT ?",
-                        [*p, after],
-                    )
-                    out["before"] = [_record(s, table, r, names, max_chars) for r in reversed(b)]
-                    out["after"] = [_record(s, table, r, names, max_chars) for r in a]
-                    out["context"] = ctxt
-            return out
+        def item(r: dict[str, Any]) -> dict[str, Any]:
+            d: dict[str, Any] = {"evidence_id": r["evidence_id"], "ts": ts_iso(r["ts"])}
+            if table == "actions":
+                d["kind"] = r["kind"]
+            d["author"] = label_for(r["who"], names)
+            d["snippet"] = text(r["content"], cap)
+            return d
 
-        return resolve
+        return {"before": [item(r) for r in reversed(before)], "after": [item(r) for r in after]}
 
-    with ctx.store() as s:
-        store_sources = {
-            r["source"]: evidence.source_kinds(s, r["source"])
-            for r in s.all("SELECT source FROM sources ORDER BY source")
-        }
-    for src, mapped_kinds in store_sources.items():
-        if src in ctx.registry.events.by_name:
-            ctx.log.warning("event source %r already registered; store records for it are not resolvable", src)
-            continue
-        kinds = {
-            "chat": "a chat message; context = previous/next messages in the same room",
-            "event": "an agent action (session goal/summary); context = the same agent's adjacent actions",
-            "agent": "an agent (roster entry)",
-            "goal": "a dataset period (AI Village: a weekly goal)",
-        }
-        if mapped_kinds:  # a source ingested through a declarative mapping uses its own kinds
-            kinds = {"agent": kinds["agent"], **mapped_kinds}
-        ctx.event_source(
-            kinds=kinds,
-            source=src,
-            description=f"SwarmScope store records for source {src!r}.",
-        )(make_resolver(src))
+    # core_get resolves ids through this (the scope module owns the store's tools); core_info reads the
+    # store's sources itself (info.store_sources) so it also works when this module is disabled
+    ctx.registry.store_api = {"get_record": get_record}
 
     # sweep_run(filters=...) reads records straight from the store (masked like every tool result)
     sweep.register_provider(
@@ -422,7 +462,9 @@ def register(mcp, ctx) -> None:
         ] = None,
         source: Source = None,
         since: Annotated[str | None, Field(description="Profile only: inclusive UTC start for counts/samples.")] = None,
-        until: Annotated[str | None, Field(description="Profile only: exclusive UTC end (bare date = whole day).")] = None,
+        until: Annotated[
+            str | None, Field(description="Profile only: exclusive UTC end (bare date = whole day).")
+        ] = None,
         sort_by: Annotated[
             Literal["joined", "messages", "name"],
             Field(description="List only: sort by message count (desc), join date, or name."),
@@ -680,7 +722,9 @@ def register(mcp, ctx) -> None:
             if 1 <= i <= len(rows):
                 return i, rows[i - 1]
             raise ToolInputError(f"period index {i} out of range 1..{len(rows)}; call scope_periods() to list them")
-        hits = [(i, r) for i, r in enumerate(rows, 1) if r["evidence_id"] == q or q.lower() in (r["label"] or "").lower()]
+        hits = [
+            (i, r) for i, r in enumerate(rows, 1) if r["evidence_id"] == q or q.lower() in (r["label"] or "").lower()
+        ]
         if len(hits) == 1:
             return hits[0]
         if not hits:
@@ -732,16 +776,18 @@ def register(mcp, ctx) -> None:
                     params,
                 )
                 actions = s.all(f"SELECT kind, count(*) n FROM actions WHERE {window} GROUP BY 1 ORDER BY 1", params)
-                humans = s.scalar(
-                    f"SELECT count(*) FROM messages WHERE {window} AND author_id LIKE 'human:%'", params
-                )
+                humans = s.scalar(f"SELECT count(*) FROM messages WHERE {window} AND author_id LIKE 'human:%'", params)
                 d = _period_dict(r, i)
                 d.update(
                     {
                         "meta": _meta(r["meta"]),
                         "human_messages": humans,
                         "top_speakers": [
-                            {"author": label_for(x["author_id"], names), "author_id": x["author_id"], "messages": x["n"]}
+                            {
+                                "author": label_for(x["author_id"], names),
+                                "author_id": x["author_id"],
+                                "messages": x["n"],
+                            }
                             for x in speakers
                         ],
                         "channels": [{"channel": x["channel"], "messages": x["n"]} for x in channels],
@@ -751,7 +797,11 @@ def register(mcp, ctx) -> None:
                             f"for centrality call scope_graph(since={d['start']!r}, until={d['end']!r}); "
                             "for the activity curve call scope_timeline with the same window",
                         ]
-                        + (["'type' is a keyword heuristic from the goal text, not a dataset field"] if "type" in d else []),
+                        + (
+                            ["'type' is a keyword heuristic from the goal text, not a dataset field"]
+                            if "type" in d
+                            else []
+                        ),
                     }
                 )
                 return d

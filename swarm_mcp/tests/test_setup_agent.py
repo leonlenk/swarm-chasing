@@ -9,8 +9,8 @@ from pathlib import Path
 import pytest
 from setup_datasets import make_csv_chat, make_nested_jsonl
 
+from swarm_mcp import cli
 from swarm_mcp.llm import FakeClient
-from swarm_mcp.setup import cli
 from swarm_mcp.setup.agent import SYSTEM_PROMPT, SetupError, _data_block, parse_reply, setup_dataset
 from swarm_mcp.setup.spec_schema import MAPPING_SCHEMA
 
@@ -47,7 +47,7 @@ def test_none_mode_writes_draft_and_log(tmp_path):
     assert spec["source"] == "crew" and spec["records"][0]["from"] == "utterances.jsonl.gz"
     log = json.loads(Path(res["log_path"]).read_text())
     assert log["check"]["status"] == "pass"
-    assert "swarm-mcp ingest mapped --mapping" in res["message"] and str(root.resolve()) in res["message"]
+    assert "swarm-mcp add" in res["message"] and "--mapping" in res["message"] and str(root.resolve()) in res["message"]
 
 
 def test_api_mode_fixes_bad_first_attempt(tmp_path):
@@ -95,7 +95,7 @@ def test_api_mode_without_key_says_what_to_do(tmp_path, monkeypatch, capsys):
     assert "ANTHROPIC_API_KEY" in msg and "--agent none" in msg and "--agent claude-code" in msg
     assert not (tmp_path / "m").exists()
     with pytest.raises(SystemExit) as ex:
-        cli.main(["setup", "irc", str(root), "--agent", "api", "--mappings-dir", str(tmp_path / "m")])
+        cli.main(["add", str(root), "--name", "irc", "--agent", "api"])
     assert ex.value.code == 2 and "--agent none" in capsys.readouterr().err
 
 
@@ -103,7 +103,7 @@ def test_claude_code_mode_writes_task(tmp_path):
     root = make_csv_chat(tmp_path / "b")
     res = setup_dataset("irc", root, agent="claude-code", mappings_dir=tmp_path / "m")
     task = Path(res["task_path"]).read_text()
-    assert "untrusted" in task and "python -m swarm_mcp.setup check" in task and "## Done when" in task
+    assert "untrusted" in task and "swarm-mcp add" in task and "--dry-run" in task and "## Done when" in task
     assert "sent_epoch_ms" in task  # profile summary: field names and guesses
     assert "#general" not in task  # no example values
     assert Path(res["mapping_path"]).exists() and "/swarm-setup irc" in res["message"]
@@ -113,7 +113,7 @@ def test_slash_command_file():
     cmd = (REPO / ".claude" / "commands" / "swarm-setup.md").read_text()
     assert cmd.startswith("---") and "description:" in cmd and "argument-hint:" in cmd
     assert "$ARGUMENTS" in cmd and "untrusted" in cmd.lower()
-    for step in ("inspect", "check", "ingest", "core_event_sources", "scope_search", "core_get_event"):
+    for step in ("swarm-mcp add", "--dry-run", "--agent claude-code", "core_info", "scope_search", "core_get"):
         assert step in cmd
 
 

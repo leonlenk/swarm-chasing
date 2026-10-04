@@ -7,7 +7,7 @@ import json
 import pytest
 from setup_datasets import make_csv_chat, make_nested_jsonl
 
-from swarm_mcp.setup import cli
+from swarm_mcp import cli
 from swarm_mcp.setup.check import format_report, run_check
 
 GOOD_CSV = {
@@ -125,13 +125,13 @@ def test_cli_exit_codes(csv_root, tmp_path, capsys):
     good, bad = tmp_path / "good.json", tmp_path / "bad.json"
     good.write_text(json.dumps(GOOD_CSV))
     bad.write_text(json.dumps(_spec(text="sayd")))
-    for path, code in ((good, 0), (bad, 1)):
+    for path, code in ((good, 0), (bad, 1)):  # swarm-mcp add --mapping M --dry-run = the check alone
         with pytest.raises(SystemExit) as e:
-            cli.main(["check", str(path), str(csv_root)])
+            cli.main(["add", str(csv_root), "--mapping", str(path), "--dry-run"])
         assert e.value.code == code
     assert "FAIL" in capsys.readouterr().out
     with pytest.raises(SystemExit) as e:
-        cli.main(["check", str(tmp_path / "missing.json"), str(csv_root)])
+        cli.main(["add", str(csv_root), "--mapping", str(tmp_path / "missing.json"), "--dry-run"])
     assert e.value.code == 2
 
 
@@ -162,8 +162,8 @@ def test_ids_with_stray_whitespace_are_stripped_and_resolve(tmp_path):
     ingest_mapped(tmp_path / "pad.json", tmp_path / "pad", tmp_path / "s.duckdb")
     with db.connect(tmp_path / "s.duckdb") as s:
         ids = [row["evidence_id"] for row in s.all("SELECT evidence_id FROM messages ORDER BY evidence_id")]
-        assert ids == [f"pad:msg:{i}" for i in range(1, 6)]
-        assert evidence.resolve(s, "pad:msg:3")["record"]["reply_to"] == "pad:msg:2"
+        assert ids == [f"pad:msg:msg/{i}" for i in range(1, 6)]
+        assert evidence.resolve(s, "pad:msg:msg/3")["record"]["reply_to"] == "pad:msg:msg/2"
 
 
 def test_check_flags_ids_that_do_not_round_trip(tmp_path, monkeypatch):

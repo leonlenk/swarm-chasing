@@ -5,8 +5,9 @@ SwarmScope store: ``scope_periods`` lists the weekly village goals (with the
 heuristic goal type) and per-goal activity; ``scope_search``/``scope_agents``/
 ``scope_timeline``/``scope_graph`` do the rest. This module keeps the
 README/SCHEMA/CHANGELOG resources (from ``<data dir>/ai-village`` or
-``[modules.village] dir``) and the ``data``/``names`` helpers other modules import.
-Data comes from the store (``swarm-mcp add data/ai-village``).
+``[modules.village] dir``) and re-exports ``goal_type`` for older imports (name
+matching lives in ``scope.names``). Data comes from the store
+(``swarm-mcp add data/ai-village``).
 """
 
 from __future__ import annotations

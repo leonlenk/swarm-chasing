@@ -22,15 +22,14 @@ NAME = "investigate"
 DESCRIPTION = (
     "The investigate prompt: a standard investigation question (actors, instructions, sequence, reasoning, "
     "misreporting, collaboration, environment) or your own, with optional source/period/agent/location scope; "
-    "claims must cite event ids."
+    "claims must cite evidence ids."
 )
 
 # The SwarmScope tools are named when loaded, but nothing here requires them.
-SCOPE_TOOLS = ("scope_search", "scope_agents", "scope_periods", "scope_timeline", "scope_graph",
-               "scope_trace_diffusion", "scope_coordinators")  # fmt: skip
+SCOPE_TOOLS = ("scope_search", "scope_agents", "scope_periods", "scope_timeline", "scope_graph")
 MAX_LISTED_TOOLS = 40
 
-Source = Annotated[str | None, Field(description="Limit to one event source (see core_info), e.g. 'village'.")]
+Source = Annotated[str | None, Field(description="Limit to one source (see core_info), e.g. 'village'.")]
 Since = Annotated[str | None, Field(description="Start of the period (ISO date or datetime, UTC).")]
 Until = Annotated[str | None, Field(description="End of the period (ISO date or datetime, UTC).")]
 Period = Annotated[
@@ -39,7 +38,9 @@ Period = Annotated[
 Agent = Annotated[str | None, Field(description="Focus on one actor (agent name or id).")]
 Location = Annotated[str | None, Field(description="Focus on one location: room, channel, repo, page...")]
 Question = Annotated[
-    Literal["actors", "instructions", "sequence", "reasoning", "misreporting", "collaboration", "environment", "custom"],
+    Literal[
+        "actors", "instructions", "sequence", "reasoning", "misreporting", "collaboration", "environment", "custom"
+    ],
     Field(
         description="actors: who was involved; instructions: what they were told; sequence: key actions in order; "
         "reasoning: how claims evolved; misreporting: anything hidden or misreported; collaboration: how they "
@@ -76,7 +77,7 @@ QUESTIONS: dict[str, tuple[str, str, list[str]]] = {
         "The sequence of key actions",
         "What happened, in what order, and which actions mattered most?",
         [
-            "Build a timeline of the key actions and decisions, each with its time and event id.",
+            "Build a timeline of the key actions and decisions, each with its time and evidence id.",
             "Mark turning points: where plans changed, work was handed off, or something broke.",
             "Separate what the records show happened from what agents said happened.",
             "Note gaps in the record (silent periods, missing sources).",
@@ -110,7 +111,7 @@ QUESTIONS: dict[str, tuple[str, str, list[str]]] = {
             "Map who talked to whom and who handed work to whom (use a communication graph if one is loaded).",
             "Find how work was divided and whether the division held.",
             "Find disagreements and how they were resolved (or not).",
-            "Note duplicated effort, dropped handoffs and coordination failures, with event ids.",
+            "Note duplicated effort, dropped handoffs and coordination failures, with evidence ids.",
         ],
     ),
     "environment": (
@@ -195,8 +196,8 @@ def render(ctx, key: str, *, custom=None, source=None, since=None, until=None, p
         *[f"- {c}" for c in checks],
         "",
         "Method:",
-        "1. Discover the data: call core_info to see which modules and sources are loaded, their record kinds and "
-        "id format, row counts and date ranges.",
+        "1. Discover the data: call core_info to see which modules and sources are loaded, their id kinds and "
+        "format, row counts, date ranges and blind spots (each source's ingest_meta.notes).",
     ]
     if scope_now:
         lines.append(
@@ -210,11 +211,12 @@ def render(ctx, key: str, *, custom=None, source=None, since=None, until=None, p
             "tools. Start broad, then search for specifics."
         )
     lines += [
-        "3. Read the evidence itself: core_get(id, before=3, after=3) returns a record with its neighbours; "
+        "3. Read the evidence itself: core_get(id, before=3, after=3) returns a record with its neighbours "
+        "(a period also lists its member records, an artifact the records that touched it); "
         "core_get([ids]) fetches up to 50 at once"
         + (" (scope_search without a query reads a window chronologically)" if "scope_search" in have else "")
         + ". Do not rely on search snippets alone.",
-        "4. Cite event ids for every claim, exactly as tools returned them. Mark each claim as observed "
+        "4. Cite evidence ids for every claim, exactly as tools returned them. Mark each claim as observed "
         "(a record shows it) or inferred (your reading of several records), and give a confidence.",
     ]
     if "findings_record" in have:
@@ -238,7 +240,7 @@ def render(ctx, key: str, *, custom=None, source=None, since=None, until=None, p
         "",
         "Answer format:",
         "- A short direct answer to the question.",
-        "- Claims, each with its event ids, observed/inferred, and confidence.",
+        "- Claims, each with its evidence ids, observed/inferred, and confidence.",
         "- What you could not determine, and which data would settle it.",
     ]
     if finder_tools:
@@ -266,5 +268,5 @@ def register(mcp, ctx) -> None:
         name="investigate",
         description="Investigate a swarm run: pick a standard question (actors, instructions, sequence, reasoning, "
         "misreporting, collaboration, environment) or 'custom', optionally scoped by source, dates, period, agent "
-        "or location. Every claim must cite event ids.",
+        "or location. Every claim must cite evidence ids.",
     )(investigate)

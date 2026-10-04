@@ -31,22 +31,22 @@ def test_adapter_mapping(store_path: Path):
         assert str(opus["first_seen"]).startswith("2026-01-05 14:00")
         assert str(opus["last_seen"]).startswith("2026-01-14 08:00")
 
-        m2 = s.one("SELECT * FROM messages WHERE evidence_id = 'village:chat:m0002'")
+        m2 = s.one("SELECT * FROM messages WHERE evidence_id = 'village:msg:m0002'")
         assert m2["channel"] == "general" and m2["author_id"] == f"village:agent:{A_OPUS}"
         assert m2["ts_quality"] == "exact" and m2["msg_type"] is None
         # "GPT-5.2" and "Gemini 2.5" are named; recipients are agent ids, deduplicated
         assert set(m2["recipient_ids"]) >= {f"village:agent:{A_GPT}"}
         assert len(m2["recipient_ids"]) == len(set(m2["recipient_ids"]))
 
-        m5 = s.one("SELECT * FROM messages WHERE evidence_id = 'village:chat:m0005'")
+        m5 = s.one("SELECT * FROM messages WHERE evidence_id = 'village:msg:m0005'")
         # GPT names "Opus 4.5" and "Claude Opus 4.5" (same agent) and "o3": self excluded, deduplicated
         assert m5["recipient_ids"].count(f"village:agent:{A_OPUS}") == 1
         assert f"village:agent:{A_GPT}" not in m5["recipient_ids"]
 
-        human = s.one("SELECT * FROM messages WHERE evidence_id = 'village:chat:m0001'")
+        human = s.one("SELECT * FROM messages WHERE evidence_id = 'village:msg:m0001'")
         assert human["author_id"] == f"human:{HUMAN_ID}"
 
-        rest = s.one("SELECT channel FROM messages WHERE evidence_id = 'village:chat:m0006'")
+        rest = s.one("SELECT channel FROM messages WHERE evidence_id = 'village:msg:m0006'")
         assert rest["channel"] == "rest"
 
         kinds = {r["kind"]: r["n"] for r in s.all("SELECT kind, count(*) n FROM actions GROUP BY 1")}
@@ -70,24 +70,24 @@ def test_ingest_without_events(raw_data_dir: Path, tmp_path: Path):
 
 
 def test_evidence_parse_and_resolve(store_path: Path):
-    ref = evidence.parse("village:chat:m0003")
-    assert (ref.source, ref.kind, ref.native_id, ref.table) == ("village", "chat", "m0003", "messages")
+    ref = evidence.parse("village:msg:m0003")
+    assert (ref.source, ref.kind, ref.native_id, ref.table) == ("village", "msg", "m0003", "messages")
     assert evidence.make("village", "agent", A_OPUS) == f"village:agent:{A_OPUS}"
     with db.connect(store_path) as s:
-        rec = evidence.resolve(s, "village:chat:m0003")
+        rec = evidence.resolve(s, "village:msg:m0003")
         assert rec["table"] == "messages" and "genuinely" in rec["record"]["content"]
         assert evidence.resolve(s, f"village:agent:{A_GPT}")["record"]["display_name"] == "GPT-5.2"
         assert evidence.resolve(s, "village:event:e0001")["record"]["kind"] == "session_goal"
         assert evidence.resolve(s, "village:goal:g2")["table"] == "periods"
 
         with pytest.raises(evidence.EvidenceError, match="does not resolve"):
-            evidence.resolve(s, "village:chat:not-a-real-id")
+            evidence.resolve(s, "village:msg:not-a-real-id")
         with pytest.raises(evidence.EvidenceError, match="Malformed"):
             evidence.resolve(s, "m0003")
         with pytest.raises(evidence.EvidenceError, match="Unknown evidence kind"):
             evidence.resolve(s, "village:tweet:1")
-        ok, bad = evidence.check(s, ["village:chat:m0001", "village:chat:nope"])
-        assert ok == ["village:chat:m0001"] and list(bad) == ["village:chat:nope"]
+        ok, bad = evidence.check(s, ["village:msg:m0001", "village:msg:nope"])
+        assert ok == ["village:msg:m0001"] and list(bad) == ["village:msg:nope"]
 
 
 def test_resolve_agent_by_name_alias_and_id(store_path: Path):
@@ -102,7 +102,7 @@ def test_resolve_agent_by_name_alias_and_id(store_path: Path):
 
 
 def test_missing_store_is_a_clear_error(tmp_path: Path):
-    with pytest.raises(db.StoreMissing, match="swarm-mcp ingest"):
+    with pytest.raises(db.StoreMissing, match="swarm-mcp add"):
         with db.connect(tmp_path / "nope.duckdb"):
             pass
 

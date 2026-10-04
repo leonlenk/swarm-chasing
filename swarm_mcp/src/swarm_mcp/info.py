@@ -1,5 +1,5 @@
-"""One overview of the running server: modules, event sources (with store statistics),
-findings health and the effective configuration.
+"""One overview of the running server: modules, the store's sources (counts, date ranges, id kinds,
+blind spots), findings health and the effective configuration.
 
 ``core_info`` returns ``server_info(...)``; ``swarm-mcp info`` prints ``format_info(...)``.
 """
@@ -13,6 +13,7 @@ from swarm_mcp import __version__
 from swarm_mcp.config import Config
 
 MAX_CHANNELS = 20
+TABLES = ("agents", "messages", "actions", "periods", "artifacts", "touches")
 
 
 def _meta(value: Any) -> Any:
@@ -24,16 +25,42 @@ def _meta(value: Any) -> Any:
     return value if value is not None else {}
 
 
-def store_sources(store: Any, max_channels: int = MAX_CHANNELS) -> list[dict[str, Any]]:
-    """Per ingested source: adapter, path, ingest time, row counts, time ranges, channels, action kinds."""
+def _kinds(store: Any, src: str, rows: dict[str, int]) -> list[dict[str, Any]]:
+    """The evidence-id kinds present for a source, with record counts and the id format."""
+    from swarm_mcp.scope.evidence import KIND_TABLES
+
+    out = []
+    for table, n in rows.items():
+        kinds = [k for k, (t, _) in KIND_TABLES.items() if t == table]
+        if not kinds or not n:
+            continue
+        if len(kinds) == 1:
+            counts = {kinds[0]: n}
+        else:  # periods: generic 'period', AI Village goals keep 'goal'
+            pk = KIND_TABLES[kinds[0]][1]
+            counts = {
+                r["k"]: r["n"]
+                for r in store.all(
+                    f"SELECT split_part({pk}, ':', 2) AS k, count(*) AS n FROM {table} WHERE source = ? "
+                    "GROUP BY 1 ORDER BY 1",
+                    [src],
+                )
+            }
+        out += [{"kind": k, "table": table, "records": c, "id_format": f"{src}:{k}:<id>"} for k, c in counts.items()]
+    return out
+
+
+def store_sources(store: Any, max_channels: int | None = MAX_CHANNELS) -> list[dict[str, Any]]:
+    """Per ingested source: adapter, path, ingest time, row counts per table, ingest counts and meta (incl.
+    ``notes``, the dataset's blind spots), message/action time ranges, action kinds, channels (most active
+    first, capped at ``max_channels``) and the evidence-id kinds present."""
     from swarm_mcp.scope.analysis.timeline import ts_iso
 
     out = []
-    for r in store.all("SELECT source, adapter, path, ingested_at, meta FROM sources ORDER BY source"):
+    for r in store.all("SELECT source, adapter, path, ingested_at, counts, meta FROM sources ORDER BY source"):
         src = r["source"]
         rows = {
-            t: store.scalar(f"SELECT count(*) FROM {t} WHERE source = ?", [src])
-            for t in ("agents", "messages", "actions", "periods")
+            t: store.scalar(f"SELECT count(*) FROM {t} WHERE source = ?", [src]) for t in TABLES if store.has_table(t)
         }
         mt = store.one("SELECT min(ts) AS lo, max(ts) AS hi FROM messages WHERE source = ?", [src]) or {}
         at = store.one("SELECT min(ts) AS lo, max(ts) AS hi FROM actions WHERE source = ?", [src]) or {}
@@ -45,22 +72,22 @@ def store_sources(store: Any, max_channels: int = MAX_CHANNELS) -> list[dict[str
         kinds = store.all(
             "SELECT kind, count(*) AS n FROM actions WHERE source = ? GROUP BY 1 ORDER BY 2 DESC, 1", [src]
         )
-        meta = _meta(r["meta"]) or {}
         item: dict[str, Any] = {
             "source": src,
             "adapter": r["adapter"],
             "path": r["path"],
             "ingested_at": ts_iso(r["ingested_at"]),
             "row_counts": rows,
+            "ingest_counts": _meta(r["counts"]),
+            "ingest_meta": _meta(r["meta"]),
             "messages_ts": {"min": ts_iso(mt.get("lo")), "max": ts_iso(mt.get("hi"))},
             "actions_ts": {"min": ts_iso(at.get("lo")), "max": ts_iso(at.get("hi"))},
             "action_kinds": {k["kind"]: k["n"] for k in kinds},
-            "channels": channels[:max_channels],
+            "channels": channels[:max_channels] if max_channels else channels,
+            "kinds": _kinds(store, src, rows),
         }
-        if len(channels) > max_channels:
+        if max_channels and len(channels) > max_channels:
             item["channels_total"] = len(channels)
-        if meta.get("mapping"):
-            item["mapping"] = meta["mapping"]
         out.append(item)
     return out
 
@@ -89,24 +116,24 @@ def findings_health(config: Config) -> dict[str, Any]:
 
 
 def server_info(config: Config, registry: Any) -> dict[str, Any]:
-    """Modules, event sources (+ store statistics), findings health and config, in one dict."""
+    """Modules, store sources (counts, date ranges, id kinds, blind-spot notes), findings health and config."""
     from swarm_mcp.scope import db
 
-    sources: dict[str, dict[str, Any]] = {
-        s.name: s.as_dict() for s in sorted(registry.events.by_name.values(), key=lambda s: s.name)
-    }
+    sources: list[dict[str, Any]] = []
     notes: list[str] = []
     if config.store_path.exists():
         try:
             with db.connect(config.store_path) as s:
-                for st in store_sources(s):
-                    sources.setdefault(st["source"], {"source": st["source"], "kinds": []})["store"] = st
+                sources = store_sources(s)
         except Exception as e:  # noqa: BLE001 - e.g. the store is locked by an ingest
             notes.append(f"store statistics unavailable: {type(e).__name__}: {e}")
     else:
         notes.append(f"no SwarmScope store at {config.store_path}; add a dataset with `swarm-mcp add <path>`")
     notes += [
-        "Every record id is '<source>:<kind>:<id>'; core_get expands one id or a batch.",
+        "Every record id is '<source>:<kind>:<id>' with the same kinds for every source: msg (messages), event "
+        "(actions), agent, period (AI Village goals keep 'goal'), artifact (files, pages...); core_get expands "
+        "one id or a batch.",
+        "ingest_meta.notes lists each source's blind spots; read them before drawing conclusions.",
         "All timestamps are UTC.",
     ]
     return {
@@ -116,7 +143,7 @@ def server_info(config: Config, registry: Any) -> dict[str, Any]:
             "skipped": [r.as_dict() for r in registry.skipped],
         },
         "module_notes": list(registry.notes),
-        "sources": list(sources.values()),
+        "sources": sources,
         "findings": findings_health(config),
         "config": config.public(),
         "notes": notes,
@@ -134,7 +161,9 @@ def format_info(info: dict[str, Any]) -> str:
     lines.append(f"  findings   {cfg['findings_dir']}")
     lines.append(f"  sweeps     {cfg['sweeps_dir']}")
     llm = cfg["llm"]
-    lines.append(f"  llm        {llm['model']} (effort {llm['effort']}; API key {'set' if llm['api_key_set'] else 'not set'})")
+    lines.append(
+        f"  llm        {llm['model']} (effort {llm['effort']}; API key {'set' if llm['api_key_set'] else 'not set'})"
+    )
     lines.append("")
     lines.append("Modules")
     for m in info["modules"]["loaded"]:
@@ -153,17 +182,14 @@ def format_info(info: dict[str, Any]) -> str:
     if not info["sources"]:
         lines.append("  (none)")
     for s in info["sources"]:
-        kinds = ", ".join(k["kind"] for k in s.get("kinds") or [])
-        st = s.get("store")
-        if st:
-            rc = st["row_counts"]
-            span = f"{st['messages_ts']['min'] or '?'} .. {st['messages_ts']['max'] or '?'}"
-            lines.append(
-                f"  {s['source']:<10} {rc['messages']:,} messages, {rc['actions']:,} actions, {rc['agents']:,} agents, "
-                f"{rc['periods']:,} periods; {span} (adapter {st['adapter']})"
-            )
-        else:
-            lines.append(f"  {s['source']:<10} kinds: {kinds}")
+        rc = s.get("row_counts") or {}
+        span = f"{(s.get('messages_ts') or {}).get('min') or '?'} .. {(s.get('messages_ts') or {}).get('max') or '?'}"
+        counts = ", ".join(
+            f"{rc[t]:,} {t}" for t in ("messages", "actions", "agents", "periods", "artifacts") if t in rc
+        )
+        lines.append(f"  {s['source']:<10} {counts}; {span} (adapter {s.get('adapter')})")
+        for n in ((s.get("ingest_meta") or {}).get("notes") or [])[:5]:
+            lines.append(f"             blind spot: {n}")
     lines.append("")
     f = info["findings"]
     status = "ok" if f["ok"] else ("BAD EVIDENCE" if f.get("bad") else "unchecked")

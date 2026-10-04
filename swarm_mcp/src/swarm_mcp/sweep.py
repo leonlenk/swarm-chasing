@@ -1,10 +1,12 @@
 """Rubric sweeps: apply one yes/no rubric to many event records with an LLM, then measure precision.
 
-The engine is store-agnostic. It works on standard event records (``events.event_record``),
+The engine is store-agnostic. It works on standard event records (``scope.records.event_record``),
 however they were obtained:
 
-- ``resolve_event_ids`` / ``EventIdProvider`` resolve event ids through the EventSources
-  registry (the same path as ``core_get``).
+- ``resolve_ids(resolver, ids)`` / ``IdProvider`` resolve evidence ids through a resolver
+  callable, ``resolver(id) -> record``, which raises ``ToolInputError`` (message reported) or
+  ``LookupError`` ("no such record") for ids it cannot resolve. The sweep module builds it from
+  the store's ``get_record`` (the same path as ``core_get``).
 - Any other ``RecordProvider`` (e.g. a store-backed one that understands filters) can be
   registered per server with ``register_provider(ctx.registry, name, provider)``; the scope
   module registers ``scope.records.StoreRecordProvider`` as ``"store"``, which
@@ -40,12 +42,11 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping, Protocol, Sequence, runtime_checkable
+from typing import Any, Callable, Iterable, Iterator, Mapping, Protocol, Sequence, runtime_checkable
 
 from swarm_mcp import fence
-from swarm_mcp.events import EventNotFound, EventSources
 from swarm_mcp.llm import LLMClient, LLMError
-from swarm_mcp.toolkit import ToolInputError
+from swarm_mcp.toolkit import ToolInputError, truncate
 
 PROMPT_VERSION = 2  # 2: per-request nonce in the delimiter tags
 VERDICTS = ("yes", "no", "unclear")
@@ -99,39 +100,55 @@ class RecordProvider(Protocol):
     def iter_records(self, filters: Mapping[str, Any], limit: int) -> Iterable[dict[str, Any]]: ...
 
 
-def resolve_event_ids(
-    sources: EventSources, event_ids: Sequence[str], max_chars: int = DEFAULT_RECORD_CHARS
+Resolver = Callable[[str], Mapping[str, Any]]
+"""``resolver(evidence_id) -> standard record``; raises ``ToolInputError`` or ``LookupError`` if it cannot."""
+
+
+def resolve_ids(
+    resolver: Resolver, ids: Sequence[str], max_chars: int | None = DEFAULT_RECORD_CHARS
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
-    """Resolve ids through the registry. Returns (records in input order, errors); duplicates are dropped."""
+    """Resolve ids with ``resolver``. Returns (records in input order, errors); duplicates are dropped.
+
+    Each record's ``text`` is capped at ``max_chars`` (``truncated: true`` when cut). A ``ToolInputError``
+    from the resolver is reported with its message, a ``LookupError`` as "no such record"."""
     records: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
     seen: set[str] = set()
-    for raw in event_ids:
-        eid = (raw or "").strip()
+    for raw in ids:
+        eid = raw.strip() if isinstance(raw, str) else ""
         if eid in seen:
             continue
         seen.add(eid)
+        if not eid:
+            errors.append({"event_id": str(raw or ""), "error": "empty id"})
+            continue
         try:
-            parsed, src = sources.lookup(eid)
-            out = src.resolve(parsed.kind, parsed.local_id, before=0, after=0, max_chars=max_chars)
-            records.append(out["event"])
-        except EventNotFound:
-            errors.append({"event_id": eid, "error": "no such record"})
+            rec = dict(resolver(eid))
         except ToolInputError as e:
             errors.append({"event_id": eid, "error": str(e)})
+            continue
+        except LookupError:
+            errors.append({"event_id": eid, "error": "no such record"})
+            continue
+        rec.setdefault("event_id", eid)
+        if max_chars is not None:
+            text, cut = truncate(str(rec.get("text") or ""), max_chars)
+            if cut:
+                rec["text"], rec["truncated"] = text, True
+        records.append(rec)
     return records, errors
 
 
-class EventIdProvider:
-    """``RecordProvider`` for ``{"event_ids": [...]}``; unresolvable ids are collected in ``errors``."""
+class IdProvider:
+    """``RecordProvider`` for ``{"ids": [...]}`` over a resolver; unresolvable ids are collected in ``errors``."""
 
-    def __init__(self, sources: EventSources, max_chars: int = DEFAULT_RECORD_CHARS):
-        self.sources = sources
+    def __init__(self, resolver: Resolver, max_chars: int | None = DEFAULT_RECORD_CHARS):
+        self.resolver = resolver
         self.max_chars = max_chars
         self.errors: list[dict[str, str]] = []
 
     def iter_records(self, filters: Mapping[str, Any], limit: int) -> Iterator[dict[str, Any]]:
-        records, self.errors = resolve_event_ids(self.sources, list(filters.get("event_ids") or []), self.max_chars)
+        records, self.errors = resolve_ids(self.resolver, list(filters.get("ids") or []), self.max_chars)
         yield from records[:limit]
 
 

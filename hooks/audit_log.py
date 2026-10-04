@@ -25,6 +25,7 @@ stays empty, diagnostics go to stderr, and the exit code is always 0.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -103,12 +104,10 @@ def build_entry(data: dict) -> dict | None:
 def append(path: Path, line: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
-        try:
+        with contextlib.suppress(Exception):  # no locking available: O_APPEND still keeps lines whole
             import fcntl
 
             fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-        except Exception:  # noqa: BLE001 - no locking available; O_APPEND still keeps lines whole
-            pass
         f.write(line + "\n")
         f.flush()
 
@@ -124,21 +123,16 @@ def main() -> int:
             return 0
         append(findings_dir() / "audit.jsonl", canonical(entry))
     except Exception as e:  # noqa: BLE001 - never break a tool call
-        try:
+        with contextlib.suppress(Exception):
             print(f"audit_log hook: {type(e).__name__}: {e}", file=sys.stderr)
-        except Exception:  # noqa: BLE001
-            pass
     return 0
 
 
 if __name__ == "__main__":
     try:
-        main()
-    except BaseException:  # noqa: BLE001 - even KeyboardInterrupt/SystemExit must not fail the tool call
-        pass
+        with contextlib.suppress(BaseException):  # even KeyboardInterrupt/SystemExit must not fail the tool call
+            main()
     finally:
-        try:
+        with contextlib.suppress(Exception):
             sys.stderr.flush()
-        except Exception:  # noqa: BLE001
-            pass
         os._exit(0)

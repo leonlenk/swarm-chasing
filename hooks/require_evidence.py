@@ -83,14 +83,16 @@ def explain(result: dict) -> str:
         lines.append(f"- line {e.get('line')}: corrupt ({e.get('error')})")
     hidden = max(0, len(problems) - MAX_LISTED) + max(0, len(result.get("parse_errors") or []) - MAX_LISTED)
     if hidden:
-        lines.append(f"- ... and {hidden} more (run `swarm-mcp check-findings` for the full list)")
+        lines.append(f"- ... and {hidden} more (run `swarm-mcp info` for the list)")
     lines += [
         "How to fix:",
-        "  - For a finding with bad evidence ids: re-run findings_record with ids copied exactly from "
-        "tool results (e.g. the evidence_id field of search results; drop any id you cannot find), "
-        "then delete the old line from findings.jsonl.",
+        (
+            "  - For a finding with bad evidence ids: re-run findings_record with ids copied exactly from "
+            "tool results (e.g. the evidence_id field of search results; drop any id you cannot find), "
+            "then delete the old line from findings.jsonl."
+        ),
         "  - For a corrupt line: fix it so it is one JSON object per line, or remove it.",
-        "  - Verify with: uv run --directory swarm_mcp swarm-mcp check-findings",
+        "  - Verify with: uv run --directory swarm_mcp swarm-mcp info",
     ]
     return "\n".join(lines)
 
@@ -217,7 +219,7 @@ def hook_main() -> None:
     if others:
         note(
             f"{len(others)} finding(s) recorded in other sessions cite evidence that doesn't resolve "
-            f"({', '.join(map(str, others[:5]))}); not blocking this session. Run `swarm-mcp check-findings`."
+            f"({', '.join(map(str, others[:5]))}); not blocking this session. Run `swarm-mcp info`."
         )
         if not (result.get("problems") or result.get("parse_errors")):
             return

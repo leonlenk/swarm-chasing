@@ -9,9 +9,10 @@ Checks, each reported with counts and up to 5 masked examples:
 | field_missing        | error           | a mapped field path never occurs in the sampled rows        |
 | no_records           | error           | a records entry yields nothing                               |
 | id_missing           | error >5% / warn| rows dropped because local_id is empty                       |
-| id_duplicate         | error           | two records with the same event id                           |
-| id_unparseable       | error           | an id fails ``parse_event_id`` or does not parse to itself   |
-| record_invalid       | error           | ``events.event_record`` rejects a record                     |
+| id_duplicate         | error           | two records with the same evidence id                        |
+| id_unparseable       | error           | an id (or reply_to) fails ``scope.evidence.parse``, or does  |
+|                      |                 | not parse back to itself (stray whitespace)                  |
+| record_invalid       | error           | ``scope.records.event_record`` rejects a record              |
 | time_unparseable     | error >1% / warn| time present but not parseable with the given format        |
 | time_out_of_range    | error >1% / warn| parsed time outside 1990–2100 (wrong epoch unit?)            |
 | time_missing         | warn >5%        | no time value                                                |
@@ -34,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from swarm_mcp.events import parse_event_id
+from swarm_mcp.scope import evidence
 from swarm_mcp.setup.mapping import MappedAdapter, MappingError, has_path, mapped_paths, validate_spec
 from swarm_mcp.setup.masking import show
 from swarm_mcp.setup.profile import flatten
@@ -152,8 +153,7 @@ def run_check(
     c = _Collector()
     limit = None if full else rows
     seen_ids: set[str] = set()
-    ids_by_kind: dict[str, set[str]] = defaultdict(set)
-    replies: list[tuple[str, str, str, int]] = []
+    replies: list[tuple[str, str, int]] = []
     by_kind: Counter[str] = Counter()
     message_kinds = {k for k, v in adapter.kinds.items() if v.category == "message" and v.table == "events"}
     n = n_actor = n_time_spec = 0
@@ -167,14 +167,13 @@ def run_check(
             kind = rec.kind
             by_kind[kind] += 1
             try:  # an id must parse back to itself, or citations of it never resolve
-                if str(parse_event_id(rec.event_id)) != rec.event_id:
+                if str(evidence.parse(rec.event_id)) != rec.event_id:
                     c.hit("id_unparseable", show(rec.event_id))
             except Exception:  # noqa: BLE001
                 c.hit("id_unparseable", show(rec.event_id))
             if rec.event_id in seen_ids:
                 c.hit("id_duplicate", show(rec.event_id))
             seen_ids.add(rec.event_id)
-            ids_by_kind[kind].add(rec.local_id)
             try:
                 rec.as_event_record()
             except Exception as e:  # noqa: BLE001
@@ -204,19 +203,24 @@ def run_check(
             for v in d.recipients_unmatched:
                 c.hit("recipient_unmatched", _ex(d.table, d.row, "recipient", v))
             if rec.reply_to:
-                tgt = parse_event_id(rec.reply_to)
-                replies.append((tgt.kind, tgt.local_id, d.table, d.row))
+                try:
+                    if str(evidence.parse(rec.reply_to)) != rec.reply_to:
+                        c.hit("id_unparseable", f"{d.table} row {d.row}: reply_to {show(rec.reply_to)}")
+                except Exception:  # noqa: BLE001
+                    c.hit("id_unparseable", f"{d.table} row {d.row}: reply_to {show(rec.reply_to)}")
+                replies.append((rec.reply_to, d.table, d.row))
     except MappingError as e:
         problems.append(Problem("error", "table_missing", str(e), 1))
         return finish()
 
+    record_ids = set(seen_ids)
     agents = list(adapter.agents())
     periods = 0
     try:
         for p in adapter.periods(limit):
             periods += 1
             try:
-                if str(parse_event_id(p.event_id)) != p.event_id:
+                if str(evidence.parse(p.event_id)) != p.event_id:
                     c.hit("id_unparseable", show(p.event_id))
             except Exception:  # noqa: BLE001
                 c.hit("id_unparseable", show(p.event_id))
@@ -252,9 +256,9 @@ def run_check(
             )
         )
     for code, msg in (
-        ("id_duplicate", "duplicate event ids"),
-        ("id_unparseable", "event ids that do not parse back to themselves (stray whitespace?)"),
-        ("record_invalid", "records rejected by events.event_record"),
+        ("id_duplicate", "duplicate evidence ids"),
+        ("id_unparseable", "evidence ids that do not parse, or not back to themselves (stray whitespace?)"),
+        ("record_invalid", "records rejected by scope.records.event_record"),
     ):
         if c.counts[code]:
             problems.append(Problem("error", code, f"{c.counts[code]} {msg}", c.counts[code], c.examples[code]))
@@ -328,7 +332,7 @@ def run_check(
             )
         )
     if replies:
-        dangling = [(k, lid, t, row) for k, lid, t, row in replies if lid not in ids_by_kind.get(k, set())]
+        dangling = [(rid, t, row) for rid, t, row in replies if rid not in record_ids]
         r_ = len(dangling) / len(replies)
         if dangling and r_ > (0.1 if full else 0.5):
             note = "" if full else " (sample mode: targets outside the sample count as dangling)"
@@ -338,7 +342,7 @@ def run_check(
                     "reply_dangling",
                     f"{len(dangling)} of {len(replies)} reply_to targets ({r_:.0%}) are not mapped ids{note}",
                     len(dangling),
-                    [f"{t} row {row}: reply_to {k}:{show(lid)}" for k, lid, t, row in dangling[:MAX_EXAMPLES]],
+                    [f"{t} row {row}: reply_to {show(rid)}" for rid, t, row in dangling[:MAX_EXAMPLES]],
                 )
             )
     if n_actor and actor_status["agent"] + actor_status["unmatched"] and not agents:

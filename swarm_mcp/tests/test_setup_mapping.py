@@ -8,7 +8,8 @@ import builtins
 import pytest
 from setup_datasets import AGENTS_A, MEMBERS_C, make_csv_chat, make_nested_jsonl, make_sqlite_board
 
-from swarm_mcp.events import event_record, parse_event_id
+from swarm_mcp.scope import evidence
+from swarm_mcp.scope.records import event_record
 from swarm_mcp.setup.agent import draft_mapping
 from swarm_mcp.setup.check import run_check
 from swarm_mcp.setup.mapping import MappedAdapter, MappingError, get_path, row_matches, validate_spec
@@ -17,8 +18,9 @@ from swarm_mcp.setup.protocol_bridge import Adapter, AgentRecord, PeriodRecord, 
 
 
 def _valid(rec: StandardRecord, source: str) -> dict:
-    eid = parse_event_id(rec.event_id)
-    assert eid.source == source
+    eid = evidence.parse(rec.event_id)
+    assert eid.source == source and eid.kind in ("msg", "event")
+    assert eid.native_id == f"{rec.kind}/{rec.local_id}"  # the dataset kind always prefixes the local id
     d = rec.as_event_record()
     assert d == event_record(
         rec.event_id,
@@ -32,11 +34,13 @@ def _valid(rec: StandardRecord, source: str) -> dict:
         reply_to=rec.reply_to,
         ts_quality=rec.ts_quality,
         meta=rec.meta or None,
+        **{"msg_type" if eid.kind == "msg" else "action_kind": rec.kind},
     )
+    assert d["kind"] == eid.kind
     if rec.reply_to:
-        parse_event_id(rec.reply_to)
+        evidence.parse(rec.reply_to)
     for r in rec.recipients:
-        assert parse_event_id(r).kind == "agent"
+        assert evidence.parse(r).kind == "agent"
     return d
 
 
@@ -68,11 +72,11 @@ def test_nested_jsonl_draft_passes_and_records_are_standard(tmp_path):
     for r in recs:
         _valid(r, "crew")
     first = recs[0]
-    assert first.event_id == "crew:utterance:u-00000"
+    assert first.event_id == "crew:msg:utterance/u-00000" and first.kind == "utterance" and first.local_id == "u-00000"
     assert first.time == "2026-01-05T14:00:00Z" and first.location in {"lobby", "lab", "ops"}
     assert first.actor.startswith("crew:agent:p-") and first.actor_type == "agent"
     replies = [r for r in recs if r.reply_to]
-    assert replies and all(r.reply_to.startswith("crew:utterance:u-") for r in replies)
+    assert replies and all(r.reply_to.startswith("crew:msg:utterance/u-") for r in replies)
     assert any(r.recipients for r in recs)
     agents = {a.local_id: a for a in ad.agents()}
     assert set(agents) == {pid for pid, _, _ in AGENTS_A}
@@ -92,8 +96,8 @@ def test_csv_draft_plus_small_fixes_passes(tmp_path):
     # the small fixes a person (or agent) makes after reading the TODOs:
     rec["local_id"] = "MsgNo"
     rec["recipients"] = {"field": "mentions", "split": ";"}
-    rec["kind"] = "msg"
-    rec["reply_to"]["kind"] = "msg"
+    rec["kind"] = "line"
+    rec["reply_to"]["kind"] = "line"
     report = run_check(spec, root, full=True)
     assert report["status"] == "pass", report["problems"]
     assert not [p for p in report["problems"] if p["code"] == "reply_dangling"]
@@ -101,7 +105,7 @@ def test_csv_draft_plus_small_fixes_passes(tmp_path):
     for r in recs:
         _valid(r, "irc")
     r4 = next(r for r in recs if r.local_id == "4")
-    assert r4.reply_to == "irc:msg:3" and r4.location.startswith("#")
+    assert r4.event_id == "irc:msg:line/4" and r4.reply_to == "irc:msg:line/3" and r4.location.startswith("#")
     assert r4.time.startswith("2026-01-05T14:0")
     assert any(r.recipients for r in recs)
     assert all(r.actor.startswith("irc:agent:") for r in recs)
@@ -121,7 +125,7 @@ def test_sqlite_draft_passes_with_lookup_location(tmp_path):
     for r in recs:
         _valid(r, "board")
     r = next(x for x in recs if x.reply_to)
-    assert r.reply_to.startswith("board:post:10")
+    assert r.reply_to.startswith("board:msg:post/10")
     assert all(x.location.startswith("Thread about") for x in recs)
     assert {a.display_name for a in ad.agents()} == {m[1] for m in MEMBERS_C}
 
@@ -168,9 +172,53 @@ def test_periods_and_filters(tmp_path):
     assert len([x for x in items if isinstance(x, AgentRecord)]) == 3  # is_bot filter
     periods = [x for x in items if isinstance(x, PeriodRecord)]
     assert (
-        len(periods) == 12 and periods[0].event_id.startswith("board:thread:") and periods[0].start_time.endswith("Z")
+        len(periods) == 12
+        and periods[0].event_id.startswith("board:period:thread/")
+        and periods[0].kind == "thread"
+        and periods[0].start_time.endswith("Z")
     )
     assert ad.kinds["thread"].table == "periods" and ad.kinds["agent"].table == "agents"
+    assert [ad.kinds[k].schema_kind for k in ("post", "thread", "agent")] == ["msg", "period", "agent"]
+
+
+def test_ids_use_schema_kinds_and_never_collide(tmp_path):
+    """Two message kinds from the same rows share the schema kind 'msg' but not ids; reply_to.kind names a
+    dataset kind and the target id gets that kind's schema kind."""
+    root = make_sqlite_board(tmp_path / "c")
+    threads = {
+        "from": "board.sqlite#threads",
+        "local_id": "thread_key",
+        "time": {"field": "opened_ts", "format": "epoch_s"},
+    }
+    spec = {
+        "source": "board",
+        "agents": {"from": "board.sqlite#members", "id": "member_key", "display_name": "screen_name"},
+        "records": [
+            {
+                "from": "board.sqlite#posts",
+                "kind": "post",
+                "local_id": "post_key",
+                "time": {"field": "posted_unix", "format": "epoch_s"},
+                "actor": {"field": "author_ref", "match": "id"},
+                "text": "body_md",
+                "reply_to": {"field": "thread_ref", "kind": "open"},
+            },
+            {**threads, "kind": "title", "text": "title", "actor": {"field": "opened_by", "match": "id"}},
+            {**threads, "kind": "opener", "text": "opened_by"},
+            {**threads, "kind": "open", "category": "action", "text": "title"},
+        ],
+    }
+    report = run_check(spec, root, full=True)
+    assert report["status"] == "pass", report["problems"]
+    assert not [p for p in report["problems"] if p["code"] in ("id_duplicate", "reply_dangling", "id_unparseable")]
+    recs = list(MappedAdapter(spec, root).records())
+    ids = [r.event_id for r in recs]
+    assert len(ids) == len(set(ids)) == 240 + 3 * 12
+    assert {"board:msg:title/1", "board:msg:opener/1", "board:event:open/1"} <= set(ids)
+    post = next(r for r in recs if r.kind == "post")
+    assert post.event_id.startswith("board:msg:post/") and post.reply_to.startswith("board:event:open/")
+    for r in recs:
+        _valid(r, "board")
 
 
 def test_invalid_specs_are_rejected_with_reasons(tmp_path):

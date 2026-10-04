@@ -8,7 +8,10 @@ Tables:
   agents    one row per agent (``agent_id`` is itself an evidence id)
   messages  chat/communication records
   actions   non-chat agent activity (session goals/summaries, ...)
-  periods   dataset-defined time periods (AI Village: the weekly goals)
+  periods   dataset-defined spans: time periods (AI Village: weekly goals) and episodes of work
+            that group records (a pull request, a run); records point at theirs via ``run_id``
+  artifacts things agents create and change: files, wiki pages, documents...
+  touches   which record did what to which artifact (create / modify / delete / read / mention)
   findings  claims recorded by investigators, each citing evidence ids
   sources   one row per ingested source (adapter, path, counts, time)
 """
@@ -38,7 +41,7 @@ class Agent(_Row):
 
 
 class Message(_Row):
-    evidence_id: str  # "village:chat:<uuid>"
+    evidence_id: str  # "village:msg:<uuid>"
     source: str
     channel: str | None = None
     author_id: str  # agent_id, or "human:<user id>"
@@ -74,6 +77,27 @@ class Period(_Row):
     meta: dict[str, Any] = Field(default_factory=dict)
 
 
+TouchOp = Literal["create", "modify", "delete", "read", "mention"]
+
+
+class Artifact(_Row):
+    artifact_id: str  # evidence id, e.g. "rpg-game:artifact:src/talents.js"
+    source: str
+    kind: str  # e.g. "file", "page"
+    name: str
+    meta: dict[str, Any] = Field(default_factory=dict)  # e.g. {"hub": true}, {"role": "test"}, page_family
+
+
+class Touch(_Row):
+    touch_id: str  # "<record id>|<op>|<artifact id>"
+    source: str
+    record_id: str  # evidence id of the message or action
+    artifact_id: str
+    op: TouchOp
+    ts: datetime | None = None
+    meta: dict[str, Any] = Field(default_factory=dict)  # e.g. {"added": 12, "lines": [...], "imports": [...]}
+
+
 class Finding(_Row):
     finding_id: str
     created_at: datetime
@@ -90,6 +114,8 @@ RECORD_MODELS: dict[str, type[_Row]] = {
     "messages": Message,
     "actions": Action,
     "periods": Period,
+    "artifacts": Artifact,
+    "touches": Touch,
 }
 
 # DuckDB column types, in table order; used for DDL and for typed bulk loads.
@@ -137,6 +163,22 @@ COLUMNS: dict[str, dict[str, str]] = {
         "end_ts": "TIMESTAMP",
         "meta": "JSON",
     },
+    "artifacts": {
+        "artifact_id": "TEXT",
+        "source": "TEXT",
+        "kind": "TEXT",
+        "name": "TEXT",
+        "meta": "JSON",
+    },
+    "touches": {
+        "touch_id": "TEXT",
+        "source": "TEXT",
+        "record_id": "TEXT",
+        "artifact_id": "TEXT",
+        "op": "TEXT",
+        "ts": "TIMESTAMP",
+        "meta": "JSON",
+    },
     "findings": {
         "finding_id": "TEXT",
         "created_at": "TIMESTAMP",
@@ -161,11 +203,13 @@ PRIMARY_KEYS = {
     "messages": "evidence_id",
     "actions": "evidence_id",
     "periods": "evidence_id",
+    "artifacts": "artifact_id",
+    "touches": "touch_id",
     "findings": "finding_id",
     "sources": "source",
 }
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2  # 2: artifacts + touches tables, generic 'period' kind
 
 
 def ddl() -> list[str]:

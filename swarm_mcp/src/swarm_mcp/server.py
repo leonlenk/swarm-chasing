@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import contextlib
 import importlib
-import json
 import logging
 import pkgutil
 import sys
@@ -124,7 +123,6 @@ def load_module(
     except Exception as e:  # noqa: BLE001
         log.error("module %s: register() raised", name, exc_info=True)
         sdk.rollback(mcp, before)
-        registry.events.drop_owner(name)
         return skip(f"register() raised {type(e).__name__}: {e}")
 
     after = sdk.snapshot(mcp)
@@ -147,7 +145,7 @@ UNTRUSTED_NOTICE = (
     "credentials masked and text capped (default 500 chars; pass max_chars for more)."
 )
 EVIDENCE_NOTICE = (
-    "Every record has an evidence id ({source}:{kind}:{native_id}, e.g. village:chat:<uuid>). Cite ids exactly "
+    "Every record has an evidence id ({source}:{kind}:{native_id}, e.g. village:msg:<uuid>). Cite ids exactly "
     "as returned; core_get re-resolves one (or a batch), and findings_record rejects ids that do not resolve."
 )
 
@@ -218,24 +216,14 @@ def setup_logging(level: str = "INFO") -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(prog="swarm-mcp", description="Modular MCP server (stdio).")
-    parser.add_argument(
-        "--list-modules",
-        action="store_true",
-        help="load modules, print the module report as JSON to stdout, and exit (no protocol)",
+    """Serve on stdio (``swarm-mcp`` with no arguments). ``swarm-mcp info`` prints the module report."""
+    parser = argparse.ArgumentParser(
+        prog="swarm-mcp",
+        description="Run the swarm MCP server on stdio. Subcommands: info, add, render, export (see swarm-mcp -h).",
     )
-    args = parser.parse_args(argv)
-
+    parser.parse_args(argv)
     config = Config.load()
     setup_logging(config.log_level)
-
-    if args.list_modules:
-        with contextlib.redirect_stdout(sys.stderr):
-            mcp = build_server(config)
-        reg: Registry = mcp.swarm_registry  # type: ignore[attr-defined]
-        print(json.dumps({"modules": [r.as_dict() for r in reg.records.values()], "notes": reg.notes}, indent=2))
-        return
-
     mcp = build_server(config)
     try:
         sdk.run_stdio(mcp)

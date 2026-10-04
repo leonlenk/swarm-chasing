@@ -1,10 +1,12 @@
-"""Standard event records (``events.event_record``) streamed from the SwarmScope store.
+"""Standard event records (``event_record``) streamed from the SwarmScope store.
 
 One filter vocabulary, shared by sweeps and exports:
 
     source   str | [str]   only these sources (e.g. "village")
-    kind     str | [str]   only these evidence-id kinds ("chat", "event", or a mapped kind such as
-                           "post"); "source:kind" is accepted too
+    kind     str | [str]   only these schema kinds: "msg" (messages) or "event" (actions);
+                           "source:kind" is accepted too
+    type     str | [str]   only these dataset types: ``messages.msg_type`` or ``actions.kind``
+                           (e.g. "commit", "revision", "SEND_MESSAGE")
     channel  str           only messages in this channel (actions have no channel, so they drop out)
     author   str           agent name/alias/id, "human" (every human) or "human:<id>"
     since    str           inclusive UTC start (ISO date or datetime)
@@ -14,7 +16,8 @@ One filter vocabulary, shared by sweeps and exports:
 Records come from ``messages`` and ``actions`` in time order (ts, then evidence id).
 ``store_records`` yields them lazily; ``StoreRecordProvider`` is the
 ``sweep.RecordProvider`` the scope module registers as ``"store"``; ``export_store``
-feeds them to ``export.export`` with a ``redact.Redactor``.
+feeds them to ``export.export`` with a ``redact.Redactor``. ``from_store_record`` turns a
+``store_api["get_record"]`` result (a message, action or period) into the same record shape.
 """
 
 from __future__ import annotations
@@ -23,12 +26,46 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
 
-from swarm_mcp.events import event_record
-from swarm_mcp.scope import db
+from swarm_mcp.scope import db, evidence
 from swarm_mcp.scope.analysis.timeline import record_filters, ts_iso
 from swarm_mcp.toolkit import ToolInputError, parse_time, truncate
 
-FILTER_KEYS = ("source", "kind", "channel", "author", "since", "until", "query")
+FILTER_KEYS = ("source", "kind", "type", "channel", "author", "since", "until", "query")
+RECORD_KINDS = {"msg": "messages", "event": "actions"}
+RECORD_KEYS = ("event_id", "source", "kind", "time", "actor", "actor_type", "location", "text")
+
+
+def event_record(
+    event_id: str,
+    *,
+    time: str | None,
+    actor: str | None,
+    actor_type: str | None = None,
+    location: str | None = None,
+    text: str = "",
+    truncated: bool = False,
+    **extra: Any,
+) -> dict[str, Any]:
+    """The standard record shape sweeps and exports work on (``RECORD_KEYS`` first, then ``extra``).
+
+    ``event_id`` is a store evidence id (``evidence.parse`` validates it); ``kind`` is its schema kind."""
+    ref = evidence.parse(event_id)
+    d: dict[str, Any] = {
+        "event_id": event_id,
+        "source": ref.source,
+        "kind": ref.kind,
+        "time": time,
+        "actor": actor,
+        "actor_type": actor_type,
+        "location": location,
+        "text": text,
+    }
+    if truncated:
+        d["truncated"] = True
+    d.update({k: v for k, v in extra.items() if v is not None})
+    return d
+
+
 _BATCH = 1000
 
 _SELECT = {
@@ -66,10 +103,6 @@ def _meta(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _like_escape(s: str) -> str:
-    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
 def check_filters(filters: Mapping[str, Any] | None) -> dict[str, Any]:
     """The non-empty filters, or ``ToolInputError`` for unknown keys."""
     f = {k: v for k, v in dict(filters or {}).items() if v not in (None, "", [])}
@@ -94,9 +127,18 @@ def store_records(
     The read-only connection stays open while the generator is consumed."""
     f = check_filters(filters)
     sources = _as_list(f.get("source"), "source")
-    kinds = _as_list(f.get("kind"), "kind")
-    bare = [k for k in kinds if ":" not in k]
-    qualified = [k for k in kinds if ":" in k]  # "source:kind" keeps its source
+    kind_specs = []  # (source or None, schema kind): "source:kind" keeps its source
+    for k in _as_list(f.get("kind"), "kind"):
+        src, _, kind = k.rpartition(":")
+        kind_specs.append((src or None, kind))
+    kinds = [k for _src, k in kind_specs]
+    bad_kinds = sorted({k for k in kinds if k not in RECORD_KINDS})
+    if bad_kinds:
+        raise ToolInputError(
+            f"Unknown record kind(s) {', '.join(bad_kinds)}: kind is 'msg' (messages) or 'event' (actions). "
+            "A dataset's own type (e.g. 'commit', 'revision') goes in the 'type' filter."
+        )
+    types = _as_list(f.get("type"), "type")
     query = _one(f.get("query"), "query")
     lo = parse_time(_one(f.get("since"), "since"), field="since")
     hi = parse_time(_one(f.get("until"), "until"), end=True, field="until")
@@ -104,7 +146,7 @@ def store_records(
         raise ToolInputError(f"since ({f.get('since')}) must be before until ({f.get('until')})")
     with db.connect(db_path) as s:
         known = {r["source"] for r in s.all("SELECT source FROM sources")}
-        bad = [x for x in sources if x not in known]
+        bad = [x for x in [*sources, *(src for src, _k in kind_specs if src)] if x not in known]
         if bad:
             raise ToolInputError(f"Unknown source(s) {', '.join(bad)}. Sources: {', '.join(sorted(known)) or 'none'}")
         one_source = sources[0] if len(sources) == 1 else None
@@ -115,19 +157,21 @@ def store_records(
         for table in ("messages", "actions"):
             if channel is not None and table == "actions":
                 continue
+            if kinds and not any(RECORD_KINDS[k] == table for k in kinds):
+                continue
             where, p = record_filters(table, channel=channel, since=lo, until=hi)
             if sources:
                 where.append(f"source IN ({', '.join('?' * len(sources))})")
                 p += sources
-            if kinds:
-                any_kind = []
-                if bare:
-                    any_kind.append(f"split_part(evidence_id, ':', 2) IN ({', '.join('?' * len(bare))})")
-                    p += bare
-                for k in qualified:
-                    any_kind.append("evidence_id LIKE ? ESCAPE '\\'")
-                    p.append(_like_escape(k) + ":%")
-                where.append("(" + " OR ".join(any_kind) + ")")
+            if kind_specs:
+                kind_sources = [src for src, k in kind_specs if RECORD_KINDS[k] == table]
+                if None not in kind_sources:  # only qualified kinds for this table: keep their sources
+                    where.append(f"source IN ({', '.join('?' * len(kind_sources))})")
+                    p += kind_sources
+            if types:
+                col = "msg_type" if table == "messages" else "kind"
+                where.append(f"{col} IN ({', '.join('?' * len(types))})")
+                p += types
             if author is not None:
                 sql, ap, _ = author
                 where.append(sql.replace("author_id", "agent_id") if table == "actions" else sql)
@@ -137,6 +181,8 @@ def store_records(
                 p.append("%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%")
             parts.append(f"{_SELECT[table]} WHERE {' AND '.join(where) or 'TRUE'}")
             params += p
+        if not parts:
+            return
         sql = " UNION ALL ".join(parts) + " ORDER BY ts NULLS LAST, evidence_id"
         if limit is not None:
             sql += " LIMIT ?"
@@ -162,21 +208,65 @@ def _record(
     if max_chars is not None:
         text, cut = truncate(text, max_chars)
     who = r["who"]
-    meta = _meta(r["meta"])
-    actor_type = meta.get("actor_type") or (
-        "agent" if who in names else "human" if str(who).startswith("human:") else "external" if who else "unknown"
-    )
     extra = {"actor_id": who, ("msg_type" if r["tbl"] == "messages" else "action_kind"): r["subtype"]}
     return event_record(
         r["evidence_id"],
         time=ts_iso(r["ts"]),
         actor=db.label_for(who, names),
-        actor_type=actor_type,
+        actor_type=_actor_type(who, _meta(r["meta"]), names),
         location=r["location"],
         text=text,
         truncated=cut,
         **extra,
     )
+
+
+def _actor_type(who: Any, meta: Mapping[str, Any], agents: Mapping[str, Any] | None = None) -> str:
+    """meta.actor_type, else from the id: human:..., an agent (in ``agents`` when given), "unknown" for none,
+    else "external" (an unmatched actor is not an agent)."""
+    if meta.get("actor_type"):
+        return str(meta["actor_type"])
+    if str(who).startswith("human:"):
+        return "human"
+    if not who or who == "unknown":
+        return "unknown"
+    return "agent" if agents is None or who in agents else "external"
+
+
+def _untrusted_text(value: Any) -> tuple[str, bool]:
+    """(text, truncated) of a ``{"content", "untrusted", "truncated"?}`` field from ``get_record``."""
+    if isinstance(value, Mapping):
+        return str(value.get("content") or ""), bool(value.get("truncated"))
+    return str(value or ""), False
+
+
+def from_store_record(d: Mapping[str, Any]) -> dict[str, Any]:
+    """A standard record from a ``store_api["get_record"]`` result (messages, actions, periods).
+
+    The text is ``content["content"]`` (already masked and capped by get_record). Agents and artifacts
+    have no text to judge, so they raise ``ToolInputError``."""
+    table, eid = d.get("table"), d.get("evidence_id")
+    meta = _meta(d.get("meta"))
+    if table == "messages":
+        text, cut = _untrusted_text(d.get("content"))
+        who = d.get("author_id")
+        return event_record(
+            eid, time=d.get("ts"), actor=d.get("author"), actor_type=_actor_type(who, meta),
+            location=d.get("channel"), text=text, truncated=cut, actor_id=who, msg_type=d.get("msg_type"),
+        )  # fmt: skip
+    if table == "actions":
+        text, cut = _untrusted_text(d.get("content"))
+        who = d.get("agent_id")
+        return event_record(
+            eid, time=d.get("ts"), actor=d.get("agent"), actor_type=_actor_type(who, meta),
+            text=text, truncated=cut, actor_id=who, action_kind=d.get("kind"),
+        )  # fmt: skip
+    if table == "periods":
+        text, cut = _untrusted_text(d.get("label"))
+        return event_record(
+            eid, time=d.get("start"), actor=None, text=text, truncated=cut, period_kind=d.get("kind"), end=d.get("end")
+        )
+    raise ToolInputError(f"{eid} is a {table} record with no text to evaluate; use message, action or period ids.")
 
 
 def store_agents(db_path: Path, sources: list[str] | None = None) -> list[dict[str, Any]]:
@@ -249,7 +339,9 @@ def export_store(
     out: dict[str, Any] = {
         "out_dir": str(out_dir),
         "records": manifest["records"],
-        "redaction": {k: manifest["redaction"][k] for k in ("rules", "allow_email_domains", "counts", "records_changed")},
+        "redaction": {
+            k: manifest["redaction"][k] for k in ("rules", "allow_email_domains", "counts", "records_changed")
+        },
     }
     if check:
         out["check"] = exp.check(out_dir).to_dict()
