@@ -31,7 +31,7 @@ from swarm_mcp.modules.subtasks.infer import (
 from swarm_mcp.modules.subtasks.sources import Corpus, corpus_sources, load_corpus
 from swarm_mcp.scope import evidence
 from swarm_mcp.scope.db import norm
-from swarm_mcp.toolkit import ToolInputError, iso, parse_time, truncate
+from swarm_mcp.toolkit import ToolInputError, iso, parse_time
 
 NAME = "subtasks"
 DESCRIPTION = (
@@ -51,6 +51,9 @@ EDGE_VERBS = {
     "resubmits": "re-created the {art}s of",
     "duplicate": "duplicated",
 }
+# caps for the agent-authored text returned (wrapped by ctx.untrusted): unit titles, subtask labels (terms
+# from member titles, or a lone unit's title), chat snippets, handoff sentences (they name units)
+TITLE_CHARS, LABEL_CHARS, SNIPPET_CHARS, SUMMARY_CHARS = 200, 120, 160, 300
 
 
 def requires(ctx) -> list[str]:
@@ -139,8 +142,11 @@ def register(mcp, ctx) -> None:
             "type": e.kind,
             "from_actor": e.giver,
             "to_actor": e.taker,
-            "summary": f"{e.taker} {verb} {e.giver}'s {a.short}"
-            + (f" ({b.short})" if e.kind != "duplicate" else f" in {b.short}"),
+            "summary": ctx.untrusted(
+                f"{e.taker} {verb} {e.giver}'s {a.short}"
+                + (f" ({b.short})" if e.kind != "duplicate" else f" in {b.short}"),
+                SUMMARY_CHARS,
+            ),
             "from_unit": a.event_id,
             "to_unit": b.event_id,
             "time": iso(b.start),
@@ -158,11 +164,14 @@ def register(mcp, ctx) -> None:
         u = inf.units[i]
         return {
             "event_id": u.event_id,
-            "title": ctx.scrub(u.title),
+            "title": ctx.untrusted(u.title, TITLE_CHARS),
             "actor": inf.authors[i],
             "state": u.state,
             "start": iso(u.start),
         }
+
+    def label(inf: Inference, method: str, level: str, k: int) -> dict[str, Any]:
+        return ctx.untrusted(inf.names[method][level][k], LABEL_CHARS)
 
     def resolve_actor(c: Corpus, inf: Inference, name: str) -> str:
         """User-typed actor -> the name used in results (aliases from every source understood)."""
@@ -189,7 +198,7 @@ def register(mcp, ctx) -> None:
         coh = cohesion(inf, members, method, level)
         return {
             "subtask_id": sid(inf.corpus, method, level, k),
-            "label": inf.names[method][level][k],
+            "label": label(inf, method, level, k),
             "size": len(members),
             "start": iso(min(u.start for u in U)),
             "end": iso(max((u.end or u.start) for u in U)),
@@ -343,7 +352,7 @@ def register(mcp, ctx) -> None:
             lab = inf.label_of[method][level]
             cnt = collections.Counter(int(lab[getattr(e, end)]) for e in es)
             return [
-                {"subtask_id": sid(inf.corpus, method, level, g), "label": inf.names[method][level][g], "handoffs": n}
+                {"subtask_id": sid(inf.corpus, method, level, g), "label": label(inf, method, level, g), "handoffs": n}
                 for g, n in cnt.most_common(5)
             ]
 
@@ -359,7 +368,7 @@ def register(mcp, ctx) -> None:
                     "pieces": len(parts),
                     "largest_piece": {
                         "subtask_id": sid(inf.corpus, m, level, big),
-                        "label": inf.names[m][level][big],
+                        "label": label(inf, m, level, big),
                         "members": n,
                     },
                 }
@@ -368,9 +377,14 @@ def register(mcp, ctx) -> None:
         cited = []
         for x in msgs[:max_chat]:
             m = inf.chat[x]
-            text, _ = truncate(ctx.scrub(m.text), 160)
             cited.append(
-                {"event_id": m.event_id, "time": iso(m.time), "actor": m.actor, "units": m.units, "snippet": text}
+                {
+                    "event_id": m.event_id,
+                    "time": iso(m.time),
+                    "actor": m.actor,
+                    "units": m.units,
+                    "snippet": ctx.untrusted(m.text, SNIPPET_CHARS),
+                }
             )
         unresolved = []
         n_open = sum(1 for i in members if inf.units[i].completed is False)
@@ -457,7 +471,7 @@ def register(mcp, ctx) -> None:
                 shared.append(
                     {
                         "subtask_id": sid(inf.corpus, method, granularity, k),
-                        "label": inf.names[method][granularity][k],
+                        "label": label(inf, method, granularity, k),
                         "size": len(members),
                         "roles": {a: ra, b: rb},
                         "handoffs_between_them": n,
