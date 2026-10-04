@@ -82,6 +82,36 @@ def test_bad_timestamps(bad):
     assert any(e.startswith("events[0].t:") for e in errs), errs
 
 
+@pytest.mark.parametrize("path,value,expect", [
+    (("agents", 0, "name"), ["alpha"], "agents[0].name: expected string, got list"),
+    (("agents", 0, "name"), {"n": "alpha"}, "agents[0].name: expected string, got dict"),
+    (("events", 0, "id"), ["e1"], "events[0].id: expected a non-empty string"),
+    (("events", 0, "id"), {"id": "e1"}, "events[0].id: expected a non-empty string"),
+    (("events", 0, "agent"), ["alpha"], "events[0].agent: ['alpha'] not in agents"),
+    (("edges", 0, "from"), {"name": "alpha"}, "edges[0].from: {'name': 'alpha'} not in agents"),
+    (("adoptions", 0, "sources"), [["alpha"]], "adoptions[0].sources[0]: ['alpha'] not in agents"),
+    (("adoptions", 0, "event"), ["e2"], "adoptions[0].event: ['e2'] not an event id"),
+    (("exposures", 0, "event"), {"id": "e1"}, "exposures[0].event: {'id': 'e1'} not an event id"),
+    (("quotes", 0, "agent"), ["alpha"], "quotes[0].agent: ['alpha'] not in agents"),
+])
+def test_unhashable_ids_and_names_are_errors(path, value, expect):
+    tr = tiny()
+    obj = tr
+    for k in path[:-1]:
+        obj = obj[k]
+    obj[path[-1]] = value
+    errs = validate(tr)                                 # used to raise TypeError (unhashable type)
+    assert expect in errs, errs
+
+
+@pytest.mark.parametrize("bad", [["toy-idea"], {"id": "toy-idea"}])
+def test_index_unhashable_id_is_an_error(bad):
+    entry = index_entry(tiny(), "toy-idea.json")
+    entry["id"] = bad
+    errs = validate_index({"version": 0, "generated": "2025-02-01T00:00:00Z", "traces": [entry, dict(entry)]})
+    assert any(e.startswith("traces[0].id: expected string") for e in errs), errs
+
+
 def test_start_after_end():
     tr = tiny()
     tr["start"], tr["end"] = tr["end"], tr["start"]
@@ -244,3 +274,14 @@ def test_cli_validate(tmp_path, capsys):
     assert cli.main(["validate", str(index)]) == 1
     out = capsys.readouterr().out
     assert "not in agents" in out and "missing.json does not exist" in out
+
+
+def test_build_index_skips_corrupt_json(tmp_path, capsys):
+    (tmp_path / "toy-idea.json").write_text(dumps(tiny()))
+    (tmp_path / "corrupt.json").write_text('{"version": 0, "id": ')          # truncated write
+    (tmp_path / "binary.json").write_bytes(b"\xff\xfe\x00garbage")           # not UTF-8
+    index = cli.build_index(tmp_path)
+    assert [e["file"] for e in index["traces"]] == ["toy-idea.json"]
+    assert validate_index(json.loads((tmp_path / "index.json").read_text())) == []
+    out = capsys.readouterr().out
+    assert "warning: index: skipping corrupt.json" in out and "warning: index: skipping binary.json" in out
