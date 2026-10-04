@@ -330,3 +330,21 @@ def test_add_git_needs_a_repository_root(project: Path, capsys):
     assert table_count(store, "periods", "work-repo") == 0 and table_count(store, "agents", "work-repo") > 0
     assert cli("add", "data/repos/rpg.git", "--adapter", "git", "--dry-run") == 0
     assert "dry run: source 'rpg'" in capsys.readouterr().out
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_add_git_slugifies_the_default_source(project: Path, capsys):
+    """Regression: `add "data/repos/My Repo.git"` created source 'My Repo', whose ids evidence.parse rejects."""
+    from swarm_mcp.scope.evidence import parse
+
+    bare = make_repo(project / "data" / "repos")
+    spaced = project / "data" / "repos" / "My Repo.git"
+    shutil.copytree(bare, spaced)
+    store = project / "data" / "swarmscope.duckdb"
+    assert cli("add", str(spaced), "--dry-run") == 0
+    assert "dry run: source 'my_repo'" in capsys.readouterr().out
+    assert cli("add", str(spaced)) == 0
+    assert "ingested source 'my_repo' (git adapter)" in capsys.readouterr().out
+    with db.connect(store) as s:
+        ids = [r["evidence_id"] for r in s.all("SELECT evidence_id FROM periods WHERE source = 'my_repo'")]
+    assert len(ids) == 5 and all(parse(i) for i in ids)

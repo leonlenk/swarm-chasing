@@ -133,7 +133,10 @@ def git_repo_dir(path: Path) -> Path | None:
 
 
 def default_name(path: Path) -> str:
-    stem = path.name.split(".")[0] if path.is_file() else path.name
+    return _slugify(path.name.split(".")[0] if path.is_file() else path.name)
+
+
+def _slugify(stem: str) -> str:
     slug = re.sub(r"[^a-z0-9_-]+", "_", stem.lower()).strip("_-")
     if not slug or not slug[0].isalpha():
         slug = f"ds_{slug}" if slug else "dataset"
@@ -248,19 +251,23 @@ def _add_builtin(args: argparse.Namespace, name: str, path: Path, db: Path, *, d
     """The git or wiki adapter, unchanged: ``--name`` becomes the adapter's source (default: its own,
     the repo or folder name)."""
     from swarm_mcp.scope.adapters import get_adapter
+    from swarm_mcp.scope.evidence import _PART
     from swarm_mcp.scope.ingest import ingest
 
     if args.name and not _SLUG.match(args.name):
         raise CommandError(f"--name must be a lowercase slug (letters, digits, _ or -), got {args.name!r}")
     source = args.name
-    if source is None and name == "git" and path.name == ".git":  # a working tree's .git: name it after the tree
-        source = default_name(path.parent)
+    if source is None and name == "git":  # the repo's name as a slug; a working tree's .git: the tree's name
+        source = _slugify((path.parent if path.name == ".git" else path).name.removesuffix(".git"))
     how = f"detected {_BUILTIN_LABEL[name]}" if detected else _BUILTIN_LABEL[name]
     print(f"{how} in {path}: using the built-in {name} adapter")
     try:
         info = get_adapter(name, source).inspect(path)
     except Exception as e:  # noqa: BLE001 - not a repository / not a database: a user error, not a crash
         raise CommandError(f"{path} is not readable as {_BUILTIN_LABEL[name]}: {type(e).__name__}: {e}") from None
+    final = source or info.get("source")
+    if not _PART.match(str(final or "")):  # it prefixes every evidence id
+        raise CommandError(f"source name {final!r} is not usable in evidence ids; pass --name SLUG")
     if args.dry_run:
         counts = ", ".join(_inspect_counts(info)) or "no counts"
         print(f"dry run: source '{info.get('source')}': {counts}; nothing ingested")
