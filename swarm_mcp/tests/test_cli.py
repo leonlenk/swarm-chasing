@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from conftest import make_village
 from setup_datasets import make_nested_jsonl, make_sqlite_board
-from test_store_wiring import BOARD_SPEC
+from test_mapped_ingest import BOARD_SPEC
 
 from swarm_mcp.cli import main
 from swarm_mcp.scope import db

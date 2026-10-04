@@ -16,15 +16,13 @@ def _status(app) -> dict[str, str]:
     return {r.name: r.status for r in app.swarm_registry.records.values()}
 
 
-# git/subtasks/wiki need a repo or wiki db, which the synthetic fixtures do not have
+# subtasks needs units (periods) in the store, which the synthetic fixtures do not have
 ALL = {
     "core": "loaded",
     "findings": "loaded",
     "scope": "loaded",
     "village": "loaded",
-    "git": "skipped",
     "subtasks": "skipped",
-    "wiki": "skipped",
     "investigate": "loaded",  # needs no data
     "sweep": "loaded",  # needs no data
 }

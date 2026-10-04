@@ -123,7 +123,6 @@ def load_module(
     except Exception as e:  # noqa: BLE001
         log.error("module %s: register() raised", name, exc_info=True)
         sdk.rollback(mcp, before)
-        registry.events.drop_owner(name)
         return skip(f"register() raised {type(e).__name__}: {e}")
 
     after = sdk.snapshot(mcp)

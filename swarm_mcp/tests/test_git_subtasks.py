@@ -1,4 +1,5 @@
-"""git and subtasks modules against a small synthetic repo (built with real git) plus the synthetic village."""
+"""The git adapter and the subtasks module against a small synthetic repo (built with real git), ingested into
+the SwarmScope store next to the synthetic village."""
 
 from __future__ import annotations
 
@@ -10,8 +11,9 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import A_GPT, A_OPUS, _msg, call, call_error, config_for, make_village
+from conftest import A_GPT, A_OPUS, _msg, build_store, call, call_error, config_for, make_village
 
+from swarm_mcp.scope.ingest import ingest
 from swarm_mcp.server import build_server
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
@@ -136,10 +138,10 @@ def make_repo(root: Path) -> Path:
 
 @pytest.fixture
 def git_data(tmp_path: Path) -> Path:
+    """Synthetic village (with chat naming the PRs) + the synthetic repo, both ingested into one store."""
     data = tmp_path / "data"
     vdir = make_village(data)
     make_repo(vdir / "repos")
-    # chat that mentions the PRs
     with gzip.open(vdir / "chat_messages.jsonl.gz", "rt") as f:
         rows = [json.loads(x) for x in f]
     rows += [
@@ -148,6 +150,8 @@ def git_data(tmp_path: Path) -> Path:
     ]
     with gzip.open(vdir / "chat_messages.jsonl.gz", "wt") as f:
         f.writelines(json.dumps(r) + "\n" for r in rows)
+    db = build_store(data)
+    ingest("git", vdir / "repos" / "rpg.git", db, progress=lambda _m: None)
     return data
 
 
@@ -156,69 +160,64 @@ def gapp(git_data: Path):
     return build_server(config_for(git_data))
 
 
-def test_modules_skip_without_repos(data_dir: Path):
-    reg = build_server(config_for(data_dir)).swarm_registry.records
-    assert reg["git"].status == "skipped" and "no bare git repos" in reg["git"].reasons[0]
-    assert reg["subtasks"].status == "skipped"
+def test_subtasks_needs_a_store(raw_data_dir: Path):
+    rec = build_server(config_for(raw_data_dir)).swarm_registry.records["subtasks"]
+    assert rec.status == "skipped" and "store not found" in rec.reasons[0]
 
 
-def test_git_prs_and_states(gapp):
-    out = call(gapp, "git_prs")
-    by = {p["number"]: p for p in out["prs"]}
-    assert out["total_matches"] == 5
-    assert by[1]["state"] == "merged" and by[2]["state"] == "merged" and by[5]["state"] == "merged"
-    assert by[3]["state"] == "unmerged" and by[4]["state"] == "unmerged"
-    assert by[2]["title"] == "feat: wire talent tree into main"  # squash title without (#2)
-    assert call(gapp, "git_prs", query="fishing")["prs"][0]["event_id"] == "git:pr:rpg#4"
-    assert call(gapp, "git_repos")["repos"][0]["pr_states"] == {"merged": 3, "unmerged": 2}
-
-
-def test_git_event_ids_resolve(gapp):
-    pr = call(gapp, "core_get", ids="git:pr:rpg#1", after=5)
-    assert pr["event"]["title"] == "feat: Talent tree core" and pr["event"]["merged_by"] == "gpt-5-2"
-    assert pr["event"]["merge_kind"] == "merge" and len(pr["after"]) == 1
-    sha = pr["after"][0]["sha"]
-    c = call(gapp, "core_get", ids=f"git:commit:rpg@{sha[:9]}")
-    assert c["event"]["actor"] == "Claude Opus 4.5" and "src/talents.js (+3 -0)" in c["event"]["text"]
-    assert c["event"]["prs"] == ["git:pr:rpg#1"] and c["context"] == "commits of PR #1"
-    assert "No 'pr' record" in call_error(gapp, "core_get", ids="git:pr:rpg#99")
-    assert "No 'commit' record" in call_error(gapp, "core_get", ids="git:commit:rpg@deadbeef")
+def test_git_records_use_generic_kinds(gapp):
+    src = {x["source"]: x for x in call(gapp, "scope_list_sources")["sources"]}["rpg"]
+    assert src["row_counts"]["periods"] == 5 and src["row_counts"]["artifacts"] == 5
+    assert any("inferred from main" in n for n in src["ingest_meta"]["notes"])
+    pr = call(gapp, "scope_get_record", evidence_id="rpg:period:pr-1")
+    assert pr["kind"] == "pull_request" and pr["meta"]["state"] == "merged" and pr["meta"]["short"] == "PR #1"
+    assert pr["meta"]["merged_by"] == "rpg:agent:gpt-5.2" and pr["label"]["content"] == "feat: Talent tree core"
+    states = {n: call(gapp, "scope_get_record", evidence_id=f"rpg:period:pr-{n}")["meta"]["state"] for n in range(1, 6)}
+    assert states == {1: "merged", 2: "merged", 3: "unmerged", 4: "unmerged", 5: "merged"}
+    commit = call(gapp, "scope_get_record", evidence_id=pr["records"][0])
+    assert commit["kind"] == "commit" and commit["agent"] == "Claude Opus 4.5"
+    assert commit["artifacts"] == [{"artifact_id": "rpg:artifact:src/talents.js", "op": "create"}]
+    art = call(gapp, "scope_get_record", evidence_id="rpg:artifact:src/talents.js")
+    assert art["touches_by_op"] == {"create": 1, "modify": 1} and art["kind"] == "file"
+    assert call(gapp, "scope_get_record", evidence_id="rpg:artifact:tests/talents-test.mjs")["meta"] == {"role": "test"}
+    assert "does not resolve" in call_error(gapp, "scope_get_record", evidence_id="rpg:period:pr-99")
 
 
 def test_handoffs_are_typed_and_attributed(gapp):
-    out = call(gapp, "subtasks_trace_pair", actor_a="Opus 4.5", actor_b="GPT-5.2")
+    out = call(gapp, "subtasks_trace_pair", corpus="rpg", actor_a="Opus 4.5", actor_b="GPT-5.2")
     kinds = {(h["from_actor"], h["to_actor"], h["type"]) for h in out["handoffs"]}
-    assert ("Claude Opus 4.5", "GPT-5.2", "integrates") in kinds  # GPT imported Opus's talents.js
+    assert ("Claude Opus 4.5", "GPT-5.2", "integrates") in kinds  # GPT (git name gpt-5-2) imported Opus's talents.js
     h = out["handoffs"][0]
-    assert h["from_unit"] == "git:pr:rpg#1" and h["to_unit"] == "git:pr:rpg#2" and h["artifacts"] == ["src/talents.js"]
-    assert all(e.startswith("git:commit:rpg@") for e in h["evidence"])
-    gem = call(gapp, "subtasks_trace_pair", actor_a="Opus 4.5", actor_b="Gemini 2.5")
+    assert h["from_unit"] == "rpg:period:pr-1" and h["to_unit"] == "rpg:period:pr-2"
+    assert h["artifacts"] == ["rpg:artifact:src/talents.js"]
+    assert all(e.startswith("rpg:event:") for e in h["evidence"])
+    for e in h["evidence"]:
+        call(gapp, "scope_get_record", evidence_id=e)  # every cited id resolves
+    gem = call(gapp, "subtasks_trace_pair", corpus="rpg", actor_a="Opus 4.5", actor_b="Gemini 2.5")
     assert {h["type"] for h in gem["handoffs"]} == {"tests", "fixes"}
     assert gem["summary"]["finalised_the_others_unit"] == 1  # Opus merged Gemini's fix
-    assert "did no work" in call_error(gapp, "subtasks_trace_pair", actor_a="Opus 4.5", actor_b="o3")
+    assert "did no work" in call_error(gapp, "subtasks_trace_pair", corpus="rpg", actor_a="Opus 4.5", actor_b="o3")
 
 
 def test_list_get_and_locate(gapp):
-    out = call(gapp, "subtasks_list", granularity="coarse", min_size=1)
-    assert out["total_units"] == 5 and out["unit"] == "pull request" and out["method"] == "combined"
-    sub = call(gapp, "subtasks_locate", event_id="git:pr:rpg#1", granularity="coarse")["matches"][0]["subtask"]
+    out = call(gapp, "subtasks_list", corpus="rpg", granularity="coarse", min_size=1)
+    assert out["total_units"] == 5 and out["unit"] == "pull request"
+    sub = call(gapp, "subtasks_locate", event_id="rpg:period:pr-1", granularity="coarse")["matches"][0]["subtask"]
     got = call(gapp, "subtasks_get", subtask_id=sub["subtask_id"])
     members = {m["event_id"] for m in got["members"]}
-    assert {"git:pr:rpg#1", "git:pr:rpg#2"} <= members and "git:pr:rpg#4" not in members
+    assert {"rpg:period:pr-1", "rpg:period:pr-2"} <= members and "rpg:period:pr-4" not in members
     assert got["label"].startswith("talent") and got["handoffs"]
-    agents = {p["actor"] for p in got["participants"]}
-    assert "GPT-5.2" in agents and "Claude Opus 4.5" in agents
+    assert {"GPT-5.2", "Claude Opus 4.5"} <= {p["actor"] for p in got["participants"]}
     assert got["chat"]["messages_mentioning_members"] == 2
     chat_id = got["chat"]["cited"][1]["event_id"]
-    assert [m["unit"]["event_id"] for m in call(gapp, "subtasks_locate", event_id=chat_id)["matches"]] == [
-        "git:pr:rpg#1",
-        "git:pr:rpg#2",
-    ]
-    fish = call(gapp, "subtasks_locate", event_id="git:pr:rpg#4")["matches"][0]
-    assert fish["unit"]["actor"] == "git:Minuteandone"  # outsider kept, labelled as a git identity
+    assert chat_id.startswith("village:msg:")
+    located = call(gapp, "subtasks_locate", event_id=chat_id)["matches"]
+    assert [m["unit"]["event_id"] for m in located] == ["rpg:period:pr-1", "rpg:period:pr-2"]
+    fish = call(gapp, "subtasks_locate", event_id="rpg:period:pr-4")["matches"][0]
+    assert fish["unit"]["actor"] == "Minuteandone"  # no village agent matches this git identity
     assert "Malformed subtask_id" in call_error(gapp, "subtasks_get", subtask_id="talents")
-    commit = call(gapp, "subtasks_get", subtask_id=sub["subtask_id"])["handoffs"][0]["evidence"][-1]
+    commit = got["handoffs"][0]["evidence"][-1]
     located = call(gapp, "subtasks_locate", event_id=commit, granularity="coarse")["matches"][0]["subtask"]
     assert located["subtask_id"] == sub["subtask_id"]
-    row = call(gapp, "subtasks_corpora")["corpora"][0]
-    assert {"corpus": "rpg", "unit": "pull request", "units": 5}.items() <= row.items()
+    row = {c["corpus"]: c for c in call(gapp, "subtasks_corpora")["corpora"]}["rpg"]
+    assert {"unit": "pull request", "units": 5, "artifact": "file"}.items() <= row.items()

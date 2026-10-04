@@ -89,24 +89,30 @@ def findings_health(config: Config) -> dict[str, Any]:
 
 
 def server_info(config: Config, registry: Any) -> dict[str, Any]:
-    """Modules, event sources (+ store statistics), findings health and config, in one dict."""
+    """Modules, store sources (counts, date ranges, blind-spot notes), findings health and config, in one dict."""
     from swarm_mcp.scope import db
 
-    sources: dict[str, dict[str, Any]] = {
-        s.name: s.as_dict() for s in sorted(registry.events.by_name.values(), key=lambda s: s.name)
-    }
+    sources: list[dict[str, Any]] = []
     notes: list[str] = []
+    api = getattr(registry, "store_api", None)
     if config.store_path.exists():
         try:
-            with db.connect(config.store_path) as s:
-                for st in store_sources(s):
-                    sources.setdefault(st["source"], {"source": st["source"], "kinds": []})["store"] = st
+            if api:
+                listing = api["list_sources"]()
+                sources = listing["sources"]
+                notes += [n for n in listing.get("notes", []) if "core_get" in n or "blind spots" in n]
+            else:
+                with db.connect(config.store_path) as s:
+                    sources = store_sources(s)
         except Exception as e:  # noqa: BLE001 - e.g. the store is locked by an ingest
             notes.append(f"store statistics unavailable: {type(e).__name__}: {e}")
     else:
         notes.append(f"no SwarmScope store at {config.store_path}; add a dataset with `swarm-mcp add <path>`")
+    for src in sources:
+        src.setdefault("kinds", ["msg", "event", "agent", "period", "artifact"])
     notes += [
-        "Every record id is '<source>:<kind>:<id>'; core_get expands one id or a batch.",
+        "Every record id is '<source>:<kind>:<id>' (kinds msg, event, agent, period, artifact; AI Village goals "
+        "keep 'goal'); core_get expands one id or a batch.",
         "All timestamps are UTC.",
     ]
     return {
@@ -116,7 +122,7 @@ def server_info(config: Config, registry: Any) -> dict[str, Any]:
             "skipped": [r.as_dict() for r in registry.skipped],
         },
         "module_notes": list(registry.notes),
-        "sources": list(sources.values()),
+        "sources": sources,
         "findings": findings_health(config),
         "config": config.public(),
         "notes": notes,
@@ -153,17 +159,12 @@ def format_info(info: dict[str, Any]) -> str:
     if not info["sources"]:
         lines.append("  (none)")
     for s in info["sources"]:
-        kinds = ", ".join(k["kind"] for k in s.get("kinds") or [])
-        st = s.get("store")
-        if st:
-            rc = st["row_counts"]
-            span = f"{st['messages_ts']['min'] or '?'} .. {st['messages_ts']['max'] or '?'}"
-            lines.append(
-                f"  {s['source']:<10} {rc['messages']:,} messages, {rc['actions']:,} actions, {rc['agents']:,} agents, "
-                f"{rc['periods']:,} periods; {span} (adapter {st['adapter']})"
-            )
-        else:
-            lines.append(f"  {s['source']:<10} kinds: {kinds}")
+        rc = s.get("row_counts") or {}
+        span = f"{(s.get('messages_ts') or {}).get('min') or '?'} .. {(s.get('messages_ts') or {}).get('max') or '?'}"
+        counts = ", ".join(f"{rc[t]:,} {t}" for t in ("messages", "actions", "agents", "periods", "artifacts") if t in rc)
+        lines.append(f"  {s['source']:<10} {counts}; {span} (adapter {s.get('adapter')})")
+        for n in ((s.get("ingest_meta") or {}).get("notes") or [])[:5]:
+            lines.append(f"             blind spot: {n}")
     lines.append("")
     f = info["findings"]
     status = "ok" if f["ok"] else ("BAD EVIDENCE" if f.get("bad") else "unchecked")

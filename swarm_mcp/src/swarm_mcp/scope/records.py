@@ -23,12 +23,43 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
 
-from swarm_mcp.events import event_record
-from swarm_mcp.scope import db
+from swarm_mcp.scope import db, evidence
 from swarm_mcp.scope.analysis.timeline import record_filters, ts_iso
 from swarm_mcp.toolkit import ToolInputError, parse_time, truncate
 
 FILTER_KEYS = ("source", "kind", "channel", "author", "since", "until", "query")
+RECORD_KEYS = ("event_id", "source", "kind", "time", "actor", "actor_type", "location", "text")
+
+
+def event_record(
+    event_id: str,
+    *,
+    time: str | None,
+    actor: str | None,
+    actor_type: str | None = None,
+    location: str | None = None,
+    text: str = "",
+    truncated: bool = False,
+    **extra: Any,
+) -> dict[str, Any]:
+    """The standard record shape sweeps and exports work on (``RECORD_KEYS`` first, then ``extra``).
+
+    ``event_id`` is a store evidence id (``evidence.parse`` validates it); ``kind`` is its schema kind."""
+    ref = evidence.parse(event_id)
+    d: dict[str, Any] = {
+        "event_id": event_id,
+        "source": ref.source,
+        "kind": ref.kind,
+        "time": time,
+        "actor": actor,
+        "actor_type": actor_type,
+        "location": location,
+        "text": text,
+    }
+    if truncated:
+        d["truncated"] = True
+    d.update({k: v for k, v in extra.items() if v is not None})
+    return d
 _BATCH = 1000
 
 _SELECT = {
