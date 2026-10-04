@@ -1,0 +1,107 @@
+{
+ "id": "fixture-AH",
+ "label": "Fixture AH \u00b7 human question, agent replies later",
+ "kind": "synthetic",
+ "description": "Synthetic sabotage fixture. A human asks a question in #general; a second human line follows; an agent replies afterwards.",
+ "meta": {
+  "origin": "synthetic"
+ },
+ "agents": [
+  {
+   "id": "h",
+   "name": "Human operator",
+   "role": "Human",
+   "color": "#555555"
+  },
+  {
+   "id": "p",
+   "name": "Pia",
+   "role": "Build",
+   "color": "#2f6a4f"
+  }
+ ],
+ "events": [
+  {
+   "id": "ev-01",
+   "sequence": 1,
+   "timestamp": "2026-01-02T09:01:00Z",
+   "agentId": "h",
+   "taskId": null,
+   "type": "message",
+   "provenance": "declared",
+   "text": "? [fixture record]",
+   "payload": {
+    "isHuman": true,
+    "isQuestion": true
+   },
+   "evidenceRefs": [],
+   "room": "#general"
+  },
+  {
+   "id": "ev-02",
+   "sequence": 2,
+   "timestamp": "2026-01-02T09:02:00Z",
+   "agentId": "h",
+   "taskId": null,
+   "type": "message",
+   "provenance": "declared",
+   "text": "message [fixture record]",
+   "payload": {
+    "isHuman": true
+   },
+   "evidenceRefs": [],
+   "room": "#general"
+  },
+  {
+   "id": "ev-03",
+   "sequence": 3,
+   "timestamp": "2026-01-02T09:03:00Z",
+   "agentId": "p",
+   "taskId": null,
+   "type": "message",
+   "provenance": "declared",
+   "text": "message [fixture record]",
+   "payload": {},
+   "evidenceRefs": [],
+   "room": "#general"
+  }
+ ],
+ "fixture": {
+  "monitor": "AH",
+  "expect": [
+   {
+    "atCursor": 2,
+    "state": "active",
+    "count": 1,
+    "evidenceIds": [
+     "ev-01"
+    ]
+   },
+   {
+    "atCursor": 3,
+    "state": "resolved",
+    "count": 1,
+    "evidenceIds": [
+     "ev-03"
+    ]
+   },
+   {
+    "withhold": [
+     "ev-02"
+    ],
+    "atCursor": 3,
+    "state": "insufficient",
+    "count": 1,
+    "missing": [
+     "ev-02"
+    ]
+   }
+  ],
+  "quiet": [
+   "A",
+   "B",
+   "Z",
+   "C"
+  ]
+ }
+}

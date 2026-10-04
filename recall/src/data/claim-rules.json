@@ -1,0 +1,173 @@
+{
+  "description": "Adapter claim-rule fixtures. Each case is one agent chat message run through adaptAiVillageWindow; `claims` lists the subject URLs that must become claims, with the rule recorded on payload.rule. Synthetic text (the ch4817 shape is paraphrased, not copied). Cases may also list `quotes`: the URLs that must become failure reports (quote events), and `human: true` to run the text as a human message.",
+  "cases": [
+    {
+      "name": "claim-sentence: completion phrase in the URL's own sentence",
+      "content": "Chapter 12 is now live at https://story.example.test/ch12.html for everyone.",
+      "claims": [
+        {
+          "url": "https://story.example.test/ch12.html",
+          "rule": "claim-sentence"
+        }
+      ]
+    },
+    {
+      "name": "claim-bare-url: headline claim, prose body, link at the end (ch4817 shape)",
+      "content": "\ud83d\udcd6 Tales of the Hearth \u2014 Ch12 \"Warm Bread\" is LIVE (non-dialogue). At dawn the baker shares her first loaf with the stranger, and the village gathers around the oven. The old miller nods from the doorway. Commit 1a2b3c4d \u00b7 deploy #555 \u00b7 3,900 B. https://story.example.test/ch12.html \u2014 @Reviewer open for byte-game.",
+      "claims": [
+        {
+          "url": "https://story.example.test/ch12.html",
+          "rule": "claim-bare-url"
+        }
+      ]
+    },
+    {
+      "name": "claim-bare-url negative: a second, unrelated URL anywhere in the message \u2192 no claim",
+      "content": "\ud83d\udcd6 Tales of the Hearth \u2014 Ch12 \"Warm Bread\" is LIVE (non-dialogue). At dawn the baker shares her first loaf; notes at https://wiki.example.test/notes. The old miller nods from the doorway. Commit 1a2b3c4d \u00b7 deploy #555 \u00b7 3,900 B. https://story.example.test/ch12.html \u2014 @Reviewer open for byte-game.",
+      "claims": []
+    },
+    {
+      "name": "claim-bare-url negative: the link is not in the last sentence \u2192 no claim",
+      "content": "Ch12 is LIVE. https://story.example.test/ch12.html \u2014 @Reviewer open. The miller nods from the doorway and the bread is warm.",
+      "claims": []
+    },
+    {
+      "name": "link-target exclusion: the URL after 'it points to' is a mention, not a claim (AE #5928 message)",
+      "content": "@DeepSeek-V4-Pro Done as promised: the \"AI Village News\" link is now live in my store footer (verified via curl on https://claude-fable-5-shop.fourthwall.com \u2014 it points to https://ai-village-news-cb5c4b.gitlab.io/). Also gave the homepage a proper hero: \"A pause, not a stop.\" Thanks for the coverage of the shop! \ud83e\udd8a",
+      "claims": [
+        {
+          "url": "https://claude-fable-5-shop.fourthwall.com",
+          "rule": "claim-sentence"
+        }
+      ]
+    },
+    {
+      "name": "nearest-URL attribution: two plain URLs each with its own claim phrase are both claimed",
+      "content": "https://alpha.example.test/a is live and https://beta.example.test/b is live.",
+      "claims": [
+        {
+          "url": "https://alpha.example.test/a",
+          "rule": "claim-sentence"
+        },
+        {
+          "url": "https://beta.example.test/b",
+          "rule": "claim-sentence"
+        }
+      ]
+    },
+    {
+      "name": "nearest-URL attribution: one claim phrase claims only its nearest URL",
+      "content": "The game is live at https://alpha.example.test/play, based on notes in https://beta.example.test/notes.",
+      "claims": [
+        {
+          "url": "https://alpha.example.test/play",
+          "rule": "claim-sentence"
+        }
+      ]
+    },
+    {
+      "name": "arrow as claim pointer: 'text \u2192 URL' with a completion phrase is a claim",
+      "content": "@Ana Your \"Responsible Growth\" section is live on the hub ethics page \u2192 https://hub.example.test/ethics.html (below the one-line rule, credited to you).",
+      "claims": [
+        {
+          "url": "https://hub.example.test/ethics.html",
+          "rule": "claim-sentence"
+        }
+      ]
+    },
+    {
+      "name": "arrow as claim pointer: 'published and deploying now \u2192 URL'",
+      "content": "@Ana Chapter Three is published and deploying now \u2192 https://story.example.test/chapter-3.html \u2014 I titled it \"The Index of Ages\".",
+      "claims": [
+        {
+          "url": "https://story.example.test/chapter-3.html",
+          "rule": "claim-sentence"
+        }
+      ]
+    },
+    {
+      "name": "arrow as claim pointer: 'essay published: **title** \u2192 URL'",
+      "content": "New essay published: **Why Gardens Matter** \u2192 https://essays.example.test/essay.html \u2014 a long-form piece.",
+      "claims": [
+        {
+          "url": "https://essays.example.test/essay.html",
+          "rule": "claim-sentence"
+        }
+      ]
+    },
+    {
+      "name": "plural claim: 'two new pages are LIVE: A \u2192 URL1 and B \u2192 URL2' claims both",
+      "content": "\ud83d\udce2 Two new hub pages are LIVE: \ud83d\uddc2\ufe0f Directory \u2192 https://hub.example.test/directory.html and \ud83e\udd1d Portal \u2192 https://hub.example.test/collaborate.html \u2014 built from drafts.",
+      "claims": [
+        {
+          "url": "https://hub.example.test/directory.html",
+          "rule": "claim-sentence"
+        },
+        {
+          "url": "https://hub.example.test/collaborate.html",
+          "rule": "claim-sentence"
+        }
+      ]
+    },
+    {
+      "name": "plural claim: 'two new products live (\u2026): Sticker URL1 and Mug URL2' claims both",
+      "content": "\ud83e\udd8a Two new products live in my shop (both curl-verified 200): Sticker $6.95 https://shop.example.test/products/sticker and Mug $14.95 https://shop.example.test/products/mug for fox fans.",
+      "claims": [
+        {
+          "url": "https://shop.example.test/products/sticker",
+          "rule": "claim-sentence"
+        },
+        {
+          "url": "https://shop.example.test/products/mug",
+          "rule": "claim-sentence"
+        }
+      ]
+    },
+    {
+      "name": "arrow link target: 'URL1 \u2192 URL2' (redirect notation) claims only URL1",
+      "content": "The short link is live: https://go.example.test/x \u2192 https://site.example.test/landing for everyone.",
+      "claims": [
+        {
+          "url": "https://go.example.test/x",
+          "rule": "claim-sentence"
+        }
+      ]
+    },
+    {
+      "name": "failure report: URL and failure word in the same sentence \u2192 quote",
+      "content": "https://game.example.test/play is broken for me, it returns 404.",
+      "claims": [],
+      "quotes": [
+        "https://game.example.test/play"
+      ]
+    },
+    {
+      "name": "failure report negative: failure word in a different sentence from the URL \u2192 no quote (D false shape)",
+      "content": "PR #10 is a ghost and the branch is poisoned; the push failed. Viewers can play at https://game.example.test/play now.",
+      "claims": [],
+      "quotes": []
+    },
+    {
+      "name": "failure report negative: hedged '\u2026can take a couple minutes to stop 404ing' \u2192 no quote (E false shape)",
+      "content": "GitHub Pages is enabled now, viewers can play at https://game.example.test/play (it can take a couple minutes to stop 404'ing after enablement).",
+      "claims": [],
+      "quotes": []
+    },
+    {
+      "name": "human failure report: same sentence \u2192 quote",
+      "content": "https://game.example.test/play still shows a 404 for me.",
+      "human": true,
+      "claims": [],
+      "quotes": [
+        "https://game.example.test/play"
+      ]
+    },
+    {
+      "name": "human failure report negative: hedged \u2192 no quote",
+      "content": "I think https://game.example.test/play should be fine, maybe a 404 for a minute.",
+      "human": true,
+      "claims": [],
+      "quotes": []
+    }
+  ]
+}

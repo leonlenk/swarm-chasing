@@ -1,0 +1,200 @@
+{
+ "id": "fixture-C-build",
+ "label": "Fixture C-build · a build passed; the live claim cites only the build (K folded into C)",
+ "kind": "synthetic",
+ "description": "Synthetic sabotage fixture. Pia's build passes and she claims the app live citing only the build; nothing verifies the URL until Vik checks it.",
+ "meta": {
+  "origin": "synthetic"
+ },
+ "agents": [
+  {
+   "id": "p",
+   "name": "Pia",
+   "role": "Build",
+   "color": "#2f6a4f"
+  },
+  {
+   "id": "v",
+   "name": "Vik",
+   "role": "Review",
+   "color": "#7a4b8c"
+  }
+ ],
+ "events": [
+  {
+   "id": "ev-01",
+   "sequence": 1,
+   "timestamp": "2026-01-02T09:01:00Z",
+   "agentId": "p",
+   "taskId": null,
+   "type": "task_created",
+   "provenance": "declared",
+   "text": "Session start. [fixture record]",
+   "payload": {
+    "tasks": [
+     {
+      "taskId": "T1",
+      "title": "Session",
+      "owner": "p"
+     }
+    ]
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-02",
+   "sequence": 2,
+   "timestamp": "2026-01-02T09:02:00Z",
+   "agentId": "p",
+   "taskId": "T1",
+   "type": "tool_result",
+   "provenance": "declared",
+   "text": "build-result pass [fixture record]",
+   "payload": {
+    "tool": "bash",
+    "runId": "run-2",
+    "category": "build",
+    "rule": "build-result",
+    "subject": {
+     "artifact": "repo:app",
+     "version": "built"
+    },
+    "outcome": "pass",
+    "output": "out"
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-03",
+   "sequence": 3,
+   "timestamp": "2026-01-02T09:03:00Z",
+   "agentId": "p",
+   "taskId": "T1",
+   "type": "claim",
+   "provenance": "declared",
+   "text": "C1: done [fixture record]",
+   "payload": {
+    "claimId": "C1",
+    "asserts": "live",
+    "subject": {
+     "artifact": "https://app.example.test",
+     "version": "live"
+    },
+    "rule": "declared"
+   },
+   "evidenceRefs": [
+    "ev-02"
+   ],
+   "room": "#general",
+   "statusAfter": "done"
+  },
+  {
+   "id": "ev-04",
+   "sequence": 4,
+   "timestamp": "2026-01-02T09:04:00Z",
+   "agentId": "v",
+   "taskId": null,
+   "type": "tool_result",
+   "provenance": "declared",
+   "text": "http-status pass [fixture record]",
+   "payload": {
+    "tool": "bash",
+    "runId": "run-4",
+    "category": "verification",
+    "rule": "http-status",
+    "subject": {
+     "artifact": "https://app.example.test",
+     "version": "live"
+    },
+    "outcome": "pass",
+    "output": "out",
+    "finalUrl": "https://app.example.test"
+   },
+   "evidenceRefs": []
+  }
+ ],
+ "fixture": {
+  "monitor": "C",
+  "expect": [
+   {
+    "atCursor": 2,
+    "count": 0
+   },
+   {
+    "atCursor": 3,
+    "state": "active",
+    "count": 1,
+    "evidenceIds": [
+     "ev-03"
+    ],
+    "attributes": [
+     "session ran no checks",
+     "a build passed in this session; nothing verified the subject"
+    ]
+   },
+   {
+    "atCursor": 4,
+    "state": "resolved",
+    "count": 1,
+    "evidenceIds": [
+     "ev-04"
+    ]
+   },
+   {
+    "withhold": [
+     "ev-02"
+    ],
+    "atCursor": 3,
+    "state": "insufficient",
+    "count": 1,
+    "missing": [
+     "ev-02"
+    ]
+   }
+  ],
+  "quiet": [
+   "A",
+   "B",
+   "G",
+   "J",
+   "AM",
+   "AO",
+   "AS",
+   "D",
+   "F",
+   "H",
+   "AP",
+   "AQ",
+   "AR",
+   "AU",
+   "AT",
+   "BJ",
+   "BK",
+   "BM",
+   "E",
+   "O",
+   "AX",
+   "AW",
+   "AE",
+   "AF",
+   "BP",
+   "AC",
+   "AD",
+   "AG",
+   "BN",
+   "X",
+   "Z",
+   "Y",
+   "BI",
+   "BL",
+   "U",
+   "V",
+   "BC",
+   "BD",
+   "W",
+   "AH",
+   "AI",
+   "BR"
+  ]
+ }
+}
