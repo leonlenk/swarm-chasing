@@ -7,7 +7,7 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from swarm_mcp.info import server_info
-from swarm_mcp.toolkit import ToolInputError
+from swarm_mcp.toolkit import ResponseBudget, ToolInputError
 
 NAME = "core"
 DESCRIPTION = (
@@ -15,6 +15,7 @@ DESCRIPTION = (
     "retrieval (core_get: any '<source>:<kind>:<id>' id, or a batch, with optional surrounding context)."
 )
 MAX_BATCH = 50
+BATCH_CONTEXT = 10  # max before/after per id when ids is a list
 
 
 def register(mcp, ctx) -> None:
@@ -61,7 +62,9 @@ def register(mcp, ctx) -> None:
         an artifact (a file or page, with the records that created, changed or mentioned it). Messages and
         actions also list the artifacts they touched; `before`/`after` add neighbouring messages in the same
         channel or the same agent's adjacent actions (under `neighbors`). One id returns that record; a list
-        returns {results: [...], errors: [...]}, where unresolvable ids are listed instead of failing the call."""
+        returns {results: [...], errors: [...]}, where unresolvable ids are listed instead of failing the call.
+        For a list, before/after are capped at 10 per id and the results at a response size budget; ids that did
+        not fit are listed under not_returned (request them in another call)."""
         cap = max_chars or ctx.config.max_text
         if isinstance(ids, str):
             return one(ids, before, after, cap)
@@ -69,10 +72,29 @@ def register(mcp, ctx) -> None:
             raise ToolInputError("ids must not be empty")
         if len(ids) > MAX_BATCH:
             raise ToolInputError(f"At most {MAX_BATCH} ids per call (got {len(ids)}); split the request.")
-        results, errors = [], []
+        notes = []
+        if before > BATCH_CONTEXT or after > BATCH_CONTEXT:
+            before, after = min(before, BATCH_CONTEXT), min(after, BATCH_CONTEXT)
+            notes.append(f"before/after capped at {BATCH_CONTEXT} per id for a list of ids; pass one id for more")
+        budget = ResponseBudget()
+        results, errors, not_returned = [], [], []
         for e in ids:
+            if budget.exhausted:
+                not_returned.append(e)
+                continue
             try:
-                results.append(one(e, before, after, cap))
+                rec = one(e, before, after, cap)
             except ToolInputError as err:
                 errors.append({"id": e, "error": str(err)})
-        return {"requested": len(ids), "returned": len(results), "results": results, "errors": errors}
+                continue
+            if budget.admit(rec):
+                results.append(rec)
+            else:
+                not_returned.append(e)
+        out: dict[str, Any] = {"requested": len(ids), "returned": len(results), "results": results, "errors": errors}
+        if not_returned:
+            out["not_returned"] = not_returned
+            notes.append(budget.note("request the not_returned ids in another call, or lower max_chars/before/after"))
+        if notes:
+            out["notes"] = notes
+        return out

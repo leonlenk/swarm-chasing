@@ -33,7 +33,7 @@ from swarm_mcp.scope.analysis import timeline as timeline_analysis
 from swarm_mcp.scope.analysis.timeline import record_filters, ts_iso
 from swarm_mcp.scope.db import HUMAN, Store, label_for
 from swarm_mcp.scope.records import StoreRecordProvider
-from swarm_mcp.toolkit import ToolInputError, parse_time
+from swarm_mcp.toolkit import ResponseBudget, ToolInputError, parse_time
 
 NAME = "scope"
 DESCRIPTION = (
@@ -381,7 +381,8 @@ def register(mcp, ctx) -> None:
         """Find or read messages (or actions). With `query`: full-text search; each hit has its evidence_id,
         time, channel (messages) or kind (actions), author and a text snippet centred on the match. Without
         `query`: the records in the window (since/until, channel, author...) in time order with their (capped)
-        text, i.e. read the conversation. Returns the total plus one page; continue with offset=next_offset.
+        text, i.e. read the conversation. Returns the total plus one page; continue with offset=next_offset. A
+        page stops early when the response reaches its size budget (noted under notes; next_offset continues).
         Expand any hit in context with core_get(id, before=3, after=3)."""
         q = (query or "").strip()
         limit, note = ctx.limit(limit)
@@ -413,6 +414,7 @@ def register(mcp, ctx) -> None:
             )
             names = s.display_names()
         results = []
+        budget = ResponseBudget()
         for r in rows:
             item: dict[str, Any] = {"evidence_id": r["evidence_id"], "ts": ts_iso(r["ts"])}
             if table == "messages":
@@ -420,11 +422,15 @@ def register(mcp, ctx) -> None:
             else:
                 item.update(kind=r["kind"], agent=label_for(r["who"], names), agent_id=r["who"])
             item["text"] = text(r["content"], max_chars, focus)
+            if not budget.admit(item):
+                break
             results.append(item)
         has_more = offset + len(results) < total
         notes = []
         if note:
             notes.append(note)
+        if budget.exhausted:
+            notes.append(budget.note(f"continue with offset={offset + len(results)}, or lower max_chars/limit"))
         if offset and not results and total:
             notes.append(f"offset {offset} is past the last record ({total} total).")
         out: dict[str, Any] = {"mode": "search" if q else "read"}
@@ -849,15 +855,20 @@ def register(mcp, ctx) -> None:
                         for x in s.all(_PERIOD_AGENT_SQL, [a["agent_id"], [r["evidence_id"] for r in rows]])
                     }
         out = []
+        budget = ResponseBudget()
         for r in rows:
             d = _period_dict(r, r["idx"])
             if agent:
                 d["agent_messages"] = per_agent.get(r["evidence_id"], 0)
+            if not budget.admit(d):
+                break
             out.append(d)
         has_more = offset + len(out) < total
         notes = ["Pass name=<index> for one period's detail."]
         if note:
             notes.append(note)
+        if budget.exhausted:
+            notes.append(budget.note(f"continue with offset={offset + len(out)}, or lower limit"))
         if offset and not out and total:
             notes.append(f"offset {offset} is past the last period ({total} total).")
         if any("type" in d for d in out):

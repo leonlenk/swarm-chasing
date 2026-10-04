@@ -653,9 +653,9 @@ def test_periods_list_is_paged(many_periods_app):
     assert [p["index"] for p in out["periods"]] == list(range(1, 51))
     assert len(json.dumps(out)) < 40_000  # was ~2.4 MB for the whole list
 
-    nxt = call(many_periods_app, "scope_periods", limit=200, offset=out["next_offset"])
-    assert nxt["returned"] == 200 and nxt["offset"] == 50 and nxt["next_offset"] == 250
-    assert [p["index"] for p in nxt["periods"]] == list(range(51, 251))
+    nxt = call(many_periods_app, "scope_periods", limit=100, offset=out["next_offset"])
+    assert nxt["returned"] == 100 and nxt["offset"] == 50 and nxt["next_offset"] == 150
+    assert [p["index"] for p in nxt["periods"]] == list(range(51, 151))
     assert "capped at the maximum of 200" in str(call(many_periods_app, "scope_periods", limit=1000)["notes"])
 
     last = call(many_periods_app, "scope_periods", limit=10, offset=N_SPRINTS)
@@ -689,8 +689,8 @@ def test_periods_counts_match_and_use_few_queries(many_periods_app, store_path: 
             return _orig(self, sql, params)
 
         monkeypatch.setattr(db.Store, meth, counted)
-    out = call(many_periods_app, "scope_periods", agent="Opus 4.5", kind="sprint", limit=200)
-    assert out["returned"] == 200 and out["agent"] == "Claude Opus 4.5"
+    out = call(many_periods_app, "scope_periods", agent="Opus 4.5", kind="sprint", limit=100)
+    assert out["returned"] == 100 and out["agent"] == "Claude Opus 4.5"
     assert len(calls) < 15  # one GROUP BY per page, not one query per period
     monkeypatch.undo()
 
