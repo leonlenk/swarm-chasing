@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
-from swarm_mcp.modules.subtasks.infer import PR_RX, Action, Change, ChatMsg, Unit
+from swarm_mcp.modules.subtasks.infer import PR_RX, Action, Change, ChatMsg, Inference, Unit, infer
 from swarm_mcp.scope.db import Store, norm
 from swarm_mcp.toolkit import TS_FORMAT
 
@@ -290,3 +290,13 @@ def load_corpus(s: Store, source: str, session_gap: int = SESSION_GAP) -> Corpus
         dup_min=0.8 if noun == "session" else 0.5,
         aliases=aliases,
     )
+
+
+def build(s: Store, source: str) -> tuple[Corpus, Inference]:
+    """Load ``source`` from the store and run inference: what the subtasks tools and the renderer both use."""
+    c = load_corpus(s, source)
+    if not c.units:
+        raise ValueError(f"Source {source!r} has no work units (no records that touch artifacts).")
+    inf = infer(c.name, c.units, c.chat, dup_min=c.dup_min, artifact_meta=c.artifact_meta)
+    inf.notes.extend(c.notes)
+    return c, inf

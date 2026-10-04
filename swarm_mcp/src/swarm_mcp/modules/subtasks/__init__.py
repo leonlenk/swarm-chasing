@@ -24,11 +24,11 @@ from swarm_mcp.modules.subtasks.infer import (
     Edge,
     Inference,
     cohesion,
-    infer,
     score,
     why,
 )
-from swarm_mcp.modules.subtasks.sources import Corpus, corpus_sources, load_corpus
+from swarm_mcp.modules.subtasks.sources import Corpus, corpus_sources
+from swarm_mcp.modules.subtasks.sources import build as build_corpus
 from swarm_mcp.scope import evidence
 from swarm_mcp.scope.db import norm
 from swarm_mcp.toolkit import ToolInputError, iso, parse_time, truncate
@@ -90,12 +90,10 @@ def register(mcp, ctx) -> None:
 
         def build() -> tuple[Corpus, Inference]:
             with ctx.store() as s:
-                c = load_corpus(s, name)
-            if not c.units:
-                raise ToolInputError(f"Source {name!r} has no work units (no records that touch artifacts).")
-            inf = infer(c.name, c.units, c.chat, dup_min=c.dup_min, artifact_meta=c.artifact_meta)
-            inf.notes.extend(c.notes)
-            return c, inf
+                try:
+                    return build_corpus(s, name)
+                except ValueError as e:
+                    raise ToolInputError(str(e)) from None
 
         return ctx.lazy(f"inference:{name}", build)
 

@@ -221,3 +221,46 @@ def test_list_get_and_locate(gapp):
     assert located["subtask_id"] == sub["subtask_id"]
     row = {c["corpus"]: c for c in call(gapp, "subtasks_corpora")["corpora"]}["rpg"]
     assert {"unit": "pull request", "units": 5, "artifact": "file"}.items() <= row.items()
+
+
+# --------------------------------------------------------------------------- render subtasks
+
+
+def test_render_subtasks_page(git_data: Path, tmp_path: Path):
+    import re
+
+    from swarm_mcp.scope.viz.subtasks_html import render_subtasks
+    from swarm_mcp.toolkit import Scrubber
+
+    db = git_data / "swarmscope.duckdb"
+    out = tmp_path / "sub.html"
+    res = render_subtasks(db, out, corpus="rpg", scrub=Scrubber())
+    assert res["corpus"] == "rpg" and res["units"] == 5 and res["actors"] >= 2 and res["edges"] >= 1
+    page = out.read_text()
+    assert page.startswith("<!doctype html>") and "innerHTML" not in page
+    assert not re.search(r"<script[^>]+src=", page) and not re.search(r"<link[^>]+href=\"http", page)
+    m = re.search(r'<script id="data" type="application/json">(.*?)</script>', page, re.S)
+    assert m and "</" not in m.group(1)
+    d = json.loads(m.group(1))
+    assert {"combined", "files", "title"} <= set(d["methods"]) and d["levels"] == ["coarse", "medium", "fine"]
+    shorts = {u[1] for u in d["units"]}
+    assert "PR #1" in shorts and str(db.parent) not in page  # no absolute paths in the page
+    # every edge points at real units and carries evidence ids from this store
+    for e in d["edges"]:
+        assert 0 <= e[0] < len(d["units"]) and 0 <= e[1] < len(d["units"])
+        assert all(x.startswith("rpg:") for x in e[5])
+    # clusters partition the units at every method/level
+    for method, levels in d["clusters"].items():
+        for lv, groups in levels.items():
+            assert sorted(i for g in groups for i in g) == list(range(len(d["units"]))), (method, lv)
+
+
+def test_render_subtasks_corpus_choice(git_data: Path, tmp_path: Path):
+    from swarm_mcp.scope.viz.subtasks_html import render_subtasks
+    from swarm_mcp.toolkit import ToolInputError
+
+    db = git_data / "swarmscope.duckdb"
+    # village has no artifact touches, so rpg is the only corpus and the default
+    assert render_subtasks(db, tmp_path / "x.html")["corpus"] == "rpg"
+    with pytest.raises(ToolInputError, match="Unknown corpus"):
+        render_subtasks(db, tmp_path / "x.html", corpus="nope")

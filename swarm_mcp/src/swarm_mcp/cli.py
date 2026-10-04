@@ -3,7 +3,7 @@
     swarm-mcp                              run the MCP server on stdio (what Claude Code launches)
     swarm-mcp info [--json]                modules, sources, findings health and config (exit 1 on bad findings)
     swarm-mcp add <path> [options]         add a dataset to the SwarmScope store (idempotent)
-    swarm-mcp render <view> [options]      write a self-contained HTML view (views: timeline)
+    swarm-mcp render <view> [options]      write a self-contained HTML view (views: timeline, subtasks)
     swarm-mcp export --out DIR [filters]   export a redacted subset of the store, then check it
 
 ``add --adapter auto`` (the default) picks the adapter from the path: ``--mapping``
@@ -320,8 +320,30 @@ def _timeline_run(args: argparse.Namespace, config: Config) -> Any:
     )
 
 
+def _subtasks_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--corpus", help="source to infer subtasks for (defaults to --source; required if the store has several)")
+    p.add_argument("--title-chars", type=int, default=140, help="unit title length (masked)")
+
+
+def _subtasks_run(args: argparse.Namespace, config: Config) -> Any:
+    from swarm_mcp.scope.viz.subtasks_html import render_subtasks
+    from swarm_mcp.toolkit import Scrubber
+
+    corpus = args.corpus or args.source
+    name = f"swarmscope-subtasks-{corpus}.html" if corpus else "swarmscope-subtasks.html"
+    out = resolve_output(args.out) if args.out else config.data_dir / name
+    return render_subtasks(
+        _db(args, config),
+        out,
+        corpus=corpus,
+        scrub=Scrubber(config.scrub, config.email_allowlist),
+        title_chars=args.title_chars,
+    )
+
+
 RENDER_VIEWS: dict[str, RenderView] = {
     "timeline": ("HTML swimlane: one row per agent, one mark per message", _timeline_args, _timeline_run),
+    "subtasks": ("HTML subtask map: inferred clusters of work, handoffs between agents", _subtasks_args, _subtasks_run),
 }
 
 
