@@ -381,15 +381,24 @@ def _r_keyword_secret(m: re.Match[str], r: Redactor) -> str | None:
 # --------------------------------------------------------------------------- email
 
 # The email pattern record-level masking (toolkit.Scrubber, via mask_text) and exports share.
-# Local part: ASCII plus letters of scripts written with spaces (jöhn, иван). Scripts written
-# without spaces (Han, kana, Hangul, Thai, ...) are excluded, so in "連絡はbob@example.comまで"
-# the address starts at "bob". The lookahead is ASCII-only. Both boundaries used Python's
-# Unicode \w, so a CJK character or an accented letter next to an address used to hide it.
+# TWIN: village_tools/swarmtrace/format.py EMAIL_RX uses the same pattern text; change both together.
+# Local part: ASCII plus letters of scripts written with spaces (jöhn, иван) and inner
+# apostrophes (o'neil). Scripts written without spaces (Han, kana, Hangul, Thai, ...) are
+# excluded, so in "連絡はbob@example.comまで" the address starts at "bob". Domain labels take the
+# same letters (пример.рф, münchen.de); the TLD is an xn-- punycode label, ASCII letters or
+# letters of one non-ASCII script, so "bob@example.comé" and "联系bob@example.com谢谢" stop after
+# "com". Boundaries used Python's Unicode \w, so a CJK character or an accented letter next to an
+# address used to hide it.
 _NO_SPACE_SCRIPTS = (
     "\u0e00-\u0eff\u1000-\u109f\u1780-\u17ff\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff66-\uff9f"
 )
 _EMAIL_LOCAL = f"(?:[^\\W{_NO_SPACE_SCRIPTS}]|[.%+-])"
-_EMAIL = re.compile(rf"(?<!{_EMAIL_LOCAL}){_EMAIL_LOCAL}+@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{{2,}})(?![A-Za-z0-9-])")
+_EMAIL_LABEL = f"(?:[^\\W_{_NO_SPACE_SCRIPTS}]|-)"
+_EMAIL_TLD = (
+    f"(?:xn--[A-Za-z0-9-]+(?![A-Za-z0-9-])|[A-Za-z]{{2,}}(?![A-Za-z0-9])"
+    f"|[^\\W\\d_A-Za-z{_NO_SPACE_SCRIPTS}]{{2,}}(?![^\\W{_NO_SPACE_SCRIPTS}]))"
+)
+_EMAIL = re.compile(rf"(?<!{_EMAIL_LOCAL}){_EMAIL_LOCAL}(?:{_EMAIL_LOCAL}|')*@((?:{_EMAIL_LABEL}+\.)+{_EMAIL_TLD})")
 
 
 def _r_email(m: re.Match[str], r: Redactor) -> str | None:
@@ -399,9 +408,10 @@ def _r_email(m: re.Match[str], r: Redactor) -> str | None:
     ``help@agentvillage.org`` and ``x@mail.agentvillage.org``, but not
     ``x@notagentvillage.org`` or ``x@agentvillage.org.evil.com``.
     False negatives: obfuscated addresses ("bob at example dot com"), addresses
-    without a TLD (``root@localhost``), non-ASCII (IDN) domains, and local parts in
-    scripts written without spaces (Han, kana, Thai...). False positives: ``name@2x.png``-style
-    asset names whose "TLD" is alphabetic (e.g. ``icon@retina.png``).
+    without a TLD (``root@localhost``, ``a@b``), and local parts or Unicode domains in
+    scripts written without spaces (Han, kana, Thai...; their ``xn--`` form is caught).
+    False positives: ``name@2x.png``-style asset names whose "TLD" is alphabetic
+    (e.g. ``icon@retina.png``).
     VCS service users (``git@github.com:org/repo.git``, ``ssh://hg@host``) are kept:
     they are not people and repo remotes are common research evidence.
     """

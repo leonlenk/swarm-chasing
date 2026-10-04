@@ -232,6 +232,29 @@ def test_scrub(raw, allow, want):
     assert scrub(raw, allow) == want
 
 
+# Same cases as swarm_mcp/tests/test_redact.py (the email patterns are twins).
+@pytest.mark.parametrize("raw,want", [
+    ("bob_o'neil@example.com", "[email]"), ("'bob@example.com'", "'[email]'"), ("it's bob@example.com", "it's [email]"),
+    ("иван@пример.рф", "[email]"), ("bob@münchen.de", "[email]"), ("user@xn--e1afmkfd.xn--p1ai", "[email]"),
+    ("联系bob@example.com谢谢", "联系[email]谢谢"), ("bob@пример.рф, ok", "[email], ok"),
+    ("bob@example.com-ish", "[email]-ish"), ("bob@example.com-cdn.net", "[email]"),
+])
+def test_scrub_email_takes_the_whole_address(raw, want):
+    assert scrub(raw) == want and pii_hits(want) == []
+
+
+@pytest.mark.parametrize("raw", ["@handle", "user@localhost", "a@b", "a@b.c", "foo@bar", "ping me @bob.", "v1.2@3.4"])
+def test_scrub_email_leaves_non_addresses(raw):
+    assert scrub(raw) == raw and pii_hits(raw) == []
+
+
+def test_scrub_email_allowlist_still_keeps_whole_domains():
+    allow = ("agentvillage.org",)
+    assert scrub("bot@agentvillage.org, o'neil@mail.agentvillage.org", allow) == \
+        "bot@agentvillage.org, o'neil@mail.agentvillage.org"
+    assert scrub("x@notagentvillage.org x@agentvillage.org.evil.com", allow) == "[email] [email]"
+
+
 # Same cases as swarm_mcp/tests/test_redact.py (the phone patterns are twins).
 @pytest.mark.parametrize("raw,want", [
     # a letter, "_" or "-word" right after the number: the whole number goes, no digits left behind

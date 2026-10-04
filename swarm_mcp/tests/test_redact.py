@@ -96,6 +96,31 @@ def test_email_next_to_non_ascii_letters(r, text, expected):
     assert red(r, text) == expected
 
 
+# Same cases as village_tools/swarmtrace/tests/test_format.py (the email patterns are twins).
+@pytest.mark.parametrize(
+    "text, expected",
+    [("bob_o'neil@example.com", "[email]"), ("'bob@example.com'", "'[email]'"), ("it's bob@example.com", "it's [email]"),
+     ("иван@пример.рф", "[email]"), ("bob@münchen.de", "[email]"), ("user@xn--e1afmkfd.xn--p1ai", "[email]"),
+     ("联系bob@example.com谢谢", "联系[email]谢谢"), ("bob@пример.рф, ok", "[email], ok"),
+     ("bob@example.com-ish", "[email]-ish"), ("bob@example.com-cdn.net", "[email]")],
+)  # fmt: skip
+def test_email_takes_the_whole_address(r, text, expected):
+    out, c = r.redact(text)
+    assert out == expected and c == {"email": 1}
+
+
+@pytest.mark.parametrize("text", ["a@b", "a@b.c", "v1.2@3.4"])
+def test_email_more_negatives(r, text):
+    assert red(r, text) == text
+
+
+def test_email_allowlist_keeps_apostrophe_addresses():
+    r = Redactor(allow_email_domains=["agentvillage.org"])
+    text = "bot@agentvillage.org, o'neil@mail.agentvillage.org"
+    assert red(r, text) == text
+    assert red(r, "x@notagentvillage.org x@agentvillage.org.evil.com") == "[email] [email]"
+
+
 def test_vcs_remotes_are_not_emails(r):
     text = "clone git@github.com:org/repo.git or ssh://git@github.com/org/repo"
     assert red(r, text) == text

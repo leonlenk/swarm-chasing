@@ -236,11 +236,18 @@ def dumps(obj):
 # --- PII scrubbing -------------------------------------------------------------------------------
 
 # Boundaries are ASCII (Python's \w is Unicode, so a CJK or accented letter next to an address or number used to hide
-# it). The email local part takes letters of scripts written with spaces (jöhn, иван) but not Han, kana, Hangul, Thai
-# and the like, so in "連絡はbob@example.comまで" the address starts at "bob".
+# it). The email local part takes letters of scripts written with spaces (jöhn, иван) and inner apostrophes
+# (o'neil), but not Han, kana, Hangul, Thai and the like, so in "連絡はbob@example.comまで" the address starts at "bob".
+# Domain labels take the same letters (пример.рф, münchen.de); the TLD is an xn-- punycode label, ASCII letters or
+# letters of one non-ASCII script, so "bob@example.comé" and "联系bob@example.com谢谢" stop after "com". Domains in
+# scripts written without spaces (例子.中国) are not caught in that form; their xn-- form is.
+# TWIN: swarm_mcp/src/swarm_mcp/redact.py _EMAIL uses the same pattern text; change both together.
 _NO_SPACE_SCRIPTS = "\u0e00-\u0eff\u1000-\u109f\u1780-\u17ff\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff66-\uff9f"
 _LOCAL = f"(?:[^\\W{_NO_SPACE_SCRIPTS}]|[.%+-])"
-EMAIL_RX = re.compile(rf"(?<!{_LOCAL}){_LOCAL}+@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{{2,}})(?![A-Za-z0-9-])")
+_LABEL = f"(?:[^\\W_{_NO_SPACE_SCRIPTS}]|-)"
+_TLD = (f"(?:xn--[A-Za-z0-9-]+(?![A-Za-z0-9-])|[A-Za-z]{{2,}}(?![A-Za-z0-9])"
+        f"|[^\\W\\d_A-Za-z{_NO_SPACE_SCRIPTS}]{{2,}}(?![^\\W{_NO_SPACE_SCRIPTS}]))")
+EMAIL_RX = re.compile(rf"(?<!{_LOCAL}){_LOCAL}(?:{_LOCAL}|')*@((?:{_LABEL}+\.)+{_TLD})")
 # Phone-like: '+' then 8-15 digits with at most two separators between digits (not a plain decimal such as
 # +3.14159265), or North American 3-3-4 with separators (optional leading 1). 3-3-4 needs separators, so dates,
 # times, versions, IPs, money, ids and hashes don't match. A match takes the whole digit run or nothing: the '+'
