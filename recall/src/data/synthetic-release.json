@@ -1,0 +1,144 @@
+{
+  "id": "synthetic-release-v2.4.0",
+  "label": "Synthetic demonstration",
+  "kind": "synthetic",
+  "description": "Hand-written fixture: three agents prepare the ledger-api 2.4.0 release. Not an AI Village incident. Every action below is a recorded fixture event — nothing was deployed or published.",
+  "experiment": {
+    "withhold": ["ev-05"],
+    "label": "Withhold ci-run-8812",
+    "description": "Removes the failed integration-test record (ev-05, ci-run-8812) from the analysis input, as if the run had never been logged. The record still exists in the fixture; it is hidden, not missing."
+  },
+  "agents": [
+    { "id": "kestrel", "name": "Kestrel", "role": "Build & QA", "color": "#7aa2f7" },
+    { "id": "juniper", "name": "Juniper", "role": "Deployment", "color": "#c099ff" },
+    { "id": "wren", "name": "Wren", "role": "Release comms", "color": "#4fd6be" }
+  ],
+  "events": [
+    {
+      "id": "ev-01", "sequence": 1, "timestamp": "2026-09-14T09:00:00Z",
+      "agentId": "kestrel", "taskId": null, "type": "task_created", "provenance": "declared",
+      "text": "Release plan for ledger-api 2.4.0 posted to #release. Six tasks: build the RC, run integration tests, deploy to staging, promote to production, draft release notes, publish the announcement.",
+      "payload": { "tasks": [
+        { "taskId": "T1", "title": "Build release candidate", "owner": "kestrel" },
+        { "taskId": "T2", "title": "Run integration test suite", "owner": "kestrel", "dependsOn": ["T1"] },
+        { "taskId": "T3", "title": "Deploy to staging", "owner": "juniper", "dependsOn": ["T2"] },
+        { "taskId": "T4", "title": "Promote to production", "owner": "kestrel", "dependsOn": ["T3"] },
+        { "taskId": "T5", "title": "Draft release notes", "owner": "wren", "dependsOn": ["T1"] },
+        { "taskId": "T6", "title": "Publish release announcement", "owner": "wren", "dependsOn": ["T5"] }
+      ] },
+      "evidenceRefs": []
+    },
+    {
+      "id": "ev-02", "sequence": 2, "timestamp": "2026-09-14T09:02:10Z",
+      "agentId": "juniper", "taskId": "T4", "type": "task_assigned", "provenance": "declared",
+      "text": "I'll take production promotion too — keeps staging and prod rollout with one owner.",
+      "payload": { "assignee": "juniper", "previousOwner": "kestrel" },
+      "evidenceRefs": ["ev-01"]
+    },
+    {
+      "id": "ev-03", "sequence": 3, "timestamp": "2026-09-14T09:04:45Z",
+      "agentId": "wren", "taskId": "T6", "type": "dependency_created", "provenance": "declared",
+      "text": "Adding a gate: the announcement should not go out until integration tests are green.",
+      "payload": { "from": "T2", "to": "T6", "reason": "announcement gated on green integration tests" },
+      "evidenceRefs": ["ev-01"]
+    },
+    {
+      "id": "ev-04", "sequence": 4, "timestamp": "2026-09-14T09:12:30Z",
+      "agentId": "kestrel", "taskId": "T1", "type": "tool_result", "provenance": "observed",
+      "text": "build.sh exited 0 — artifact ledger-api:2.4.0 pushed to registry (sha256:9f1c…e04a).",
+      "payload": { "tool": "build.sh", "category": "build", "runId": "build-5521", "subject": { "artifact": "ledger-api", "version": "2.4.0" }, "outcome": "pass", "output": "Step 14/14 : LABEL version=2.4.0\nSuccessfully built 9f1c0b7de04a\nPushed registry.internal/ledger-api:2.4.0" },
+      "evidenceRefs": [], "statusAfter": "done"
+    },
+    {
+      "id": "ev-05", "sequence": 5, "timestamp": "2026-09-14T09:31:02Z",
+      "agentId": "kestrel", "taskId": "T2", "type": "tool_result", "provenance": "observed",
+      "text": "pytest tests/integration against ledger-api:2.4.0 — 409 passed, 3 failed.",
+      "payload": { "tool": "pytest", "category": "verification", "runId": "ci-run-8812", "subject": { "artifact": "ledger-api", "version": "2.4.0" }, "outcome": "fail", "output": "FAILED tests/integration/test_webhooks.py::test_retry_backoff_honours_429\nFAILED tests/integration/test_webhooks.py::test_signature_rotation\nFAILED tests/integration/test_ledger.py::test_idempotent_refund\n========= 3 failed, 409 passed in 211.4s =========" },
+      "evidenceRefs": [], "statusAfter": "in_progress"
+    },
+    {
+      "id": "ev-06", "sequence": 6, "timestamp": "2026-09-14T09:34:18Z",
+      "agentId": "kestrel", "taskId": "T2", "type": "claim", "provenance": "declared",
+      "text": "Integration suite passed for 2.4.0 ✅ (ci-run-8812). Marking tests done — staging is unblocked.",
+      "payload": { "claimId": "C1", "asserts": "verification_passed", "subject": { "artifact": "ledger-api", "version": "2.4.0" } },
+      "evidenceRefs": ["ev-05"], "statusAfter": "done"
+    },
+    {
+      "id": "ev-07", "sequence": 7, "timestamp": "2026-09-14T09:40:51Z",
+      "agentId": "juniper", "taskId": "T3", "type": "action", "provenance": "declared",
+      "text": "Starting staging rollout of ledger-api:2.4.0 per Kestrel's green test report (C1). [simulated — fixture record]",
+      "payload": { "action": "deploy ledger-api:2.4.0 → staging", "referencesClaims": ["C1"], "simulated": true },
+      "evidenceRefs": ["ev-06"], "statusAfter": "in_progress"
+    },
+    {
+      "id": "ev-08", "sequence": 8, "timestamp": "2026-09-14T09:46:20Z",
+      "agentId": "wren", "taskId": "T5", "type": "status_updated", "provenance": "declared",
+      "text": "Release notes drafted from the 2.4.0 changelog (webhook retry backoff, signature rotation, refund idempotency).",
+      "payload": { "status": "done" },
+      "evidenceRefs": ["ev-04"], "statusAfter": "done"
+    },
+    {
+      "id": "ev-09", "sequence": 9, "timestamp": "2026-09-14T09:52:05Z",
+      "agentId": "wren", "taskId": "T6", "type": "action", "provenance": "declared",
+      "text": "Tests are green per C1, so I've queued the 2.4.0 announcement for the blog and changelog feed. [simulated — fixture record]",
+      "payload": { "action": "queue announcement for 2.4.0", "referencesClaims": ["C1"], "simulated": true },
+      "evidenceRefs": ["ev-06", "ev-08"], "statusAfter": "in_progress"
+    },
+    {
+      "id": "ev-10", "sequence": 10, "timestamp": "2026-09-14T10:05:33Z",
+      "agentId": "kestrel", "taskId": "T2", "type": "correction", "provenance": "declared",
+      "text": "CORRECTION @juniper @wren: my 09:34 report (C1) was wrong. ci-run-8812 FAILED for 2.4.0 — 3 failures in webhooks and refunds. C1 is withdrawn. Do not ship 2.4.0.",
+      "payload": { "supersedes": "C1", "addressedTo": ["juniper", "wren"] },
+      "evidenceRefs": ["ev-05", "ev-06"], "statusAfter": "failed"
+    },
+    {
+      "id": "ev-11", "sequence": 11, "timestamp": "2026-09-14T10:08:47Z",
+      "agentId": "juniper", "taskId": "T3", "type": "acknowledgement", "provenance": "declared",
+      "text": "Ack Kestrel's correction. Halting the staging rollout of 2.4.0 and leaving prod untouched until we have a green run.",
+      "payload": { "acknowledges": "ev-10" },
+      "evidenceRefs": ["ev-10"], "statusAfter": "paused"
+    },
+    {
+      "id": "ev-12", "sequence": 12, "timestamp": "2026-09-14T10:17:29Z",
+      "agentId": "wren", "taskId": "T6", "type": "action", "provenance": "declared",
+      "text": "Published the ledger-api 2.4.0 announcement — integration tests passed (C1). [simulated — fixture record]",
+      "payload": { "action": "publish announcement for 2.4.0", "referencesClaims": ["C1"], "simulated": true },
+      "evidenceRefs": ["ev-06", "ev-09"], "statusAfter": "done"
+    },
+    {
+      "id": "ev-13", "sequence": 13, "timestamp": "2026-09-14T10:41:12Z",
+      "agentId": "kestrel", "taskId": "T2", "type": "tool_result", "provenance": "observed",
+      "text": "pytest tests/integration against ledger-api:2.4.1 (webhook + refund fixes) — 412 passed.",
+      "payload": { "tool": "pytest", "category": "verification", "runId": "ci-run-8830", "subject": { "artifact": "ledger-api", "version": "2.4.1" }, "outcome": "pass", "output": "tests/integration/test_webhooks.py ........\ntests/integration/test_ledger.py ......\n========= 412 passed in 208.9s =========" },
+      "evidenceRefs": [], "statusAfter": "in_progress"
+    },
+    {
+      "id": "ev-14", "sequence": 14, "timestamp": "2026-09-14T10:43:40Z",
+      "agentId": "kestrel", "taskId": "T2", "type": "claim", "provenance": "declared",
+      "text": "2.4.1 is green: ci-run-8830, 412/412 passed. This replaces 2.4.0 as the release candidate.",
+      "payload": { "claimId": "C3", "asserts": "verification_passed", "subject": { "artifact": "ledger-api", "version": "2.4.1" } },
+      "evidenceRefs": ["ev-13"], "statusAfter": "done"
+    },
+    {
+      "id": "ev-15", "sequence": 15, "timestamp": "2026-09-14T10:49:02Z",
+      "agentId": "wren", "taskId": "T6", "type": "acknowledgement", "provenance": "declared",
+      "text": "Missed the 10:05 correction before publishing — sorry. Retracting the 2.4.0 announcement now. [simulated — fixture record]",
+      "payload": { "acknowledges": "ev-10" },
+      "evidenceRefs": ["ev-10", "ev-12"], "statusAfter": "in_progress"
+    },
+    {
+      "id": "ev-16", "sequence": 16, "timestamp": "2026-09-14T10:55:18Z",
+      "agentId": "juniper", "taskId": "T3", "type": "action", "provenance": "declared",
+      "text": "Resuming staging with ledger-api:2.4.1 per C3. Smoke checks green. [simulated — fixture record]",
+      "payload": { "action": "deploy ledger-api:2.4.1 → staging", "referencesClaims": ["C3"], "simulated": true },
+      "evidenceRefs": ["ev-14"], "statusAfter": "done"
+    },
+    {
+      "id": "ev-17", "sequence": 17, "timestamp": "2026-09-14T11:02:44Z",
+      "agentId": "wren", "taskId": "T6", "type": "action", "provenance": "declared",
+      "text": "Republished the announcement for 2.4.1, citing ci-run-8830 (C3). [simulated — fixture record]",
+      "payload": { "action": "publish announcement for 2.4.1", "referencesClaims": ["C3"], "simulated": true },
+      "evidenceRefs": ["ev-14", "ev-15"], "statusAfter": "done"
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+import type { DataSource, RecallEvent } from '../model/types';
+import raw from '../data/synthetic-release.json';
+
+const TYPES = new Set([
+  'task_created', 'task_assigned', 'dependency_created', 'status_updated', 'message',
+  'claim', 'tool_result', 'correction', 'acknowledgement', 'action',
+]);
+
+/** Validates a RECALL-native JSON document and returns events sorted by sequence. */
+export function parseRecallDocument(doc: unknown): DataSource {
+  const d = doc as Partial<DataSource>;
+  if (!d || !Array.isArray(d.events) || !Array.isArray(d.agents)) {
+    throw new Error('Not a RECALL document: expected { agents: [], events: [] }');
+  }
+  const seen = new Set<string>();
+  for (const e of d.events as RecallEvent[]) {
+    if (!e.id || typeof e.sequence !== 'number' || !TYPES.has(e.type)) {
+      throw new Error(`Malformed event: ${JSON.stringify(e).slice(0, 120)}`);
+    }
+    if (seen.has(e.id)) throw new Error(`Duplicate event id ${e.id}`);
+    seen.add(e.id);
+  }
+  const events = [...(d.events as RecallEvent[])].sort((a, b) => a.sequence - b.sequence);
+  return {
+    id: d.id ?? 'recall-doc',
+    label: d.label ?? 'Imported RECALL document',
+    kind: d.kind ?? 'synthetic',
+    description: d.description ?? '',
+    agents: d.agents,
+    events,
+    experiment: d.experiment,
+    meta: d.meta ?? { origin: 'synthetic' },
+  };
+}
+
+export function loadSyntheticRelease(): DataSource {
+  return parseRecallDocument(raw);
+}
