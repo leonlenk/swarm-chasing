@@ -24,3 +24,15 @@ def test_no_credential_or_personal_path_literals():
             if AWS_KEY_ID.search(line) or HOME_PATH.search(line):
                 hits.append(f"{f.relative_to(ROOT)}:{n}")
     assert hits == []
+
+
+def test_no_stale_command_or_tool_names_in_src():
+    """Removed surface: `swarm-mcp ingest` is now `swarm-mcp add`, scope_list_sources is core_info."""
+    stale = re.compile(r"swarm-mcp ingest\b|\bscope_list_sources\b")
+    hits = [
+        f"{f.relative_to(ROOT)}:{n}"
+        for f in sorted((ROOT / "src").rglob("*.py"))
+        for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1)
+        if stale.search(line)
+    ]
+    assert hits == []

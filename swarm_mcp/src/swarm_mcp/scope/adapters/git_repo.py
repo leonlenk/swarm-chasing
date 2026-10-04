@@ -2,7 +2,7 @@
 
     git clone --bare https://github.com/<org>/<repo> data/<dataset>/repos/<repo>.git
     git -C <repo>.git fetch origin '+refs/pull/*/head:refs/pull/*/head'
-    swarm-mcp ingest git data/<dataset>/repos/<repo>.git          # source defaults to the repo name
+    swarm-mcp add data/<dataset>/repos/<repo>.git --adapter git   # source defaults to the repo name (--name)
 
 Mapping (source = repo name, e.g. ``rpg-game``):
   commit authors -> agents    (agent_id = <src>:agent:<email local part for agentvillage.org addresses,

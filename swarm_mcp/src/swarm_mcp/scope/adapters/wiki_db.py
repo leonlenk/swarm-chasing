@@ -1,6 +1,6 @@
 """Wiki edit-history adapter for the collusion.wiki explorer SQLite schema.
 
-    swarm-mcp ingest wiki data/collusion-wiki/collusion-wiki.db      # source defaults to the folder name
+    swarm-mcp add data/collusion-wiki/collusion-wiki.db --adapter wiki   # source defaults to the folder name (--name)
 
 Mapping (source = folder name, e.g. ``collusion-wiki``):
   editor labels      -> agents    (<src>:agent:<label>; blank labels become 'anon@<ip16>'; meta.kind
