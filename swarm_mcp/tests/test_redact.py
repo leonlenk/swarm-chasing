@@ -146,6 +146,36 @@ def test_two_phones_in_a_row(r):
     assert red(r, "+1 415 555 0134 / (415) 555-0199.") == "[phone] / [phone]."
 
 
+# Same cases as village_tools/swarmtrace/tests/test_format.py (the phone patterns are twins).
+@pytest.mark.parametrize(
+    "raw, want",
+    [  # a letter, "_" or "-word" right after the number: the whole number goes, no digits left behind
+     ("+44 20 7946 0958x", "[phone]x"), ("+44 20 7946 0958café", "[phone]café"), ("+44 20 7946 0958_", "[phone]_"),
+     ("+44 20 7946 0958-ish", "[phone]-ish"), ("415-555-0134x", "[phone]x"), ("1-415-555-0134-ish", "[phone]-ish"),
+     ("+33 6 12 34 56 78x", "[phone]x"),
+     # formats that used to slip through
+     ("1-415-555-0134", "[phone]"), ("1.415.555.0134", "[phone]"), ("+33 6 12 34 56 78", "[phone]"),
+     ("+81-3-1234-5678", "[phone]"), ("+4915112345678", "[phone]"), ("+44 (0)20 7946 0958", "[phone]"),
+     ("1 (415) 555-0134", "[phone]"), ("tel:+14155550134", "tel:[phone]"), ("phone=415-555-0134", "phone=[phone]"),
+     ("+33 6 12 34 56 78", "[phone]"), ("415 555 0134", "[phone]")],
+)  # fmt: skip
+def test_phone_takes_the_whole_number(r, raw, want):
+    out, c = r.redact(f"call {raw} now")
+    assert out == f"call {want} now" and c == {"phone": 1}
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["2026-10-04", "10/04/2026", "2026.10.04", "12:34:56", "12.30", "1.2.3", "v3.10.12", "2.0.0-rc1",
+     "550e8400-e29b-41d4-a716-446655440000", "deadbeefcafe1234", "4155550134", "14155550134", "1,234,567.89",
+     "75.126.1.1", "192.168.1.10", "10.0.19041.1", "ISBN 978-3-16-148410-0", "score 1+2345678901", "+3.14159265",
+     "+100.000000", "2026-10-04T12:34:56+05:30", "123-456-78901", "1234-567-8901", "ev_123-456-7890", "#123-456-7890",
+     "415-555-0134.5", "123-456-7890ab1", "4111 1111 1111 1111", "+1 2345 6789 0123 4567", "415\n555\n0134"],
+)  # fmt: skip
+def test_phone_leaves_non_phones(r, text):
+    assert r.redact(text) == (text, {})
+
+
 # --------------------------------------------------------------------------- credentials
 
 

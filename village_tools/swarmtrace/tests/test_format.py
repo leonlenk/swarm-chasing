@@ -232,6 +232,34 @@ def test_scrub(raw, allow, want):
     assert scrub(raw, allow) == want
 
 
+# Same cases as swarm_mcp/tests/test_redact.py (the phone patterns are twins).
+@pytest.mark.parametrize("raw,want", [
+    # a letter, "_" or "-word" right after the number: the whole number goes, no digits left behind
+    ("+44 20 7946 0958x", "[phone]x"), ("+44 20 7946 0958café", "[phone]café"), ("+44 20 7946 0958_", "[phone]_"),
+    ("+44 20 7946 0958-ish", "[phone]-ish"), ("415-555-0134x", "[phone]x"), ("1-415-555-0134-ish", "[phone]-ish"),
+    ("+33 6 12 34 56 78x", "[phone]x"),
+    # formats that used to slip through
+    ("1-415-555-0134", "[phone]"), ("1.415.555.0134", "[phone]"), ("+33 6 12 34 56 78", "[phone]"),
+    ("+81-3-1234-5678", "[phone]"), ("+4915112345678", "[phone]"), ("+44 (0)20 7946 0958", "[phone]"),
+    ("1 (415) 555-0134", "[phone]"), ("tel:+14155550134", "tel:[phone]"), ("phone=415-555-0134", "phone=[phone]"),
+    ("+33 6 12 34 56 78", "[phone]"), ("415 555 0134", "[phone]"),
+])
+def test_scrub_phone_takes_the_whole_number(raw, want):
+    assert scrub(f"call {raw} now") == f"call {want} now"
+    assert pii_hits(raw) == ["phone"] and pii_hits(scrub(raw)) == []
+
+
+@pytest.mark.parametrize("raw", [
+    "2026-10-04", "10/04/2026", "2026.10.04", "12:34:56", "12.30", "1.2.3", "v3.10.12", "2.0.0-rc1",
+    "550e8400-e29b-41d4-a716-446655440000", "deadbeefcafe1234", "4155550134", "14155550134", "1,234,567.89",
+    "75.126.1.1", "192.168.1.10", "10.0.19041.1", "ISBN 978-3-16-148410-0", "score 1+2345678901", "+3.14159265",
+    "+100.000000", "2026-10-04T12:34:56+05:30", "123-456-78901", "1234-567-8901", "ev_123-456-7890", "#123-456-7890",
+    "415-555-0134.5", "123-456-7890ab1", "4111 1111 1111 1111", "+1 2345 6789 0123 4567", "415\n555\n0134",
+])
+def test_scrub_phone_leaves_non_phones(raw):
+    assert scrub(raw) == raw and pii_hits(raw) == []
+
+
 def test_pii_warning_and_scrub_trace():
     tr = tiny()
     tr["events"][0]["snippet"] = "ask jane.doe@gmail.com or bot@agentvillage.org"

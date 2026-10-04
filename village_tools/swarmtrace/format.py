@@ -241,11 +241,20 @@ def dumps(obj):
 _NO_SPACE_SCRIPTS = "\u0e00-\u0eff\u1000-\u109f\u1780-\u17ff\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff66-\uff9f"
 _LOCAL = f"(?:[^\\W{_NO_SPACE_SCRIPTS}]|[.%+-])"
 EMAIL_RX = re.compile(rf"(?<!{_LOCAL}){_LOCAL}+@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{{2,}})(?![A-Za-z0-9-])")
-# Phone-like: 3-3-4 digit groups with separators (optionally +country / (area)), or +country followed by 2-4
-# separated groups. Separators are required so dates, versions, IPs, ids and hashes don't match.
-PHONE_RX = re.compile(r"(?<![A-Za-z0-9_.+/-])(?:\+\d{1,3}[\s.-]?)?(?:\(\d{3}\)\s?|\d{3}[\s.-])\d{3}[\s.-]\d{4}"
-                      r"(?![A-Za-z0-9_.-]*\d)"
-                      r"|(?<![A-Za-z0-9_+])\+\d{1,3}(?:[\s.-]\d{2,4}){2,4}(?![A-Za-z0-9_-])")
+# Phone-like: '+' then 8-15 digits with at most two separators between digits (not a plain decimal such as
+# +3.14159265), or North American 3-3-4 with separators (optional leading 1). 3-3-4 needs separators, so dates,
+# times, versions, IPs, money, ids and hashes don't match. A match takes the whole digit run or nothing: the '+'
+# number is possessive and no digit may follow later in the same token, so a failed check can't backtrack and leave
+# digits behind ("+44 20 7946 0958x" -> "[phone]x", never "[phone] 0958x"); letters may follow ("0134-ish").
+# TWIN: swarm_mcp/src/swarm_mcp/redact.py _PHONE uses the same pattern text; change both together.
+PHONE_RX = re.compile(
+    r"(?<![A-Za-z0-9_/.#@+-])(?:"
+    r"\+(?![0-9]+\.[0-9]+(?![0-9]|[ \t\u00a0\u202f.()-]{1,2}[0-9]))"
+    r"[1-9](?:[ \t\u00a0\u202f.()-]{0,2}[0-9]){7,14}+(?![ \t\u00a0\u202f.()-]{0,2}[0-9])"
+    r"|(?:1[ \t\u00a0\u202f.-])?(?:\([0-9]{3}\)[ \t\u00a0\u202f.-]?|[0-9]{3}[ \t\u00a0\u202f.-])"
+    r"[0-9]{3}[ \t\u00a0\u202f.-][0-9]{4}"
+    r")(?![A-Za-z0-9_.-]*[0-9])"
+)
 # Free-text fields that can carry raw agent/human content.
 _TEXT_FIELDS = {"events": ("snippet",), "quotes": ("text", "note"), "edges": ("evidence",), "annotations": ("label",)}
 _TEXT_LIMITS = {("events", "snippet"): SNIPPET_MAX, ("quotes", "text"): QUOTE_MAX}

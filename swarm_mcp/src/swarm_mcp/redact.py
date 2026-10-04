@@ -417,15 +417,24 @@ _VCS_USERS = frozenset({"git", "hg", "svn"})
 
 # --------------------------------------------------------------------------- phone
 
+# TWIN: village_tools/swarmtrace/format.py PHONE_RX uses the same pattern text; change both together.
+# Separators: space, tab, no-break spaces (U+00A0, U+202F), '.', '-', and '(' ')' in '+' numbers.
 _PHONE = re.compile(
-    r"(?<![A-Za-z0-9_/.:#=@+-])(?:"  # ASCII boundaries: '電話+81 ...です' is still a phone number
-    # international: '+', then 8-15 digits with at most two separators between digits
-    r"\+[1-9](?:[ .()-]{0,2}[0-9]){7,14}"
+    r"(?<![A-Za-z0-9_/.#@+-])(?:"  # ASCII boundaries: '電話+81 ...です' is still a phone number
+    # international: '+', then 8-15 digits with at most two separators between digits, not a
+    # plain decimal (+3.14159265). Possessive, and no digit may follow, so the match takes the
+    # whole digit run or nothing: a failed boundary check can't backtrack into the number and
+    # leave its tail behind ('+44 20 7946 0958x' -> '[phone]x', never '[phone] 0958x').
+    r"\+(?![0-9]+\.[0-9]+(?![0-9]|[ \t\u00a0\u202f.()-]{1,2}[0-9]))"
+    r"[1-9](?:[ \t\u00a0\u202f.()-]{0,2}[0-9]){7,14}+(?![ \t\u00a0\u202f.()-]{0,2}[0-9])"
     # North American 3-3-4: optional leading 1, separators required. Any digits are accepted
     # (not just valid NANP area codes/exchanges), keeping the recall of the old regex-only
     # toolkit.Scrubber, which masked placeholder-style numbers such as 555-123-4567 too.
-    r"|(?:1[ .-])?(?:\([0-9]{3}\)[ .-]?|[0-9]{3}[ .-])[0-9]{3}[ .-][0-9]{4}"
-    r")(?![A-Za-z0-9_-]|\.[0-9])"
+    r"|(?:1[ \t\u00a0\u202f.-])?(?:\([0-9]{3}\)[ \t\u00a0\u202f.-]?|[0-9]{3}[ \t\u00a0\u202f.-])"
+    r"[0-9]{3}[ \t\u00a0\u202f.-][0-9]{4}"
+    # end of the digit run: letters may follow ('0134x', '0134-ish' are masked), but no digit
+    # later in the same token ('415-555-0134.5', '123-456-7890ab1' look like ids and are kept)
+    r")(?![A-Za-z0-9_.-]*[0-9])"
 )
 
 
