@@ -124,10 +124,11 @@ def _z(s):
 MEMORY_CACHE = common.CACHE / "memory_daily_sample.jsonl.gz"
 
 
-def require(path, script):
-    """Stop with a message naming the script that writes `path` when it is missing (instead of a traceback)."""
+def require(path, *scripts):
+    """Stop with a message naming the scripts that write `path`, in order, when it is missing (not a traceback)."""
     if not Path(path).exists():
-        raise SystemExit(f"missing {path}; run `python3 {script}` in village_tools/ first")
+        run = ", then ".join(f"`python3 {s}`" for s in scripts)
+        raise SystemExit(f"missing {path}; run {run} in village_tools/ first")
 
 
 def quotes_from_ids(specs, cands, texts):
@@ -207,7 +208,7 @@ def hostility():
 
     for f in ("results.json", "labels.csv", "candidates.csv", "adoption.csv", "exposure_events.csv"):
         require(HOST / f, "tracer_hostility.py")
-    require(MEMORY_CACHE, "memories.py")              # daily memory sample: quote sources and persistence runs
+    require(MEMORY_CACHE, "ideas.py", "memories.py")  # daily memory sample: quote sources and persistence runs
     world = _world(True)
     res = json.loads((HOST / "results.json").read_text())
     labels = th.read_csv(HOST / "labels.csv")

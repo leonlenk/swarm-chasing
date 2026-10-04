@@ -38,5 +38,5 @@ def test_hostility_without_memory_cache_names_memories_py(tmp_path, monkeypatch)
         (tmp_path / f).write_text("")
     monkeypatch.setattr(aivillage, "HOST", tmp_path)
     monkeypatch.setattr(aivillage, "MEMORY_CACHE", tmp_path / "memory_daily_sample.jsonl.gz")
-    with pytest.raises(SystemExit, match="python3 memories.py"):
+    with pytest.raises(SystemExit, match=r"python3 ideas.py`, then `python3 memories.py"):
         aivillage.hostility()
