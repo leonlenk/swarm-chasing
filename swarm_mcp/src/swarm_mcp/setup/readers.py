@@ -522,9 +522,13 @@ def _doc_title(path: Path) -> str:
 
 def find_tables(root: Path, pattern: str) -> list[Table]:
     """Tables whose key matches ``pattern`` exactly, or as a glob (``logs/*.jsonl``, ``forum.db#*``)."""
+    return match_tables(discover(root)[0], pattern)
+
+
+def match_tables(tables: list[Table], pattern: str) -> list[Table]:
+    """The tables (from ``discover``) whose key matches ``pattern`` exactly, or else as a glob."""
     from fnmatch import fnmatchcase
 
-    tables, _, _ = discover(root)
     exact = [t for t in tables if t.key == pattern]
     if exact:
         return exact
