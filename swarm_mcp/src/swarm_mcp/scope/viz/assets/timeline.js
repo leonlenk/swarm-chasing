@@ -501,7 +501,7 @@
       (META.n_agents > lanes.length ? ' (of ' + fmtN(META.n_agents) + ')' : '') + ', ordered ' + orderText() + '.');
     if (info.mode === 'msgs') parts.push('Each tick is one message, coloured by channel.');
     else if (info.bins) parts.push('Bars count each agent’s messages per ' + durLabel(info.bins.disp) + ' (UTC), stacked by channel, ' +
-      (S.scale === 'row' ? 'each row scaled to its own busiest ' + durLabel(info.bins.disp) + ' (the number left of a row is its total).'
+      (S.scale === 'row' ? 'each row scaled to its own busiest ' + durLabel(info.bins.disp) + (G && G.showCounts ? ' (the number left of a row is its total).' : '.')
         : 'on one scale for all rows (tallest bar: ' + plural(info.bins.max, 'message') + ').'));
     var hid = chans.filter(function (_, i) { return S.hidden[i]; }).map(function (c) { return '#' + c.name; });
     if (hid.length) parts.push('Hidden channels: ' + hid.join(', ') + '.');
@@ -791,6 +791,10 @@
     var vertical = cell < 21;  // narrow cells: vertical column labels never collide
     var colH = Math.min(nameW, 150) * (vertical ? 1 : 0.72) + 10;
     var x0 = labelW, y0 = colH, H = y0 + n * cell + ts + 12, Wt = x0 + n * cell + totW;
+    if (!vertical && n) {  // the last rotated column label must fit inside the figure
+      var lastW = Math.min(measure(lanes[order[n - 1]].name, { size: fs }), colH * 1.25);
+      Wt = Math.max(Wt, Math.ceil(x0 + (n - 0.5) * cell + lastW * 0.71 + 6));
+    }
     var svg = svgEl(host, 'svg', { 'class': 'viz', width: Wt, height: H, viewBox: '0 0 ' + Wt + ' ' + H, role: 'img', 'aria-label': 'Mention matrix for the window on screen' });
     var max = 0, rowT = [], colT = new Float64Array(n), pairs = 0, recip = 0;
     order.forEach(function (ri, r) {
@@ -1090,7 +1094,7 @@
       svgEl(svg, 'line', { x1: x0, x2: x1, y1: Y(v), y2: Y(v), 'class': 'grid' });
       svgEl(svg, 'text', { x: x0 - 5, y: Y(v) + ts * 0.35, 'text-anchor': 'end', 'class': 'tick' }, spec.yfmt ? spec.yfmt(v) : fmtK(v));
     });
-    if (spec.ylabel) svgEl(svg, 'text', { x: 2, y: y0 - 2 + (spec.ribbon ? -12 : 0) + 8, 'class': 'tick', style: 'font-style:italic' }, spec.ylabel);
+    if (spec.ylabel) svgEl(svg, 'text', { x: x0 + 4, y: y0 - 4, 'class': 'tick', style: 'font-style:italic' }, spec.ylabel);
     // goal changes: hairlines across the plot, numbered in a strip on top
     if (spec.ribbon) {
       var n = 0;
@@ -1098,7 +1102,7 @@
         if (p.kind !== periodKinds[0]) return; n++;
         if (p.s < a || p.s > b) return;
         var x = X(p.s);
-        svgEl(svg, 'line', { x1: x, x2: x, y1: y0 - 10, y2: y1, stroke: C.hair, 'stroke-width': 0.6 });
+        svgEl(svg, 'line', { x1: x, x2: x, y1: y0 - 10, y2: y1, stroke: C.wash2, 'stroke-width': exp ? 0.35 : 0.6 });
         if (spec.ribbon === 'numbers' && (x1 - x0) / Math.max(1, periods.length) > 11) svgEl(svg, 'text', { x: x + 2, y: y0 - 3, 'class': 'tick', style: 'font-size:' + (ts - 1.5) + 'px' }, String(n));
       });
     }
@@ -1270,10 +1274,10 @@
     arcSel.addEventListener('change', function () { selectAgent(+arcSel.value, false); });
     return true;
   }
-  function selectAgent(li, scroll) {
+  function selectAgent(li, scroll, quiet) {
     if (!XD.arcs || !XD.arcs[li]) return;
     arcSel.value = String(li); S.arc = li;
-    if (S.sel !== li) { S.sel = li; redraw(); }
+    if (!quiet && S.sel !== li) { S.sel = li; redraw(); }  // a user's pick is also highlighted in Figure 1
     renderArc();
     if (scroll) $('sec-agent').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
@@ -1296,7 +1300,7 @@
     var svg = svgEl(host, 'svg', { 'class': 'viz', width: Wd, height: H, viewBox: '0 0 ' + Wd + ' ' + H, role: 'img', 'aria-label': 'Activity of ' + L.name + ' over time' });
     svg.__span = [a, b];
     // goal boundaries as hairlines through both panels
-    periods.forEach(function (p) { if (p.kind === periodKinds[0] && p.s > a && p.s < b) svgEl(svg, 'line', { x1: X(p.s), x2: X(p.s), y1: top - 4, y2: top + h1 + (rates ? gap + h2 : 0), stroke: C.hair, 'stroke-width': 0.6 }); });
+    periods.forEach(function (p) { if (p.kind === periodKinds[0] && p.s > a && p.s < b) svgEl(svg, 'line', { x1: X(p.s), x2: X(p.s), y1: top - 4, y2: top + h1 + (rates ? gap + h2 : 0), stroke: C.wash2, 'stroke-width': exp ? 0.35 : 0.6 }); });
     // (a) messages and actions per bin
     var bins = A.bins || [], wk = (A.bin_days || 7) * 864e5, maxv = 1;
     bins.forEach(function (bn) { maxv = Math.max(maxv, bn[1], bn[2]); });
@@ -1417,7 +1421,7 @@
   function seriesSpec(m) {
     var slots = []; for (var j = 1; j <= 7; j++) slots.push(PK.cssVar('--c' + j));
     return {
-      t0: D.start, t1: D.end, ribbon: true, aria: m.label,
+      t0: D.start, t1: D.end, ribbon: true, aria: m.label, ylabel: m.kind === 'rate' ? null : (m.unit || null),
       yfmt: m.kind === 'rate' || m.kind === 'share' || (m.unit || '').indexOf('share') >= 0 ? function (v) { return Math.round(v * 100) + '%'; } : null,
       ymax: (m.kind === 'rate' || (m.unit || '').indexOf('share') >= 0) ? 1 : null,
       series: m.groups.map(function (g, gi) {
@@ -1441,7 +1445,7 @@
     renderMoments();
     if (setupAgentSelect()) {
       $('sec-agent').hidden = false;
-      selectAgent(S.sel >= 0 ? S.sel : 0, false);
+      selectAgent(S.sel >= 0 ? S.sel : 0, false, true);
     }
     var list = XD.series || [];
     if (list.length) {
