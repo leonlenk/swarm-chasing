@@ -220,3 +220,20 @@ def test_parse_reply_variants():
 def test_bad_source_slug(tmp_path):
     with pytest.raises(SetupError, match="slug"):
         setup_dataset("Bad Name", tmp_path, agent="none")
+
+
+def test_printed_commands_carry_the_add_flags(tmp_path, monkeypatch):
+    """Regression: the task file and the hints dropped the --db (and --replace) the user passed, so
+    following them checked and ingested into the default store."""
+    root = str(make_csv_chat(tmp_path / "b").resolve())
+    extra = ["--db", str(tmp_path / "my store's.duckdb"), "--replace"]
+    res = setup_dataset("irc", root, agent="claude-code", mappings_dir=tmp_path / "m", extra_args=extra)
+    md = Path(res["task_path"]).read_text()
+    cmds = [shlex.split(m[1]) for m in re.findall(r"^(`{3,})bash\n(.*?)\n\1$", md, flags=re.S | re.M)]
+    assert [c[-4:] for c in cmds] == [[*extra, "--dry-run"], [res["mapping_path"], *extra]]
+    res = setup_dataset("irc", root, agent="none", mappings_dir=tmp_path / "m2", extra_args=extra)
+    assert res["passed"] and shlex.split(res["message"].split("\n")[1])[-3:] == extra
+    real_check = agent_mod.run_check
+    monkeypatch.setattr(agent_mod, "run_check", lambda *a, **k: {**real_check(*a, **k), "status": "fail"})
+    res = setup_dataset("irc", root, agent="none", mappings_dir=tmp_path / "m3", extra_args=extra)
+    assert shlex.split(res["message"].split("\n")[1])[-4:] == [*extra, "--dry-run"]

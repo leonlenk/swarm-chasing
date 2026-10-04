@@ -24,6 +24,8 @@ Other rules:
 - `uv run --directory swarm_mcp` runs from `swarm_mcp/`, so use **absolute paths** for the
   dataset and the mapping. Below, `<repo>` is the repository root
   (`git rev-parse --show-toplevel`), `<source>` is `$0` and `<path>` is the absolute form of `$1`.
+- If the task file's check and add commands carry more flags (such as `--db <store>` or `--replace`),
+  keep them in every `swarm-mcp add` command below.
 
 ## Steps
 
