@@ -1,6 +1,6 @@
 """SwarmScope: read-only, evidence-first tools over the unified DuckDB store.
 
-Store: ``SWARMSCOPE_DB`` or ``<SWARM_DATA_DIR>/swarmscope.duckdb``; build it with
+Store: ``[data] db`` in swarm.toml, default ``<data dir>/swarmscope.duckdb``; build it with
 ``swarm-mcp ingest ai_village data/ai-village``. Every tool call opens a
 short-lived read-only connection (``ctx.store()``) and closes it on return, so
 ingest and other processes can use the file between calls.

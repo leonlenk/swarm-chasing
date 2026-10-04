@@ -15,7 +15,7 @@ strict JSON ``{"verdict": "yes"|"no"|"unclear", "confidence": "low"|"medium"|"hi
 object, single quotes, trailing commas, synonyms); anything unparseable becomes ``unclear``
 with ``parse_ok: false``.
 
-Files, under ``SWARMSCOPE_SWEEPS_DIR`` (default ``<project root>/sweeps``, gitignored):
+Files, under ``[data] sweeps`` in swarm.toml (default ``<project root>/sweeps``, gitignored):
 
     <sweep_id>.jsonl         line 1 {"type": "meta"}, then one {"type": "verdict"} per record,
                              then {"type": "summary"} when the run finishes
@@ -32,7 +32,6 @@ import ast
 import hashlib
 import json
 import math
-import os
 import random
 import re
 import secrets
@@ -42,7 +41,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Protocol, Sequence, runtime_checkable
 
-from swarm_mcp.config import find_project_root
 from swarm_mcp.events import EventNotFound, EventSources
 from swarm_mcp.llm import LLMClient, LLMError
 from swarm_mcp.toolkit import ToolInputError
@@ -59,7 +57,7 @@ DEFAULT_RECORD_CHARS = 4000
 CHARS_PER_TOKEN = 4
 
 # USD per 1M tokens: (input, output). First-party API list prices; override with prices= or
-# SWARM_SWEEP_PRICES='{"model": [in, out]}'. A model id matches its own entry or the longest prefix.
+# ``[llm] prices = { "model" = [in, out] }`` in swarm.toml. A model id matches its own entry or the longest prefix.
 DEFAULT_PRICES: dict[str, tuple[float, float]] = {
     "claude-sonnet-5-5": (2.0, 10.0),
     "claude-sonnet-5": (2.0, 10.0),
@@ -152,15 +150,13 @@ def register_provider(registry: Any, name: str, provider: RecordProvider) -> Non
 # --------------------------------------------------------------------------- paths
 
 
-def sweeps_dir(env: Mapping[str, str] | None = None, cwd: Path | None = None) -> Path:
-    """``SWARMSCOPE_SWEEPS_DIR`` (relative: against the project root), default ``<project root>/sweeps``."""
-    env = os.environ if env is None else env
-    root = find_project_root(cwd or Path.cwd())
-    raw = (env.get("SWARMSCOPE_SWEEPS_DIR") or "").strip()
-    if not raw:
-        return root / "sweeps"
-    p = Path(raw).expanduser()
-    return p if p.is_absolute() else (root / p).resolve()
+def sweeps_dir(config: Any = None) -> Path:
+    """Where sweeps live: ``config.sweeps_path`` (``[data] sweeps``, default ``<project root>/sweeps``)."""
+    if config is None:
+        from swarm_mcp.config import Config
+
+        config = Config.load()
+    return config.sweeps_path
 
 
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,100}$")
@@ -272,7 +268,7 @@ def estimate(
         "(thinking can add more on subtle rubrics)"
     ]
     if p is None:
-        notes.append(f"no price known for model {model!r}; pass prices or set SWARM_SWEEP_PRICES")
+        notes.append(f"no price known for model {model!r}; pass prices or set [llm] prices in swarm.toml")
     return {
         "records": len(records),
         "model": model,

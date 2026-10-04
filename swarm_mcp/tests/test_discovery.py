@@ -138,11 +138,11 @@ def test_failures_are_isolated_and_recorded(tmp_path: Path, fake_modules, capsys
 
 
 def test_core_reports_skips(data_dir: Path):
-    app = build_server(config_for(data_dir, SWARM_MCP_DISABLE="village"))
+    app = build_server(config_for(data_dir, disable="village"))
     out = call(app, "core_list_modules")
     # data-free modules (and the store-backed ones, which only need a writable data dir) stay loaded
     assert [m["name"] for m in out["loaded"]] == ["core", "findings", "investigate", "scope", "sweep"]
     skipped = {m["name"]: m for m in out["skipped"]}
-    assert skipped["village"]["reasons"] == ["disabled via SWARM_MCP_DISABLE"]
+    assert skipped["village"]["reasons"] == ["disabled via [server] disable in swarm.toml"]
     info = call(app, "core_server_info")
     assert info["data_dir"] == str(data_dir) and info["config"]["disable"] == ["village"]

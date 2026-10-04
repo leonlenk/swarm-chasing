@@ -308,13 +308,12 @@ def test_cli_check_findings_exit_codes(store_path: Path, tmp_path: Path, capsys:
 # --------------------------------------------------------------------------- hooks
 
 
-def _hook_env(tmp_path: Path, store_path: Path, fdir: Path) -> dict[str, str]:
+def _hook_env(root: Path, store_path: Path, fdir: Path) -> dict[str, str]:
+    """A project at ``root`` whose swarm.toml points at the store and findings dir."""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "swarm.toml").write_text(f'[data]\ndb = "{store_path.as_posix()}"\nfindings = "{fdir.as_posix()}"\n')
     env = {k: v for k, v in os.environ.items() if not k.startswith(("SWARM", "CLAUDE_"))}
-    env.update(
-        SWARMSCOPE_DB=str(store_path),
-        SWARMSCOPE_FINDINGS_DIR=str(fdir),
-        CLAUDE_PROJECT_DIR=str(tmp_path),
-    )
+    env.update(CLAUDE_PROJECT_DIR=str(root))
     return env
 
 
@@ -376,7 +375,7 @@ def test_audit_log_hook(tmp_path: Path, store_path: Path):
     # an unwritable findings dir still exits 0 (diagnostic on stderr only)
     blocker = tmp_path / "blocker"
     blocker.write_text("a file, not a dir")
-    r = _run(AUDIT_HOOK, payload, {**env, "SWARMSCOPE_FINDINGS_DIR": str(blocker / "sub")})
+    r = _run(AUDIT_HOOK, payload, _hook_env(tmp_path / "blocked", store_path, blocker / "sub"))
     assert r.returncode == 0 and r.stdout == "" and "audit_log hook" in r.stderr
 
 
@@ -403,7 +402,8 @@ def test_require_evidence_hook(tmp_path: Path, store_path: Path):
     r = _run(STOP_HOOK, stop_again, env)  # loop guard
     assert r.returncode == 0 and "stop_hook_active" in r.stderr
 
-    r = _run(STOP_HOOK, stop, {**env, "SWARMSCOPE_DB": str(tmp_path / "no-store.duckdb")})
+    nostore = _hook_env(tmp_path / "nostore", tmp_path / "no-store.duckdb", fdir)
+    r = _run(STOP_HOOK, stop, nostore)
     assert r.returncode == 0 and "not found" in r.stderr
 
     r = _run(STOP_HOOK, "not json", env)  # unparsable stdin: still checks, still blocks

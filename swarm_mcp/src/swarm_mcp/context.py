@@ -189,7 +189,7 @@ class ModuleContext:
 
     @property
     def store_path(self) -> Path:
-        """The SwarmScope DuckDB store (``SWARMSCOPE_DB``, default ``<data_dir>/swarmscope.duckdb``)."""
+        """The SwarmScope DuckDB store (``[data] db`` in swarm.toml, default ``<data_dir>/swarmscope.duckdb``)."""
         return self.config.store_path
 
     def store(self, read_only: bool = True):

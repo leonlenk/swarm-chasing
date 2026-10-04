@@ -16,6 +16,7 @@ from conftest import call, call_error, config_for
 
 from swarm_mcp import llm
 from swarm_mcp import sweep as engine
+from swarm_mcp.config import Config
 from swarm_mcp.llm import FakeClient, LLMError, LLMUnavailable
 from swarm_mcp.server import build_server
 
@@ -64,7 +65,7 @@ def sweep_app(tmp_path: Path, fake_modules):
     add("synth", SYNTH)
     sweeps = tmp_path / "sweeps"
     app = build_server(
-        config_for(tmp_path / "data", SWARMSCOPE_SWEEPS_DIR=str(sweeps), SWARM_SWEEP_CONCURRENCY="1"), package=pkg
+        config_for(tmp_path / "data", sweeps=sweeps, llm={"concurrency": 1}), package=pkg
     )
     return app, sweeps
 
@@ -85,21 +86,24 @@ def test_fake_client_scripts_and_records_calls():
     assert isinstance(fake, llm.LLMClient)
 
 
+def _cfg(env: dict, **llm_settings) -> Config:
+    return Config.from_dict({"llm": llm_settings}, env=env)
+
+
 def test_get_client_without_key_is_a_clear_error():
     with pytest.raises(LLMUnavailable, match="ANTHROPIC_API_KEY is not set"):
-        llm.get_client({})
+        llm.get_client(_cfg({}))
     with pytest.raises(LLMUnavailable, match="Dry runs and cost estimates work without a key"):
-        llm.get_client({"ANTHROPIC_API_KEY": "   "})
+        llm.get_client(_cfg({"ANTHROPIC_API_KEY": "   "}))
 
 
-def test_get_client_with_key_builds_anthropic_client_from_env():
-    c = llm.get_client({"ANTHROPIC_API_KEY": "sk-test", "SWARM_MCP_LLM_EFFORT": "none"})
+def test_get_client_with_key_builds_anthropic_client_from_config():
+    c = llm.get_client(_cfg({"ANTHROPIC_API_KEY": "sk-test"}, effort="none"))
     assert isinstance(c, llm.AnthropicClient)
     assert c.model == "claude-sonnet-5-5" and c.effort is None and c.fallbacks is True
-    c = llm.get_client(
-        {"ANTHROPIC_API_KEY": "sk-test", "SWARM_MCP_LLM_MODEL": "claude-haiku-4-5", "SWARM_MCP_LLM_FALLBACKS": "off"}
-    )
+    c = llm.get_client(_cfg({"ANTHROPIC_API_KEY": "sk-test", "SWARM_LLM_MODEL": "claude-haiku-4-5"}, fallbacks=False))
     assert c.model == "claude-haiku-4-5" and c.effort == "low" and c.fallbacks is False
+    assert llm.configured_model(_cfg({}, model="claude-opus-5-5")) == "claude-opus-5-5"
 
 
 class _StubMessages:
@@ -395,7 +399,7 @@ def test_filters_need_a_registered_provider(sweep_app, monkeypatch):
 
 
 def test_real_package_loads_sweep_without_data(tmp_path: Path):
-    app = build_server(config_for(tmp_path / "empty", SWARMSCOPE_SWEEPS_DIR=str(tmp_path / "sw")))
+    app = build_server(config_for(tmp_path / "empty", sweeps=tmp_path / "sw"))
     rec_ = {r.name: r for r in app.swarm_registry.records.values()}["sweep"]
     assert rec_.status == "loaded"
     assert rec_.tools == sorted(
@@ -407,5 +411,6 @@ def test_real_package_loads_sweep_without_data(tmp_path: Path):
 def test_sweeps_dir_defaults_to_project_root(tmp_path: Path):
     (tmp_path / ".git").mkdir()
     (tmp_path / "sub").mkdir()
-    assert engine.sweeps_dir({}, cwd=tmp_path / "sub") == tmp_path / "sweeps"
-    assert engine.sweeps_dir({"SWARMSCOPE_SWEEPS_DIR": "out/sw"}, cwd=tmp_path / "sub") == tmp_path / "out" / "sw"
+    assert engine.sweeps_dir(Config.load({}, cwd=tmp_path / "sub")) == tmp_path / "sweeps"
+    (tmp_path / "swarm.toml").write_text('[data]\nsweeps = "out/sw"\n')
+    assert engine.sweeps_dir(Config.load({}, cwd=tmp_path / "sub")) == tmp_path / "out" / "sw"

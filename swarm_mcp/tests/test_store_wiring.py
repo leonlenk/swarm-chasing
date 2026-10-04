@@ -143,7 +143,7 @@ def test_store_records_filters(store_path: Path):
 
 
 def test_sweep_filters_use_the_store_provider(data_dir: Path, tmp_path: Path, monkeypatch):
-    app = build_server(config_for(data_dir, SWARMSCOPE_SWEEPS_DIR=str(tmp_path / "sweeps")))
+    app = build_server(config_for(data_dir, sweeps=tmp_path / "sweeps"))
     flt = {"source": "village", "channel": "general", "since": "2026-01-05", "until": "2026-01-07"}
     est = call(app, "sweep_estimate", rubric="Does the agent agree?", filters=flt, cap=50)
     assert est["records"] == 5 and est["est_input_tokens"] > 0  # m1-m5; a bare until includes that day

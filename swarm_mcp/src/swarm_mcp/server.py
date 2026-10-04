@@ -3,7 +3,7 @@
 Discovery: every module/package directly under ``swarm_mcp.modules`` whose
 name does not start with ``_`` is a candidate. For each candidate, in order:
 
-1. selection   - SWARM_MCP_DISABLE / SWARM_MCP_MODULES (checked before import)
+1. selection   - ``[server] modules`` / ``disable`` in swarm.toml (checked before import)
 2. import      - an ImportError etc. skips the module
 3. requires()  - optional; a non-empty list of reasons skips the module
 4. register()  - exceptions skip the module and roll back anything it added
@@ -32,7 +32,7 @@ from swarm_mcp.toolkit import Scrubber
 log = logging.getLogger("swarm_mcp")
 
 DEFAULT_PACKAGE = "swarm_mcp.modules"
-ALWAYS_ON = frozenset({"core"})  # loaded even if SWARM_MCP_MODULES omits it (can still be disabled)
+ALWAYS_ON = frozenset({"core"})  # loaded even if [server] modules omits it (can still be disabled)
 
 
 # --------------------------------------------------------------------------- discovery
@@ -48,9 +48,9 @@ def _candidates(package: str) -> list[str]:
 def _selection_reason(name: str, config: Config) -> str | None:
     n = name.lower()
     if n in config.disable:
-        return "disabled via SWARM_MCP_DISABLE"
+        return "disabled via [server] disable in swarm.toml"
     if config.modules and n not in config.modules and n not in ALWAYS_ON:
-        return f"not selected (SWARM_MCP_MODULES={','.join(config.modules)})"
+        return f"not selected ([server] modules = {list(config.modules)})"
     return None
 
 
@@ -176,7 +176,7 @@ def build_server(
     The returned app carries ``swarm_registry``, ``swarm_config`` and
     ``swarm_cache`` attributes for introspection/tests.
     """
-    config = config or Config.from_env()
+    config = config or Config.load()
     cache = cache or LazyCache()
     registry = Registry()
     mcp = sdk.new_app("swarm", __version__, config.log_level)
@@ -188,7 +188,7 @@ def build_server(
 
     unknown = sorted(set(config.modules) - set(known) - {r.name for r in registry.records.values()})
     if unknown:
-        note = f"SWARM_MCP_MODULES names unknown modules: {', '.join(unknown)} (available: {', '.join(known)})"
+        note = f"[server] modules names unknown modules: {', '.join(unknown)} (available: {', '.join(known)})"
         registry.notes.append(note)
         log.warning(note)
 
@@ -225,7 +225,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     args = parser.parse_args(argv)
 
-    config = Config.from_env()
+    config = Config.load()
     setup_logging(config.log_level)
 
     if args.list_modules:

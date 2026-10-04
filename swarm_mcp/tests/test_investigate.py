@@ -56,7 +56,7 @@ def make_app(tmp_path: Path, fake_modules):
             add("findings", FAKE_FINDINGS)
         if sweep:
             add("sweep", "from swarm_mcp.modules.sweep import *  # noqa\n")
-        return build_server(config_for(tmp_path / "data", SWARMSCOPE_SWEEPS_DIR=str(tmp_path / "sw")), package=pkg)
+        return build_server(config_for(tmp_path / "data", sweeps=tmp_path / "sw"), package=pkg)
 
     return build
 

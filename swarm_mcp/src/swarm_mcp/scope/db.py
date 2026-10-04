@@ -1,6 +1,6 @@
 """DuckDB connection and query helpers for the SwarmScope store.
 
-Path: ``SWARMSCOPE_DB`` or ``<SWARM_DATA_DIR>/swarmscope.duckdb`` (default
+Path: ``[data] db`` in swarm.toml, or ``<data dir>/swarmscope.duckdb`` (default
 ``data/swarmscope.duckdb``); see ``Config.store_path``.
 
 Connections are short-lived on purpose. DuckDB lets one process hold a

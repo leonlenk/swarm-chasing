@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -41,24 +40,18 @@ SweepId = Annotated[str, Field(description="A sweep id as returned by sweep_run 
 
 
 def _prices(ctx) -> dict[str, list[float]] | None:
-    raw = ctx.setting("prices")
-    if not raw:
-        return None
-    try:
-        table = json.loads(raw)
-        return {str(k): [float(v[0]), float(v[1])] for k, v in table.items()}
-    except (ValueError, TypeError, IndexError, AttributeError):
-        ctx.log.warning("ignoring malformed SWARM_SWEEP_PRICES (want JSON {model: [input, output]} per 1M tokens)")
-        return None
+    """``[llm] prices`` from swarm.toml, merged over the built-in table by the engine."""
+    table = ctx.config.llm_prices
+    return {k: [v[0], v[1]] for k, v in table.items()} if table else None
 
 
 def register(mcp, ctx) -> None:
-    env = ctx.config.env
-    max_chars = int(ctx.setting("max_chars") or engine.DEFAULT_RECORD_CHARS)
-    concurrency = int(ctx.setting("concurrency") or 4)
+    config = ctx.config
+    max_chars = engine.DEFAULT_RECORD_CHARS
+    concurrency = config.llm_concurrency
 
     def directory() -> Path:
-        return engine.sweeps_dir(env)
+        return engine.sweeps_dir(config)
 
     def gather(event_ids: list[str] | None, filters: dict[str, Any] | None, provider: str | None, limit: int):
         """Records for a sweep, plus resolution errors and notes."""
@@ -97,7 +90,7 @@ def register(mcp, ctx) -> None:
         """Estimate the tokens and USD cost of sweeping these records (chars/4 input tokens, a fixed output
         allowance per record, times a price table). Makes no model calls."""
         records, errors, notes = gather(event_ids, filters, provider, cap)
-        out = engine.estimate(rubric, records[:cap], model=model or llm.configured_model(env), prices=_prices(ctx))
+        out = engine.estimate(rubric, records[:cap], model=model or llm.configured_model(config), prices=_prices(ctx))
         if len(records) > cap:
             notes.append(f"cap {cap} applied: only the first {cap} of {len(records)} records are priced")
         out["unresolved"] = errors
@@ -130,7 +123,7 @@ def register(mcp, ctx) -> None:
         client = None
         if not dry_run:
             try:
-                client = llm.get_client(env)  # before any work: no key, nothing happens
+                client = llm.get_client(config)  # before any work: no key, nothing happens
             except llm.LLMUnavailable as e:
                 raise ToolInputError(str(e)) from None
         records, errors, notes = gather(event_ids, filters, provider, cap)
@@ -146,7 +139,7 @@ def register(mcp, ctx) -> None:
             cap=cap,
             dry_run=dry_run,
             directory=directory(),
-            model=llm.configured_model(env),
+            model=llm.configured_model(config),
             prices=_prices(ctx),
             concurrency=concurrency,
             meta={"source_tool": "sweep_run", "unresolved": len(errors), "provider": provider if filters else None},

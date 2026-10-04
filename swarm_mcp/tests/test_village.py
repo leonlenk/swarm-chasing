@@ -28,7 +28,7 @@ def test_resources_use_village_dir_override(tmp_path: Path, data_dir: Path):
     elsewhere = tmp_path / "docs"
     elsewhere.mkdir()
     (elsewhere / "CHANGELOG.md").write_text("# changes\n")
-    app = build_server(config_for(data_dir, SWARM_VILLAGE_DIR=str(elsewhere)))
+    app = build_server(config_for(data_dir, settings={"village": {"dir": str(elsewhere)}}))
     assert app.swarm_registry.records["village"].resources == ["village://changelog"]
 
 

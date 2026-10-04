@@ -3,7 +3,7 @@
 A finding is a claim plus the evidence ids (copied from other tools' results)
 that support it. ``findings_record`` refuses any finding whose ids do not all
 resolve in the SwarmScope store. Findings live in
-``<SWARMSCOPE_FINDINGS_DIR>/findings.jsonl`` (mirrored into the DuckDB
+``<findings dir>/findings.jsonl`` (``[data] findings``; mirrored into the DuckDB
 ``findings`` table); the Stop hook ``hooks/require_evidence.py`` re-checks them.
 """
 

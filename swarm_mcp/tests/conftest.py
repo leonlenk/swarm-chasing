@@ -213,9 +213,38 @@ def store_path(data_dir: Path) -> Path:
     return data_dir / "swarmscope.duckdb"
 
 
-def config_for(data_dir: Path, **env: str) -> Config:
-    base = {"SWARM_DATA_DIR": str(data_dir), "SWARMSCOPE_FINDINGS_DIR": str(data_dir.parent / "findings")}
-    return Config.from_env({**base, **env})
+def config_for(
+    data_dir: Path,
+    *,
+    modules: str | list[str] | None = None,
+    disable: str | list[str] | None = None,
+    db: str | Path | None = None,
+    findings: str | Path | None = None,
+    sweeps: str | Path | None = None,
+    llm: dict[str, Any] | None = None,
+    settings: dict[str, dict[str, Any]] | None = None,
+    env: dict[str, str] | None = None,
+) -> Config:
+    """A Config as if read from a swarm.toml next to ``data_dir`` (no real env leaks in)."""
+    data: dict[str, Any] = {
+        "data": {
+            "dir": str(data_dir),
+            "findings": str(findings or data_dir.parent / "findings"),
+            "sweeps": str(sweeps or data_dir.parent / "sweeps"),
+        },
+        "server": {},
+    }
+    if db:
+        data["data"]["db"] = str(db)
+    if modules is not None:
+        data["server"]["modules"] = modules
+    if disable is not None:
+        data["server"]["disable"] = disable
+    if llm:
+        data["llm"] = llm
+    if settings:
+        data["modules"] = settings
+    return Config.from_dict(data, env=env or {}, root=data_dir.parent)
 
 
 @pytest.fixture

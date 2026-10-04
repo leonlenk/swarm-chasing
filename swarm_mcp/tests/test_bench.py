@@ -176,7 +176,7 @@ def test_store_backed_modules_read_it(bench, tmp_path: Path):
 
     db = tmp_path / "bench.duckdb"
     ingest("ai_village", bench["ds"], db)
-    app = build_server(config_for(bench["out"], SWARMSCOPE_DB=str(db)))
+    app = build_server(config_for(bench["out"], db=db))
     assert app.swarm_registry.records["village"].status == "loaded"
     assert app.swarm_registry.records["scope"].status == "loaded"
     out = call(app, "scope_agents", source="village")

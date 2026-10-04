@@ -11,8 +11,9 @@ separators) of ``tool_response`` and ``result_chars`` is that JSON's length, so
 the log proves what a tool returned without storing dataset text.
 ``is_error`` is only present when the response carries an explicit flag.
 
-Findings dir: $SWARMSCOPE_FINDINGS_DIR, else $CLAUDE_PROJECT_DIR/findings,
-else <this script's dir>/../findings.
+Findings dir: ``[data] findings`` in <project root>/swarm.toml (relative to the project
+root), else <project root>/findings. Project root: $CLAUDE_PROJECT_DIR, else
+<this script's dir>/...
 
 Stdlib only. It must never break a tool call: every error is caught, stdout
 stays empty, diagnostics go to stderr, and the exit code is always 0.
@@ -36,14 +37,18 @@ def project_root() -> Path:
 
 
 def findings_dir() -> Path:
-    raw = os.environ.get("SWARMSCOPE_FINDINGS_DIR")
+    root = project_root()
+    try:
+        import tomllib
+
+        with open(root / "swarm.toml", "rb") as f:
+            raw = (tomllib.load(f).get("data") or {}).get("findings")
+    except (OSError, ValueError, ImportError):
+        raw = None
     if raw:
-        p = Path(raw).expanduser()
-        if p.is_absolute():
-            return p
-        # same rule as swarm_mcp.config.resolve_data_dir: cwd if it exists there, else the project root
-        return (Path.cwd() / p) if (Path.cwd() / p).exists() else project_root() / p
-    return project_root() / "findings"
+        p = Path(str(raw)).expanduser()
+        return p if p.is_absolute() else root / p
+    return root / "findings"
 
 
 def canonical(value: object) -> str:
