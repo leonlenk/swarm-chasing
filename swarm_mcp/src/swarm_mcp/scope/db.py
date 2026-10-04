@@ -6,7 +6,7 @@ Path: ``[data] db`` in swarm.toml, or ``<data dir>/swarmscope.duckdb`` (default
 Connections are short-lived on purpose. DuckDB lets one process hold a
 read-write handle *or* many processes hold read-only handles, so the MCP
 server opens a connection per tool call (read-only unless it writes a finding)
-and closes it straight away. That keeps the CLI (ingest/render/check-findings)
+and closes it straight away. That keeps the CLI (add/info/render/export)
 and the Stop hook usable while the server is running. Lock conflicts are
 retried briefly.
 """

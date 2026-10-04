@@ -5,7 +5,7 @@
     out_dir/ai-village/   agents, chat_messages, chat_rooms, village_goals, events,
                           agent_memories, villages (*.jsonl.gz), manifest.json,
                           README.md, SCHEMA.md, CHANGELOG.md stubs
-    out_dir/truth.json    what an investigation tool should find (see contracts.md)
+    out_dir/truth.json    what an investigation tool should find (see the score.py docstring)
 
 The directory loads unchanged with the AI Village readers (the ``village`` module
 via ``SWARM_DATA_DIR=out_dir``; the SwarmScope ``ai_village`` adapter via
