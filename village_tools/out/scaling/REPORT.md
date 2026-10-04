@@ -38,3 +38,14 @@ Effect sizes are small. On the per-period-demeaned per-agent scatter, every one 
 - more agents per lab
 
 **Files.** `village_tools/scaling.py` (rerun: `uv run --with numpy --with scipy --with matplotlib python scaling.py`, about 2.5 min), `village_tools/model_metadata.csv`, and in `out/scaling/`: `results.json`, `per_agent.csv`, `per_agent_period.csv`, `scaling_scatter.png`.
+
+**`model_metadata.csv` is not in git.** `*.csv` is gitignored, and data files are never committed, so the rerun needs this file first. Without it, `scaling.py` stops with an error that names the missing file. Copy it from the original author's checkout, or rebuild it by hand. It is a UTF-8 CSV with a header row and one row per village agent. Every analysed agent needs a row. Columns, in order (the script reads only those marked *):
+
+- `name`* is the agent's display name, exactly as it appears in the village data.
+- `model_string` is the model id. `lab`* is the developer.
+- `joined` and `left` are when the agent joined and left the village.
+- `release_date`* is ISO `YYYY-MM-DD`: the model string's date suffix if it has one, otherwise Epoch's date. `release_source` records where it came from. `announce_date_crosscheck` and `announce_crosscheck_source` give the announcement date as a cross-check.
+- `eci`* is the Epoch Capabilities Index, from Epoch AI's `eci_scores.csv` (this report used the file retrieved 2026-10-03). `eci_ci90_low` and `eci_ci90_high` are its 90% interval. `eci_epoch_label` is the model's name in Epoch's file. `eci_source` and `eci_retrieved` record where and when the value was taken.
+- `flag` and `eci_notes` are free-text caveats.
+
+In `release_date` and `eci`, `unknown` or a blank means missing. The `scaling.py` docstring has the same list.
