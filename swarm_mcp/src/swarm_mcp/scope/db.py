@@ -34,7 +34,7 @@ class StoreMissing(ToolInputError):
 
 
 def missing_store_hint(path: Path) -> str:
-    return f"SwarmScope store not found at {path}. Build it with: swarm-mcp ingest ai_village data/ai-village"
+    return f"SwarmScope store not found at {path}. Build it with: swarm-mcp add data/ai-village"
 
 
 def _is_lock_error(e: Exception) -> bool:

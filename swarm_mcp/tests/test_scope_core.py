@@ -102,7 +102,7 @@ def test_resolve_agent_by_name_alias_and_id(store_path: Path):
 
 
 def test_missing_store_is_a_clear_error(tmp_path: Path):
-    with pytest.raises(db.StoreMissing, match="swarm-mcp ingest"):
+    with pytest.raises(db.StoreMissing, match="swarm-mcp add"):
         with db.connect(tmp_path / "nope.duckdb"):
             pass
 

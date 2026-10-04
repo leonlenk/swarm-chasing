@@ -6,10 +6,9 @@ import gzip
 import json
 import random
 
-import pytest
 from setup_datasets import make_csv_chat, make_nested_jsonl, make_sqlite_board
 
-from swarm_mcp.setup import cli, readers
+from swarm_mcp.setup import readers
 from swarm_mcp.setup.masking import show
 from swarm_mcp.setup.profile import profile_path, summarize, tokens
 
@@ -138,13 +137,9 @@ def test_formats_json_array_object_tsv_and_bad_lines(tmp_path):
     assert any(s["path"] == "x.bin" for s in skipped)
 
 
-def test_inspect_cli_writes_profile(tmp_path, capsys):
+
+
+def test_summary_lists_tables_and_fields(tmp_path):
     root = make_csv_chat(tmp_path / "b")
-    with pytest.raises(SystemExit) as e:
-        cli.main(["inspect", str(root)])
-    assert e.value.code == 0
-    prof = json.loads((root / ".swarmscope" / "profile.json").read_text())
-    assert prof["tables"][0]["table"] == "chatlog_export.csv"
-    out = capsys.readouterr().out
-    assert "sent_epoch_ms" in out and "wrote" in out
-    assert "chatlog_export.csv" in summarize(prof)
+    text = summarize(profile_path(root))
+    assert "chatlog_export.csv" in text and "sent_epoch_ms" in text

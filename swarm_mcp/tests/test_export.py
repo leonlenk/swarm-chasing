@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from swarm_mcp.events import event_record
-from swarm_mcp.export import AGENTS_FILE, EVENTS_FILE, MANIFEST_FILE, ExportError, check, export, main, select
+from swarm_mcp.export import AGENTS_FILE, EVENTS_FILE, MANIFEST_FILE, ExportError, check, export, select
 from swarm_mcp.redact import Redactor
 
 GH_TOKEN = "gh" + "p_" + "a1B2c3D4e5" * 4
@@ -229,37 +229,6 @@ def test_select_filters():
 def write_jsonl(path: Path, rows: list[dict]) -> Path:
     path.write_text("".join(json.dumps(r) + "\n" for r in rows))
     return path
-
-
-def test_cli_export_and_check(tmp_path, capsys):
-    src = write_jsonl(tmp_path / "records.jsonl", records())
-    agents = write_jsonl(tmp_path / "agents.jsonl", AGENTS)
-    out = tmp_path / "share"
-    code = main(
-        ["--in", str(src), "--out", str(out), "--agents", str(agents), "--allow-email-domain", "agentvillage.org",
-         "--source", "village", "--since", "2026-01-05", "--filters-desc", "charity week chat", "--check"]
-    )  # fmt: skip
-    result = json.loads(capsys.readouterr().out)
-    assert code == 0, result
-    assert result["check"]["ok"] and result["records"]["by_source"] == {"village": 3}
-    manifest = json.loads((out / MANIFEST_FILE).read_text())
-    assert manifest["filters"] == {"source": ["village"], "since": "2026-01-05", "description": "charity week chat"}
-
-    with (out / EVENTS_FILE).open("a") as f:
-        f.write(json.dumps({"event_id": "village:chat:x", "text": EMAIL}) + "\n")
-    assert main(["--check", "--out", str(out)]) == 1
-    report = json.loads(capsys.readouterr().out)["check"]
-    assert {"file": EVENTS_FILE, "line": 4, "field": "text", "type": "email", "count": 1} in report["findings"]
-    assert EMAIL not in json.dumps(report)
-
-
-def test_cli_usage_errors(tmp_path, capsys):
-    assert main(["--out", str(tmp_path / "o")]) == 2
-    bad = tmp_path / "bad.jsonl"
-    bad.write_text('{"event_id": "village:chat:1"}\nnot json\n')
-    assert main(["--in", str(bad), "--out", str(tmp_path / "o")]) == 2
-    assert "bad.jsonl:2: not valid JSON" in capsys.readouterr().err
-    assert main(["--in", str(bad), "--out", str(tmp_path / "o"), "--rules", "nope"]) == 2
 
 
 def test_large_export_is_fast(tmp_path):

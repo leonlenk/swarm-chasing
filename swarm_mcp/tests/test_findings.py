@@ -237,7 +237,7 @@ def test_check_findings_ok_and_missing(store_path: Path, tmp_path: Path):
     assert res["ok"] is True and res["checked"] == 2 and res["problems"] == [] and res["parse_errors"] == []
 
     nostore = lib.check_findings(good, tmp_path / "nope.duckdb")
-    assert nostore["ok"] is False and nostore["store_missing"] is True and "swarm-mcp ingest" in nostore["message"]
+    assert nostore["ok"] is False and nostore["store_missing"] is True and "swarm-mcp add" in nostore["message"]
 
 
 def test_check_findings_corrupt(store_path: Path, tmp_path: Path):
@@ -262,22 +262,6 @@ def test_check_findings_corrupt(store_path: Path, tmp_path: Path):
     assert "Malformed" in by_id["f-fake"]["bad_evidence"]["nonsense"]
     assert by_id["f-noev"]["line"] == 5 and "evidence_ids" in by_id["f-noev"]["error"]
     assert [e["line"] for e in res["parse_errors"]] == [3, 6]
-
-
-def test_cli_check_findings_exit_codes(store_path: Path, tmp_path: Path, capsys: pytest.CaptureFixture):
-    from swarm_mcp.cli import main
-
-    good = _write_findings(tmp_path / "good.jsonl", [_finding("f-1", GOOD_IDS)])
-    with pytest.raises(SystemExit) as e:
-        main(["check-findings", "--findings", str(good), "--db", str(store_path)])
-    assert e.value.code == 0
-    assert json.loads(capsys.readouterr().out)["ok"] is True
-
-    bad = _write_findings(tmp_path / "bad.jsonl", [_finding("f-2", ["village:chat:does-not-exist"])])
-    with pytest.raises(SystemExit) as e:
-        main(["check-findings", "--findings", str(bad), "--db", str(store_path)])
-    assert e.value.code == 1
-    assert "village:chat:does-not-exist" in json.loads(capsys.readouterr().out)["problems"][0]["bad_evidence"]
 
 
 # --------------------------------------------------------------------------- hooks

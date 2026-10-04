@@ -1,7 +1,7 @@
 """Declarative dataset mappings and the ``MappedAdapter`` that executes them.
 
 A mapping is a JSON document (schema: ``spec_schema.MAPPING_SCHEMA``, docs:
-``docs/BRING_YOUR_OWN_DATA.md``) that says, per file or table, which field is
+``ADDING_MODULES.md``, "Mapping a new dataset") that says, per file or table, which field is
 the record id, time, actor, location, text, reply target and recipients. It is
 pure data: paths are looked up in rows, filters are compared with fixed
 operators, and nothing in a spec is ever evaluated or imported.
@@ -375,7 +375,7 @@ class MappedAdapter:
             found = readers.find_tables(self.root, pattern)
             if not found:
                 raise MappingError(
-                    f"no table matches {pattern!r} under {self.root}. Run `python -m swarm_mcp.setup inspect` to list table keys."
+                    f"no table matches {pattern!r} under {self.root}. Run `swarm-mcp add <path> --dry-run` to profile the dataset and list its table keys."
                 )
             self._tables_cache[pattern] = found
         return self._tables_cache[pattern]

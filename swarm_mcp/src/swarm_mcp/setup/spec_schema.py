@@ -1,4 +1,4 @@
-"""JSON Schema (draft 2020-12) for a declarative dataset mapping. ``python -m swarm_mcp.setup schema`` prints it.
+"""JSON Schema (draft 2020-12) for a declarative dataset mapping (``MAPPING_SCHEMA``).
 
 A *path* is a dotted field path into a row (``speaker.id``); ``[]`` marks an array
 of objects (``mentions[].id``). A key that literally contains dots (a CSV header

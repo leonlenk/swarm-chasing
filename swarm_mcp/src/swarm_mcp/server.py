@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import contextlib
 import importlib
-import json
 import logging
 import pkgutil
 import sys
@@ -218,24 +217,14 @@ def setup_logging(level: str = "INFO") -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(prog="swarm-mcp", description="Modular MCP server (stdio).")
-    parser.add_argument(
-        "--list-modules",
-        action="store_true",
-        help="load modules, print the module report as JSON to stdout, and exit (no protocol)",
+    """Serve on stdio (``swarm-mcp`` with no arguments). ``swarm-mcp info`` prints the module report."""
+    parser = argparse.ArgumentParser(
+        prog="swarm-mcp",
+        description="Run the swarm MCP server on stdio. Subcommands: info, add, render, export (see swarm-mcp -h).",
     )
-    args = parser.parse_args(argv)
-
+    parser.parse_args(argv)
     config = Config.load()
     setup_logging(config.log_level)
-
-    if args.list_modules:
-        with contextlib.redirect_stdout(sys.stderr):
-            mcp = build_server(config)
-        reg: Registry = mcp.swarm_registry  # type: ignore[attr-defined]
-        print(json.dumps({"modules": [r.as_dict() for r in reg.records.values()], "notes": reg.notes}, indent=2))
-        return
-
     mcp = build_server(config)
     try:
         sdk.run_stdio(mcp)
