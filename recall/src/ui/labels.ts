@@ -51,7 +51,7 @@ export function initials(name: string) {
 
 export const VIEW_LABEL: Record<View, string> = {
   overview: 'Overview', propagation: 'Propagation', tasks: 'Tasks', agents: 'Agents', incidents: 'Incidents', monitors: 'Monitors', evidence: 'Evidence', swarm: 'Swarm',
-  sessions: 'Live sessions', explorer: 'Explorer', subtasks: 'Subtasks',
+  sessions: 'Live sessions', explorer: 'Explorer', subtasks: 'Subtasks', connect: 'Connect your agents',
 };
 
 

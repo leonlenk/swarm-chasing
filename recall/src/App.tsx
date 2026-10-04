@@ -14,6 +14,7 @@ const Evidence = lazy(() => import('./ui/views/Evidence').then((m) => ({ default
 const Sessions = lazy(() => import('./ui/views/Sessions').then((m) => ({ default: m.Sessions })));
 const Explorer = lazy(() => import('./ui/views/Explorer').then((m) => ({ default: m.Explorer })));
 const Subtasks = lazy(() => import('./ui/views/Subtasks').then((m) => ({ default: m.Subtasks })));
+const Connect = lazy(() => import('./ui/views/Connect').then((m) => ({ default: m.Connect })));
 import { Logo } from './ui/icons';
 
 function useShortcuts() {
@@ -51,7 +52,7 @@ function Screen() {
 
   const crumb = view === 'propagation' || view === 'incidents' || view === 'tasks' || view === 'agents' || view === 'explorer' || view === 'subtasks' ? param : undefined;
   // Store-wide views are about SwarmScope sources, not the loaded replay source: no replay banners there.
-  const storeView = view === 'explorer' || view === 'subtasks' || view === 'sessions';
+  const storeView = view === 'explorer' || view === 'subtasks' || view === 'sessions' || view === 'connect';
   const live = source.meta?.live;
   return (
     <div className="shell">
@@ -94,6 +95,7 @@ function Screen() {
           {view === 'sessions' && <Sessions />}
           {view === 'explorer' && <Explorer />}
           {view === 'subtasks' && <Subtasks />}
+          {view === 'connect' && <Connect />}
           </Suspense>
         </main>
       </div>
