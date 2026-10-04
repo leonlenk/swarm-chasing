@@ -186,34 +186,39 @@ def test_git_event_ids_resolve(gapp):
 
 
 def test_handoffs_are_typed_and_attributed(gapp):
-    out = call(gapp, "subtasks_trace_pair", agent_a="Opus 4.5", agent_b="GPT-5.2")
-    kinds = {(h["from_agent"], h["to_agent"], h["type"]) for h in out["handoffs"]}
+    out = call(gapp, "subtasks_trace_pair", actor_a="Opus 4.5", actor_b="GPT-5.2")
+    kinds = {(h["from_actor"], h["to_actor"], h["type"]) for h in out["handoffs"]}
     assert ("Claude Opus 4.5", "GPT-5.2", "integrates") in kinds  # GPT imported Opus's talents.js
     h = out["handoffs"][0]
-    assert h["from_pr"] == "git:pr:rpg#1" and h["to_pr"] == "git:pr:rpg#2" and h["files"] == ["src/talents.js"]
+    assert h["from_unit"] == "git:pr:rpg#1" and h["to_unit"] == "git:pr:rpg#2" and h["artifacts"] == ["src/talents.js"]
     assert all(e.startswith("git:commit:rpg@") for e in h["evidence"])
-    gem = call(gapp, "subtasks_trace_pair", agent_a="Opus 4.5", agent_b="Gemini 2.5")
+    gem = call(gapp, "subtasks_trace_pair", actor_a="Opus 4.5", actor_b="Gemini 2.5")
     assert {h["type"] for h in gem["handoffs"]} == {"tests", "fixes"}
-    assert gem["summary"]["merged_the_others_pr"] == 1  # Opus merged Gemini's fix
-    assert "made no commits" in call_error(gapp, "subtasks_trace_pair", agent_a="Opus 4.5", agent_b="o3")
+    assert gem["summary"]["finalised_the_others_unit"] == 1  # Opus merged Gemini's fix
+    assert "did no work" in call_error(gapp, "subtasks_trace_pair", actor_a="Opus 4.5", actor_b="o3")
 
 
 def test_list_get_and_locate(gapp):
     out = call(gapp, "subtasks_list", granularity="coarse", min_size=1)
-    assert out["total_prs"] == 5 and out["method"] == "combined"
+    assert out["total_units"] == 5 and out["unit"] == "pull request" and out["method"] == "combined"
     sub = call(gapp, "subtasks_locate", event_id="git:pr:rpg#1", granularity="coarse")["matches"][0]["subtask"]
     got = call(gapp, "subtasks_get", subtask_id=sub["subtask_id"])
     members = {m["event_id"] for m in got["members"]}
     assert {"git:pr:rpg#1", "git:pr:rpg#2"} <= members and "git:pr:rpg#4" not in members
     assert got["label"].startswith("talent") and got["handoffs"]
-    agents = {p["agent"] for p in got["participants"]}
+    agents = {p["actor"] for p in got["participants"]}
     assert "GPT-5.2" in agents and "Claude Opus 4.5" in agents
     assert got["chat"]["messages_mentioning_members"] == 2
     chat_id = got["chat"]["cited"][1]["event_id"]
-    assert [m["pr"]["event_id"] for m in call(gapp, "subtasks_locate", event_id=chat_id)["matches"]] == [
+    assert [m["unit"]["event_id"] for m in call(gapp, "subtasks_locate", event_id=chat_id)["matches"]] == [
         "git:pr:rpg#1",
         "git:pr:rpg#2",
     ]
     fish = call(gapp, "subtasks_locate", event_id="git:pr:rpg#4")["matches"][0]
-    assert fish["pr"]["author"] == "git:Minuteandone"  # outsider kept, labelled as a git identity
+    assert fish["unit"]["actor"] == "git:Minuteandone"  # outsider kept, labelled as a git identity
     assert "Malformed subtask_id" in call_error(gapp, "subtasks_get", subtask_id="talents")
+    commit = call(gapp, "subtasks_get", subtask_id=sub["subtask_id"])["handoffs"][0]["evidence"][-1]
+    located = call(gapp, "subtasks_locate", event_id=commit, granularity="coarse")["matches"][0]["subtask"]
+    assert located["subtask_id"] == sub["subtask_id"]
+    row = call(gapp, "subtasks_corpora")["corpora"][0]
+    assert {"corpus": "rpg", "unit": "pull request", "units": 5}.items() <= row.items()

@@ -45,7 +45,7 @@ writes the same entry into `.mcp.json`, which already exists.
 | `core` | none | module report, config, and `core_get_event` / `core_get_events` / `core_event_sources` for any event id |
 | `village` | `<data>/ai-village/*.jsonl.gz` | agents, goals, chat search and windows, per-agent activity |
 | `git` | bare clones in `<data>/<dataset>/repos/*.git` | repos and PR listings; PRs and commits as event ids |
-| `subtasks` | `git` repos (+ village chat if present) | PRs grouped into subtasks by several methods, typed handoffs between agents, pair tracing |
+| `subtasks` | any *corpus* with an adapter in `subtasks/sources.py`: git repos today (+ village chat if present) | work units (PRs...) grouped into subtasks by several methods, typed handoffs between actors, pair tracing |
 
 A repo for `git` is a bare clone with every PR head fetched, so closed and squash-merged PRs keep their commits:
 

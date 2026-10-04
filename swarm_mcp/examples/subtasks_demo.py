@@ -77,7 +77,7 @@ async def main() -> None:
         commit = await call("core_get_event", event_id=ev, before=0, after=0, max_chars=400)
         show("evidence commit", commit["event"]["text"])
 
-        pair = await call("subtasks_trace_pair", agent_a="Opus 4.5", agent_b="GPT-5.2", limit=3)
+        pair = await call("subtasks_trace_pair", actor_a="Opus 4.5", actor_b="GPT-5.2", limit=3)
         show("pair summary", pair["summary"])
         show(
             "top shared subtasks",

@@ -1,27 +1,31 @@
-"""Infer subtasks (clusters of pull requests) and typed handoffs between agents. No MCP code here.
+"""Infer subtasks (clusters of work units) and typed handoffs between actors. No MCP code here.
 
-A PR is roughly one work episode (in the RPG week: median 1 commit, ~7 min open); a subtask is a
-cluster of PRs. Five independent signals each give a PR-by-PR similarity matrix, and Louvain finds
-communities in a sparsified graph of it:
+The input is dataset-agnostic: a list of ``Unit``s (one episode of work: a pull request, an agent's
+edit session on a wiki...), each made of ``Action``s (commits, revisions) that ``Change`` named
+artifacts (files, wiki pages). Adapters in ``sources.py`` build units from git repos and other corpora.
+In the RPG week a unit (a PR) is small: median 1 commit, ~7 min open. A subtask is a cluster of units.
 
-    files  TF-IDF over the paths a PR touched (hub files like render.js count for little)
-    code   TF-IDF over words in the code a PR *added*: identifiers split camelCase, import targets
-    title  TF-IDF over the PR title and commit subjects
-    chat   TF-IDF over chat messages that point at exactly this PR
-    refs   explicit links only: '#N' in titles/commits, chat messages naming 2-4 PRs at once
+Five independent signals each give a unit-by-unit similarity matrix, and Louvain finds communities in
+a sparsified graph of it:
+
+    files  TF-IDF over the artifacts a unit touched (hub artifacts like render.js count for little)
+    code   TF-IDF over words in the content a unit *added*: identifiers split camelCase, import targets
+    title  TF-IDF over the unit's title and action texts (PR title + commit subjects, edit summaries)
+    chat   TF-IDF over messages that point at exactly this unit
+    refs   explicit links only: unit-to-unit references, messages naming 2-4 units at once
     combined  a weighted blend of the five
 
-Handoffs come from git, independently of clustering, between *different* agents (commit authors):
+Handoffs are derived from the artifacts, independently of clustering, between *different* actors:
 
-    builds_on   B edits a file A's PR created
+    builds_on   B changes an artifact A's unit created
     integrates  B adds an import of a module A created
     tests       B adds tests that import A's module (and touches only tests)
-    fixes       builds_on/integrates where B's PR title starts with fix/revert/repair...
-    resubmits   B's PR creates the same file A's earlier PR created (took over / re-opened A's work)
-    duplicate   near-identical title+code, different authors, no link between them, not both merged
+    fixes       builds_on/integrates where B's unit title starts with fix/revert/repair...
+    resubmits   B's unit creates the same artifact A's earlier unit created (took over / re-opened A's work)
+    duplicate   near-identical title+content, different actors, no link between them, not both completed
 
-Hub files (touched by >8% of PRs and by at least 5, plus package.json/README/index.html/styles.css) never create
-handoffs, and imports re-added by pasting an older copy of a file are ignored (see git.data).
+Hub artifacts (touched by >8% of units and by at least 5, plus package.json/README/index.html/styles.css)
+never create handoffs, and imports re-added by pasting an older copy of a file are ignored (see git.data).
 """
 
 from __future__ import annotations
@@ -31,12 +35,9 @@ import math
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Callable
 
 import networkx as nx
 import numpy as np
-
-from swarm_mcp.modules.git.data import Repo
 
 METHODS = ("combined", "code", "title", "files", "chat", "refs")
 LEVELS = {"coarse": 1.0, "medium": 3.0, "fine": 6.0}  # Louvain resolution
@@ -47,11 +48,11 @@ SEED = 7
 
 METHOD_DESCRIPTIONS = {
     "combined": "weighted blend: code 35%, title 25%, files 15%, explicit refs 15%, chat 10%",
-    "code": "words in the code each PR added (identifiers split camelCase, import targets)",
-    "title": "PR title and commit subjects, generic words removed",
-    "files": "paths each PR touched; hub files count for little",
-    "chat": "chat messages that point at exactly one PR",
-    "refs": "explicit '#N' links in titles/commits and chat messages naming 2-4 PRs",
+    "code": "words in the content each unit added (identifiers split camelCase, import targets)",
+    "title": "unit title and action texts (PR title + commit subjects), generic words removed",
+    "files": "artifacts (files, pages) each unit touched; hub artifacts count for little",
+    "chat": "messages that point at exactly one unit",
+    "refs": "explicit links between units and messages naming 2-4 units",
 }
 
 # "PR 12", "PR #12", "pull/12", "#152" (bare "#n" only for n >= 10, to skip "#1 priority")
@@ -109,46 +110,83 @@ def module_stem(path: str) -> str:
 
 
 @dataclass
+class Change:
+    """What one action did to one artifact."""
+
+    artifact: str
+    new: bool = False
+    size: int = 0  # lines/characters changed: weights the 'files' signal
+    lines: list[str] = field(default_factory=list)  # net-new content, for the 'code' signal
+    imports: list[str] = field(default_factory=list)  # newly imported module paths (code only)
+    rewrite: bool = False
+
+
+@dataclass
+class Action:
+    event_id: str
+    actor: str
+    time: str  # dataset timestamp format, UTC
+    text: str  # commit subject, edit summary...
+    changes: list[Change] = field(default_factory=list)
+
+
+@dataclass
+class Unit:
+    event_id: str
+    short: str  # how to name it in a sentence: "PR #109", "edit session 412"
+    title: str
+    start: str
+    end: str | None
+    state: str  # dataset-specific: merged / landed / unmerged, or "n/a"
+    completed: bool | None  # reached its goal (merged, published...); None = unknown
+    actions: list[Action]
+    refs: set[str] = field(default_factory=set)  # event ids of other units it links to explicitly
+    roles: dict[str, set[str]] = field(default_factory=dict)  # extra actor roles, e.g. {"GPT-5.2": {"merge"}}
+
+
+@dataclass
 class ChatMsg:
     event_id: str
     time: str
     actor: str
     text: str
-    prs: list[int]
+    units: list[str]  # event ids of the units it points at
 
 
 @dataclass
 class Edge:
     kind: str
-    src: int  # PR index of the giver (A)
-    dst: int  # PR index of the taker (B)
+    src: int  # unit index of the giver (A)
+    dst: int  # unit index of the taker (B)
     giver: str
     taker: str
-    files: list[str]
-    giver_commits: list[str]  # shas
-    taker_commits: list[str]
+    artifacts: list[str]
+    giver_actions: list[str]  # action event ids
+    taker_actions: list[str]
     score: float | None = None  # duplicates only
 
 
 @dataclass
 class Inference:
-    repo: str
-    prs: list[int]  # PR numbers; list index = PR index used everywhere below
-    authors: list[str | None]  # main author (agent display name) per PR
-    touch: list[dict[str, set[str]]]  # agent -> roles ("author", "commit", "merge") per PR
-    terms: list[list[str]]  # top code terms per PR
-    files: list[list[tuple[str, int]]]
+    corpus: str
+    units: list[Unit]  # sorted by start; list index = unit index used everywhere below
+    authors: list[str | None]  # main actor per unit
+    touch: list[dict[str, set[str]]]  # actor -> roles ("author", "action", "merge"...) per unit
+    terms: list[list[str]]  # top content terms per unit
+    artifacts: list[list[tuple[str, int]]]
     vec: dict[str, tuple[np.ndarray, dict[int, str]]]
     sim: dict[str, np.ndarray]
     refs_raw: np.ndarray
     clusters: dict[str, dict[str, list[list[int]]]]  # method -> level -> clusters (sorted by start)
     names: dict[str, dict[str, list[str]]]
-    label_of: dict[str, dict[str, np.ndarray]]  # method -> level -> cluster index per PR
+    label_of: dict[str, dict[str, np.ndarray]]  # method -> level -> cluster index per unit
     agreement: dict[str, dict[str, float]]  # ARI between methods (medium level)
     edges: list[Edge]
     chat: list[ChatMsg]
-    chat_of_pr: dict[int, list[int]]  # PR index -> indices into chat
+    chat_of_unit: dict[int, list[int]]  # unit index -> indices into chat
     rewrites: list[list[str]]
+    index: dict[str, int]  # unit event id -> unit index
+    unit_of_action: dict[str, list[int]]  # action event id -> unit indices
     notes: list[str] = field(default_factory=list)
 
 
@@ -202,46 +240,47 @@ def _ari(a: np.ndarray, b: np.ndarray) -> float:
 # --------------------------------------------------------------------------- main entry
 
 
-def infer(repo: Repo, chat: list[ChatMsg], agent_of: Callable[[str, str], str]) -> Inference:
-    """``chat``: messages already linked to PR numbers of this repo. ``agent_of(git_name, email)`` -> display name."""
-    order = sorted(repo.prs.values(), key=lambda p: (p.start, p.number))
-    prs = [p.number for p in order]
-    idx = {n: i for i, n in enumerate(prs)}
-    N = len(prs)
+def infer(corpus: str, units: list[Unit], chat: list[ChatMsg]) -> Inference:
+    """Cluster ``units`` and derive handoffs. ``chat``: messages already linked to unit event ids."""
+    order = sorted(units, key=lambda u: (u.start, u.event_id))
+    idx = {u.event_id: i for i, u in enumerate(order)}
+    N = len(order)
 
-    # ---- per-PR features
-    creator: dict[str, tuple[int, str, str, str]] = {}  # path -> (pr idx, agent, time, sha)
+    # ---- per-unit features
+    creator: dict[str, tuple[int, str, str, str]] = {}  # artifact -> (unit idx, actor, time, action id)
     F = []
     authors: list[str | None] = []
     touch: list[dict[str, set[str]]] = []
-    for i, p in enumerate(order):
+    unit_of_action: dict[str, list[int]] = collections.defaultdict(list)
+    for i, u in enumerate(order):
         files: collections.Counter = collections.Counter()
         created: set[str] = set()
         code: collections.Counter = collections.Counter()
-        imports: dict[str, tuple[str, str]] = {}  # target -> (agent, sha)
-        file_first: dict[str, tuple[str, str]] = {}  # path -> (agent, sha) of the PR's first commit touching it
+        imports: dict[str, tuple[str, str]] = {}  # target -> (actor, action id)
+        file_first: dict[str, tuple[str, str]] = {}  # artifact -> (actor, action id) of the first action touching it
         rewrites: set[str] = set()
         roles: dict[str, set[str]] = collections.defaultdict(set)
         counts: collections.Counter = collections.Counter()
-        for sha in p.commits:
-            c = repo.commits[sha]
-            a = agent_of(c.author, c.email)
-            roles[a].add("commit")
+        for act in u.actions:
+            a = act.actor
+            unit_of_action[act.event_id].append(i)
+            roles[a].add("action")
             counts[a] += 1
-            for path, f in (c.files or {}).items():
-                files[path] += f.added + f.removed
-                file_first.setdefault(path, (a, sha))
-                if f.rewrite:
+            for ch in act.changes:
+                path = ch.artifact
+                files[path] += max(1, ch.size)
+                file_first.setdefault(path, (a, act.event_id))
+                if ch.rewrite:
                     rewrites.add(path)
-                if f.new:
+                if ch.new:
                     created.add(path)
-                    if path not in creator or creator[path][2] > c.time:
-                        creator[path] = (i, a, c.time, sha)
-                for t in f.imports:
-                    imports.setdefault(t, (a, sha))
+                    if path not in creator or creator[path][2] > act.time:
+                        creator[path] = (i, a, act.time, act.event_id)
+                for t in ch.imports:
+                    imports.setdefault(t, (a, act.event_id))
                     for w in file_words(t):
                         code[w] += 3
-                for line in f.lines:
+                for line in ch.lines:
                     for ident in IDENT.findall(line):
                         for w in words(ident):
                             if w not in JS_STOP:
@@ -251,12 +290,11 @@ def infer(repo: Repo, chat: list[ChatMsg], agent_of: Callable[[str, str], str]) 
         author = counts.most_common(1)[0][0] if counts else None
         if author:
             roles[author].add("author")
-        if p.merged_by:
-            m = agent_of(p.merged_by, "")
-            roles[m].add("merge")
+        for a, rs in u.roles.items():
+            roles[a] |= set(rs)
         authors.append(author)
         touch.append(dict(roles))
-        title_txt = " ".join([p.title] + [repo.commits[s].subject for s in p.commits])
+        title_txt = " ".join([u.title] + [act.text for act in u.actions])
         F.append(
             {
                 "files": files,
@@ -266,18 +304,18 @@ def infer(repo: Repo, chat: list[ChatMsg], agent_of: Callable[[str, str], str]) 
                 "file_first": file_first,
                 "rewrites": rewrites,
                 "title": collections.Counter(text_words(title_txt)),
-                "refs": {int(x) for x in re.findall(r"#(\d+)", title_txt)} - {p.number},
+                "refs": {r for r in u.refs if r != u.event_id},
                 "chat": collections.Counter(),
             }
         )
 
     # ---- chat
-    chat_of_pr: dict[int, list[int]] = collections.defaultdict(list)
+    chat_of_unit: dict[int, list[int]] = collections.defaultdict(list)
     comention: collections.Counter = collections.Counter()
     for k, msg in enumerate(chat):
-        ix = sorted({idx[n] for n in msg.prs if n in idx})
+        ix = sorted({idx[e] for e in msg.units if e in idx})
         for i in ix:
-            chat_of_pr[i].append(k)
+            chat_of_unit[i].append(k)
         if len(ix) == 1:
             F[ix[0]]["chat"].update(text_words(msg.text))
         elif 2 <= len(ix) <= 4:
@@ -295,17 +333,17 @@ def infer(repo: Repo, chat: list[ChatMsg], agent_of: Callable[[str, str], str]) 
         sim[key] = S
     R = np.zeros((N, N))
     for i, f in enumerate(F):
-        for n in f["refs"]:
-            if n in idx:
-                R[i, idx[n]] += 3
-                R[idx[n], i] += 3
+        for e in f["refs"]:
+            if e in idx:
+                R[i, idx[e]] += 3
+                R[idx[e], i] += 3
     for (a, b), c in comention.items():
         R[a, b] += c
         R[b, a] += c
     sim["refs"] = R / (R + 2)  # saturating: one explicit ref -> .6
     sim["combined"] = sum(w * sim[k] for k, w in BLEND.items())
 
-    # ---- clusters, sorted by first PR start so ids read chronologically
+    # ---- clusters, sorted by first unit start so ids read chronologically
     clusters: dict[str, dict[str, list[list[int]]]] = {}
     label_of: dict[str, dict[str, np.ndarray]] = {}
     for m in METHODS:
@@ -351,14 +389,14 @@ def infer(repo: Repo, chat: list[ChatMsg], agent_of: Callable[[str, str], str]) 
         stem_of[module_stem(path)].append(path)
     raw: dict[tuple[int, int, str], Edge] = {}
 
-    def add(i: int, j: int, kind: str, path: str, a: str, b: str, sha_a: str, sha_b: str) -> None:
+    def add(i: int, j: int, kind: str, path: str, a: str, b: str, act_a: str, act_b: str) -> None:
         e = raw.setdefault((i, j, kind), Edge(kind, i, j, a, b, [], [], []))
-        if path not in e.files:
-            e.files.append(path)
-        if sha_a not in e.giver_commits:
-            e.giver_commits.append(sha_a)
-        if sha_b not in e.taker_commits:
-            e.taker_commits.append(sha_b)
+        if path not in e.artifacts:
+            e.artifacts.append(path)
+        if act_a not in e.giver_actions:
+            e.giver_actions.append(act_a)
+        if act_b not in e.taker_actions:
+            e.taker_actions.append(act_b)
 
     for j, f in enumerate(F):
         for path in f["files"]:
@@ -383,7 +421,7 @@ def infer(repo: Repo, chat: list[ChatMsg], agent_of: Callable[[str, str], str]) 
             continue
         if kind in ("integrates", "builds_on") and FIXRE.search(order[j].title):
             e.kind = "fixes"
-        e.files = e.files[:6]
+        e.artifacts = e.artifacts[:6]
         edges.append(e)
     linked = {(e.src, e.dst) for e in edges} | {(e.dst, e.src) for e in edges}
     dup = sim["title"] * 0.6 + sim["code"] * 0.4
@@ -393,7 +431,7 @@ def infer(repo: Repo, chat: list[ChatMsg], agent_of: Callable[[str, str], str]) 
                 dup[i, j] > 0.5
                 and authors[i] != authors[j]
                 and (i, j) not in linked
-                and not (order[i].state != "unmerged" and order[j].state != "unmerged")
+                and not (order[i].completed and order[j].completed)
                 and abs(_days(order[i].start, order[j].start)) < 3
             ):
                 edges.append(
@@ -404,12 +442,12 @@ def infer(repo: Repo, chat: list[ChatMsg], agent_of: Callable[[str, str], str]) 
     edges.sort(key=lambda e: (order[e.dst].start, e.kind))
 
     return Inference(
-        repo=repo.name,
-        prs=prs,
+        corpus=corpus,
+        units=order,
         authors=authors,
         touch=touch,
         terms=[[t for t, _ in f["code"].most_common(8)] for f in F],
-        files=[f["files"].most_common(8) for f in F],
+        artifacts=[f["files"].most_common(8) for f in F],
         vec=vec,
         sim=sim,
         refs_raw=R,
@@ -419,8 +457,10 @@ def infer(repo: Repo, chat: list[ChatMsg], agent_of: Callable[[str, str], str]) 
         agreement=agreement,
         edges=edges,
         chat=chat,
-        chat_of_pr=dict(chat_of_pr),
+        chat_of_unit=dict(chat_of_unit),
         rewrites=[sorted(f["rewrites"]) for f in F],
+        index=idx,
+        unit_of_action=dict(unit_of_action),
     )
 
 
@@ -436,7 +476,7 @@ def shared_terms(inf: Inference, key: str, i: int, j: int, n: int = 4) -> list[s
 
 
 def why(inf: Inference, i: int, j: int) -> dict[str, dict]:
-    """Per-signal similarity between two PRs, with the terms they share."""
+    """Per-signal similarity between two units, with the terms they share."""
     out: dict[str, dict] = {}
     for key in ("code", "title", "files", "chat"):
         s = float(inf.sim[key][i, j])
