@@ -5,8 +5,10 @@ The rcParams replicate ``tueplots.bundles.neurips2024(usetex=False, family="seri
 layout) with tueplots' 0.5 pt axes, and the font sizes clamped so no figure text is
 below 7 pt at print size. Text is Times New Roman or Times when installed, else the
 metric-compatible Liberation Serif (or the next of ``SERIF``); ``use()`` logs that
-fallback once. Figures are saved at exactly their figsize (no tight bbox, which grew
-some past the text width), so a ``size(1.0)`` figure is 5.5 in = 396 pt wide. Colours are not defined here: they are read from the shared
+fallback once. Figures are saved with a tight bbox, but ``save()`` first narrows a figure
+whose tight crop would be wider than its figsize (text placed outside the layout, such as
+a panel letter left of the tick labels), so a ``size(1.0)`` figure is never wider than the
+5.5 in = 396 pt text width. Colours are not defined here: they are read from the shared
 HTML tokens in ``swarm_mcp/src/swarm_mcp/scope/viz/assets/paper.css``, so a static figure
 and an interactive page always agree on what each colour means.
 
@@ -93,7 +95,7 @@ def rc() -> dict:
         "figure.figsize": (TEXT_WIDTH_IN, TEXT_WIDTH_IN * GOLDEN),
         "figure.constrained_layout.use": True,
         "figure.autolayout": False,
-        "savefig.bbox": "standard",   # exact figsize: tight bbox made 5.5 in figures up to 5.51 in
+        "savefig.bbox": "tight",      # save() narrows the figure first so the tight crop is never wider than it
         "savefig.pad_inches": 0.015,
         "figure.dpi": 150,
         "savefig.dpi": 300,
@@ -185,8 +187,41 @@ def size(rel_width: float = 1.0, aspect: float = GOLDEN, *, height_in: float | N
     return (w, height_in if height_in is not None else w * aspect)
 
 
+def _tight_width(fig, dpi: float) -> float:
+    """Width in inches of fig's tight bbox when drawn at `dpi` (text extents, and so the bbox, vary with dpi)."""
+    old = fig.dpi
+    fig.set_dpi(dpi)
+    try:
+        fig.canvas.draw()
+        return fig.get_tightbbox(fig.canvas.get_renderer()).width
+    finally:
+        fig.set_dpi(old)
+
+
+def fit_width(fig, max_w: float | None = None, dpis: tuple[float, ...] = (72, 300), tries: int = 6) -> None:
+    """Narrow `fig` until its tight bbox plus padding, at every output dpi (72 = PDF), is at most max_w inches
+    (default: its current width).
+
+    A tight bbox grows past the figsize when text sits outside constrained layout; this keeps the saved
+    figure within the width the caller asked for (size(1.0) = the 5.5 in text width)."""
+    import matplotlib as mpl
+
+    max_w = fig.get_figwidth() if max_w is None else max_w
+    pad = 2 * mpl.rcParams["savefig.pad_inches"]
+    for _ in range(tries):
+        w = max(_tight_width(fig, d) for d in dpis) + pad
+        if w <= max_w:
+            return
+        fig.set_figwidth(fig.get_figwidth() - (w - max_w) - 0.002)
+    log.warning("paperfig: could not fit the figure in %.2f in", max_w)
+
+
 def save(fig, stem: Path | str, *, formats: tuple[str, ...] = ("pdf", "png"), dpi: int = 300) -> list[Path]:
-    """Write stem.pdf (vector) and stem.png (300 dpi) at exactly the figure's size; returns the paths written."""
+    """Write stem.pdf (vector) and stem.png (300 dpi), never wider than the figure's width; returns the paths."""
+    import matplotlib as mpl
+
+    if mpl.rcParams["savefig.bbox"] == "tight":
+        fit_width(fig, dpis=tuple({72 if f == "pdf" else dpi for f in formats}))
     stem = Path(stem)
     stem.parent.mkdir(parents=True, exist_ok=True)
     out = []
