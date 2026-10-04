@@ -1,9 +1,12 @@
 """NeurIPS paper style for the static matplotlib figures.
 
 The rcParams replicate ``tueplots.bundles.neurips2024(usetex=False, family="serif")``
-(Times text and STIX math, 5.5 in text width, golden-ratio panels, constrained layout,
-tight bbox) with tueplots' 0.5 pt axes, and the font sizes clamped so no figure text is
-below 7 pt at print size. Colours are not defined here: they are read from the shared
+(Times-style text and STIX math, 5.5 in text width, golden-ratio panels, constrained
+layout) with tueplots' 0.5 pt axes, and the font sizes clamped so no figure text is
+below 7 pt at print size. Text is Times New Roman or Times when installed, else the
+metric-compatible Liberation Serif (or the next of ``SERIF``); ``use()`` logs that
+fallback once. Figures are saved at exactly their figsize (no tight bbox, which grew
+some past the text width), so a ``size(1.0)`` figure is 5.5 in = 396 pt wide. Colours are not defined here: they are read from the shared
 HTML tokens in ``swarm_mcp/src/swarm_mcp/scope/viz/assets/paper.css``, so a static figure
 and an interactive page always agree on what each colour means.
 
@@ -23,8 +26,11 @@ differences.
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
+
+log = logging.getLogger("paperfig")
 
 ROOT = Path(__file__).resolve().parent.parent
 PAPER_CSS = ROOT / "swarm_mcp" / "src" / "swarm_mcp" / "scope" / "viz" / "assets" / "paper.css"
@@ -87,7 +93,7 @@ def rc() -> dict:
         "figure.figsize": (TEXT_WIDTH_IN, TEXT_WIDTH_IN * GOLDEN),
         "figure.constrained_layout.use": True,
         "figure.autolayout": False,
-        "savefig.bbox": "tight",
+        "savefig.bbox": "standard",   # exact figsize: tight bbox made 5.5 in figures up to 5.51 in
         "savefig.pad_inches": 0.015,
         "figure.dpi": 150,
         "savefig.dpi": 300,
@@ -143,13 +149,34 @@ def rc() -> dict:
     }
 
 
+_FONT_NOTED = False
+
+
+def serif_font() -> str:
+    """The first SERIF family matplotlib can find (it falls back silently, so we look ourselves)."""
+    from matplotlib import font_manager
+
+    for fam in SERIF:
+        try:
+            font_manager.findfont(font_manager.FontProperties(family=fam), fallback_to_default=False)
+            return fam
+        except ValueError:
+            continue
+    return "DejaVu Serif"
+
+
 def use() -> None:
+    global _FONT_NOTED
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     plt.rcParams.update(rc())
+    fam = serif_font()
+    if fam not in SERIF[:2] and not _FONT_NOTED:
+        _FONT_NOTED = True
+        log.warning("paperfig: Times New Roman / Times not installed; figures use %s", fam)
 
 
 def size(rel_width: float = 1.0, aspect: float = GOLDEN, *, height_in: float | None = None) -> tuple[float, float]:
@@ -159,7 +186,7 @@ def size(rel_width: float = 1.0, aspect: float = GOLDEN, *, height_in: float | N
 
 
 def save(fig, stem: Path | str, *, formats: tuple[str, ...] = ("pdf", "png"), dpi: int = 300) -> list[Path]:
-    """Write stem.pdf (vector) and stem.png (300 dpi); returns the paths written."""
+    """Write stem.pdf (vector) and stem.png (300 dpi) at exactly the figure's size; returns the paths written."""
     stem = Path(stem)
     stem.parent.mkdir(parents=True, exist_ok=True)
     out = []
