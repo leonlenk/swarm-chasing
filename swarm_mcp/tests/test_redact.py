@@ -80,9 +80,34 @@ def test_email_allowlist_matches_whole_labels():
     assert Redactor().redact("help@agentvillage.org")[0] == "[email]"  # no allowlist by default
 
 
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("連絡はbob@example.comまで", "連絡は[email]まで"),
+        ("jöhn@example.com", "[email]"),
+        ("émail bob@example.comé", "émail [email]é"),
+        ("иван@example.com", "[email]"),
+        ("mail: josé.garcía@example.org!", "mail: [email]!"),
+        ("메일bob@example.com입니다", "메일[email]입니다"),
+    ],
+)
+def test_email_next_to_non_ascii_letters(r, text, expected):
+    """Regression: the boundaries used Unicode \\w, so an address touching a non-ASCII letter was kept."""
+    assert red(r, text) == expected
+
+
 def test_vcs_remotes_are_not_emails(r):
     text = "clone git@github.com:org/repo.git or ssh://git@github.com/org/repo"
     assert red(r, text) == text
+
+
+def test_dict_keys_are_redacted_without_collisions(r):
+    carol, dan = "carol" + "@" + "example.com", "dan" + "@" + "example.com"
+    out, c = r.redact_value({"meta": {carol: "reacted", dan: "liked", "count": 2}, 3: "x"})
+    assert out == {"meta": {"[email]": "reacted", "[email] (2)": "liked", "count": 2}, 3: "x"}
+    assert c == {"email": 2}
+    out, c = r.redact_obj({"event_id": "keep", carol: 1}, skip_keys=["event_id"])
+    assert out == {"event_id": "keep", "[email]": 1} and c == {"email": 1}
 
 
 # --------------------------------------------------------------------------- phone
@@ -106,6 +131,15 @@ def test_phone_positives(r, number):
 )  # fmt: skip
 def test_phone_negatives(r, text):
     assert red(r, text) == text
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [("電話+81 90 1234 5678です", "電話[phone]です"), ("電話555-867-5309です", "電話[phone]です"),
+     ("Tél. +33 1 23 45 67 89é", "Tél. [phone]é"), ("teléfono 415-555-0134ñ", "teléfono [phone]ñ")],
+)  # fmt: skip
+def test_phone_next_to_non_ascii_letters(r, text, expected):
+    assert red(r, text) == expected
 
 
 def test_two_phones_in_a_row(r):
@@ -191,6 +225,25 @@ def test_secret_named_json_field_is_masked_whole(r):
 
 
 # --------------------------------------------------------------------------- url credentials
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("postgres://admin:pa/ssw0rd@db.internal:5432/x", "postgres://[url-credential]@db.internal:5432/x"),
+        ("mysql://root:a?b#c@10.0.0.1/db", "mysql://[url-credential]@10.0.0.1/db"),
+        ("amqp://svc:p@ss/w0rd@mq.example.com/vhost", "amqp://[url-credential]@mq.example.com/vhost"),
+        # host:port, then an '@' in the path: not userinfo
+        ("http://localhost:8000/users/bob@example.com", "http://localhost:8000/users/[email]"),
+        ("https://example.com:443/a?to=bob@example.org", "https://example.com:443/a?to=[email]"),
+        ("ftp://bob:pw@files.example.com/a@b", "ftp://[url-credential]@b"),  # over-masks, never leaks
+    ],
+)
+def test_url_credentials_with_slash_in_password(r, text, expected):
+    """Regression: userinfo stopped at '/', '?' or '#', so part of the password leaked."""
+    out = red(r, text)
+    assert out == expected
+    assert "ssw0rd" not in out and "a?b#c" not in out and "w0rd" not in out
 
 
 def test_url_credentials_mask_only_userinfo(r):
@@ -320,3 +373,13 @@ def test_pathological_inputs_stay_linear(blob):
     t = time.perf_counter()
     Redactor.strict().redact(blob)
     assert time.perf_counter() - t < 2
+
+
+def test_many_private_key_headers_stay_linear(r):
+    """Regression: an unbounded lazy body made 20k BEGIN headers without footers take ~24 s."""
+    text = (PK_HEAD + " x\n") * 20000
+    t0 = time.perf_counter()
+    out, c = r.redact(text)
+    assert time.perf_counter() - t0 < 2.0 and c == {"credential": 20000}
+    two = red(r, f"a {PEM} b {PEM} c")
+    assert two == "a [credential] b [credential] c"

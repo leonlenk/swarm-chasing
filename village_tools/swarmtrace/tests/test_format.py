@@ -10,8 +10,8 @@ from pathlib import Path
 import pytest
 
 from swarmtrace import cli
-from swarmtrace.format import (check, clip, dumps, fit_window, index_entry, iso, parse_iso, scrub, scrub_trace,
-                               validate, validate_index)
+from swarmtrace.format import (check, clip, dumps, fit_window, index_entry, iso, parse_iso, pii_hits, scrub,
+                               scrub_trace, scrub_tracking, validate, validate_index)
 
 SCHEMA = Path(__file__).resolve().parents[1] / "trace.schema.json"
 
@@ -82,6 +82,36 @@ def test_bad_timestamps(bad):
     assert any(e.startswith("events[0].t:") for e in errs), errs
 
 
+@pytest.mark.parametrize("path,value,expect", [
+    (("agents", 0, "name"), ["alpha"], "agents[0].name: expected string, got list"),
+    (("agents", 0, "name"), {"n": "alpha"}, "agents[0].name: expected string, got dict"),
+    (("events", 0, "id"), ["e1"], "events[0].id: expected a non-empty string"),
+    (("events", 0, "id"), {"id": "e1"}, "events[0].id: expected a non-empty string"),
+    (("events", 0, "agent"), ["alpha"], "events[0].agent: ['alpha'] not in agents"),
+    (("edges", 0, "from"), {"name": "alpha"}, "edges[0].from: {'name': 'alpha'} not in agents"),
+    (("adoptions", 0, "sources"), [["alpha"]], "adoptions[0].sources[0]: ['alpha'] not in agents"),
+    (("adoptions", 0, "event"), ["e2"], "adoptions[0].event: ['e2'] not an event id"),
+    (("exposures", 0, "event"), {"id": "e1"}, "exposures[0].event: {'id': 'e1'} not an event id"),
+    (("quotes", 0, "agent"), ["alpha"], "quotes[0].agent: ['alpha'] not in agents"),
+])
+def test_unhashable_ids_and_names_are_errors(path, value, expect):
+    tr = tiny()
+    obj = tr
+    for k in path[:-1]:
+        obj = obj[k]
+    obj[path[-1]] = value
+    errs = validate(tr)                                 # used to raise TypeError (unhashable type)
+    assert expect in errs, errs
+
+
+@pytest.mark.parametrize("bad", [["toy-idea"], {"id": "toy-idea"}])
+def test_index_unhashable_id_is_an_error(bad):
+    entry = index_entry(tiny(), "toy-idea.json")
+    entry["id"] = bad
+    errs = validate_index({"version": 0, "generated": "2025-02-01T00:00:00Z", "traces": [entry, dict(entry)]})
+    assert any(e.startswith("traces[0].id: expected string") for e in errs), errs
+
+
 def test_start_after_end():
     tr = tiny()
     tr["start"], tr["end"] = tr["end"], tr["start"]
@@ -140,6 +170,55 @@ def test_helpers():
     assert clip("  short\n\n text  ") == "short text"
 
 
+def _cut_through(pii, limit=60):
+    """A long text whose clip window (around KEY) ends inside `pii`."""
+    head = "KEY " + "word " * 9
+    room = limit - 2
+    pad = room - len(head) - 5                          # the window ends 5 chars into the PII
+    return head + "x" * max(0, pad - 1) + " " + pii + " tail" * 40
+
+
+@pytest.mark.parametrize("pii", ["jane.doe@examplecorp.com", "555-867-5309", "+1 415 555 0134", "+44 20 7946 0958"])
+def test_clip_never_leaves_partial_pii(pii):
+    """Regression: clip cut first and scrub ran on the snippet, so 'jane.doe@examplecor…' or '555-86…' survived
+    scrubbing with pii_hits() == []."""
+    text = _cut_through(pii)
+    c = clip(text, 0, 3, limit=60)
+    assert c.startswith("KEY") and c.endswith("…") and len(c) <= 60
+    assert pii[:5] not in c and pii[-4:] not in c and not any(ch.isdigit() for ch in c)
+    assert pii not in scrub(c) and pii_hits(c) == []
+    # the whole PII inside the window is scrubbed, with the key phrase still in view
+    whole = "lorem " * 30 + f"KEY then {pii} then more" + " ipsum" * 30
+    i = whole.index("KEY")
+    c = clip(whole, i, i + 3, limit=80)
+    assert "KEY" in c and pii not in c and ("[email]" in c or "[phone]" in c)
+
+
+def test_clip_drops_partial_pii_at_edges_of_stored_excerpts():
+    stored = "ne.doe@examplecorp.com said KEY is broken, call 555-867-53"   # already cut on both sides
+    c = clip(stored, stored.index("KEY"), stored.index("KEY") + 3, cut_before=True, cut_after=True)
+    assert c == "said KEY is broken, call"
+    assert clip("bot@agentvillage.org and x@gmail.com", allow_domains=("agentvillage.org",)) == \
+        "bot@agentvillage.org and [email]"
+
+
+def test_scrub_tracking_moves_marks():
+    text = "mail jane@gmail.com about KEY now"
+    out, (a, b) = scrub_tracking(text, (text.index("KEY"), text.index("KEY") + 3))
+    assert out == "mail [email] about KEY now" and out[a:b] == "KEY"
+    out, (a, b) = scrub_tracking(text, (text.index("jane") + 2, text.index("about")))
+    assert out[a:b] == "[email] "
+
+
+@pytest.mark.parametrize("raw,want", [
+    ("連絡はbob@example.comまで", "連絡は[email]まで"), ("jöhn@example.com", "[email]"),
+    ("émail bob@example.comé", "émail [email]é"), ("電話+81 90 1234 5678です", "電話[phone]です"),
+    ("電話555-867-5309です", "電話[phone]です"),
+])
+def test_scrub_next_to_non_ascii_letters(raw, want):
+    assert scrub(raw) == want and pii_hits(want) == []
+
+
 @pytest.mark.parametrize("raw,allow,want", [
     ("mail jane.doe+x@gmail.com now", (), "mail [email] now"),
     ("bot is claude-3.7@agentvillage.org", ("agentvillage.org",), "bot is claude-3.7@agentvillage.org"),
@@ -195,3 +274,14 @@ def test_cli_validate(tmp_path, capsys):
     assert cli.main(["validate", str(index)]) == 1
     out = capsys.readouterr().out
     assert "not in agents" in out and "missing.json does not exist" in out
+
+
+def test_build_index_skips_corrupt_json(tmp_path, capsys):
+    (tmp_path / "toy-idea.json").write_text(dumps(tiny()))
+    (tmp_path / "corrupt.json").write_text('{"version": 0, "id": ')          # truncated write
+    (tmp_path / "binary.json").write_bytes(b"\xff\xfe\x00garbage")           # not UTF-8
+    index = cli.build_index(tmp_path)
+    assert [e["file"] for e in index["traces"]] == ["toy-idea.json"]
+    assert validate_index(json.loads((tmp_path / "index.json").read_text())) == []
+    out = capsys.readouterr().out
+    assert "warning: index: skipping corrupt.json" in out and "warning: index: skipping binary.json" in out
