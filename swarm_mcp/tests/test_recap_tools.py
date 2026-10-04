@@ -66,6 +66,20 @@ def test_recap_period_counts_match_the_store(app, store_path: Path):
         assert t["evidence_ids"] and t["first_snippet"]["untrusted"] is True
 
 
+def test_recap_threads_list_humans_apart_from_agents(app):
+    out = call(app, "scope_recap", period="1", top=50)
+    threads = out["threads"]
+    assert threads and all("humans" in t and "external" in t for t in threads)
+    with_human = [t for t in threads if t["humans"]]
+    assert with_human, threads  # goal 1 has one human message
+    for t in threads:
+        names = [x["content"] if isinstance(x, dict) else x for x in t["agents"]]
+        assert not any(n.startswith("human:") for n in names), t["agents"]
+    assert all(
+        (h["content"] if isinstance(h, dict) else h).startswith("human:") for t in with_human for h in t["humans"]
+    )
+
+
 def test_recap_window_masks_snippets_and_rises(app):
     out = call(app, "scope_recap", since="2026-01-20", until="2026-01-22", top=5)
     assert out["period"] is None

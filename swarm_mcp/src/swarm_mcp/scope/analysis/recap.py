@@ -380,7 +380,9 @@ def _recap_batch(
                     "start": _iso(b["t0"]),
                     "end": _iso(b["t1"]),
                     "n": int(b["n"]),
-                    "agents": [label_for(a, names) for a in (b["authors"] or [])],
+                    "agents": [label_for(a, names) for a in (b["authors"] or [])],  # every author, by messages
+                    "author_ids": list(b["authors"] or []),
+                    "author_kinds": [actor_kind(a, agents) for a in (b["authors"] or [])],
                     "first_id": b["first_id"],
                     "ids": list(b["ids"] or []),
                 }
