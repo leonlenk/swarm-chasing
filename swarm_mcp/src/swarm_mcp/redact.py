@@ -23,7 +23,7 @@ Rules (``RULES``; name -> placeholder type). They run in this order, so a URL's
     phone           [phone]           +<international> or North American 3-3-4 with separators
     ip              [ip]              private, loopback and link-local IPv4/IPv6 (off by default)
 
-Groups: ``default`` (all but ``ip``), ``all``, ``credential`` (the five
+Groups: ``default`` (all but ``ip``), ``all``, ``credential`` (the six
 credential rules). ``Redactor(rules=..., disable=...)`` takes rule names,
 group names or custom ``Rule`` objects, so each rule can be toggled.
 
@@ -399,8 +399,10 @@ _PHONE = re.compile(
     r"(?<![\w/.:#=@+-])(?:"
     # international: '+', then 8-15 digits with at most two separators between digits
     r"\+[1-9](?:[ .()-]{0,2}[0-9]){7,14}"
-    # North American: optional 1, area code and exchange starting 2-9, separators required
-    r"|(?:1[ .-])?(?:\([2-9][0-9]{2}\)[ .-]?|[2-9][0-9]{2}[ .-])[2-9][0-9]{2}[ .-][0-9]{4}"
+    # North American 3-3-4: optional leading 1, separators required. Any digits are accepted
+    # (not just valid NANP area codes/exchanges) to match toolkit.Scrubber, which masks
+    # placeholder-style numbers such as 555-123-4567 too.
+    r"|(?:1[ .-])?(?:\([0-9]{3}\)[ .-]?|[0-9]{3}[ .-])[0-9]{3}[ .-][0-9]{4}"
     r")(?![\w-]|\.[0-9])"
 )
 
@@ -414,9 +416,8 @@ def _r_phone(m: re.Match[str], r: Redactor) -> str | None:
     more often ids, counts or timestamps. Dates (``2026-01-15``), versions
     (``1.234.5``), times and thousands (``21,596``) do not fit either shape.
     False negatives: unformatted national numbers, non-NANP national formats
-    without ``+`` (``020 7946 0958``), NANP numbers with an invalid area code or
-    exchange (``123-456-7890``). False positives: separator-formatted 3-3-4 numeric
-    codes that are not phone numbers.
+    without ``+`` (``020 7946 0958``). False positives: separator-formatted 3-3-4
+    numeric codes that are not phone numbers (``100-200-3000``, ``123 456 7890``).
     """
     return "[phone]"
 
