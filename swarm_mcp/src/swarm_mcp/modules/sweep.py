@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from swarm_mcp import llm
 from swarm_mcp import sweep as engine
+from swarm_mcp.scope.records import from_store_record
 from swarm_mcp.toolkit import ToolInputError
 
 NAME = "sweep"
@@ -52,6 +53,17 @@ def register(mcp, ctx) -> None:
     def directory() -> Path:
         return engine.sweeps_dir(config)
 
+    def resolver() -> engine.Resolver:
+        """Ids resolve through the store's get_record (the same path as core_get), as standard records."""
+        api = getattr(ctx.registry, "store_api", None)
+        if not api or "get_record" not in api:
+            raise ToolInputError(
+                "Cannot resolve ids: the SwarmScope store is not loaded (see core_info); "
+                "add a dataset with `swarm-mcp add <path>`."
+            )
+        get_record = api["get_record"]
+        return lambda eid: from_store_record(get_record(eid, max_chars=max_chars))
+
     def gather(ids: list[str] | None, filters: dict[str, Any] | None, limit: int):
         """Records for a sweep, plus resolution errors, notes and the provider used."""
         if ids and filters is not None:
@@ -59,7 +71,7 @@ def register(mcp, ctx) -> None:
         if ids:
             if len(ids) > engine.MAX_CAP * 4:
                 raise ToolInputError(f"At most {engine.MAX_CAP * 4} ids per call (got {len(ids)}).")
-            records, errors = engine.resolve_event_ids(ctx.registry.events, ids, max_chars)
+            records, errors = engine.resolve_ids(resolver(), ids, max_chars)
             return records, errors, [], None
         if filters is not None:
             table = engine.providers(ctx.registry)
@@ -74,7 +86,7 @@ def register(mcp, ctx) -> None:
         raise ToolInputError(
             "Pass ids (from scope_search or other tools), or filters such as "
             "{'source': 'village', 'channel': 'general', 'since': '2026-01-05', 'until': '2026-01-12', "
-            "'author': 'Opus 4.5', 'kind': 'chat', 'query': 'deadline'}."
+            "'author': 'Opus 4.5', 'kind': 'msg', 'query': 'deadline'}."
         )
 
     @ctx.tool(read_only=False)
@@ -87,8 +99,9 @@ def register(mcp, ctx) -> None:
         filters: Annotated[
             dict[str, Any] | None,
             Field(
-                description="Instead of ids: select records from the SwarmScope store with keys source, kind, "
-                "channel, author, since, until, query (all optional; oldest first)."
+                description="Instead of ids: select records from the SwarmScope store with keys source, kind "
+                "('msg' or 'event'), type (the dataset's msg_type / action kind), channel, author, since, until, "
+                "query (all optional; oldest first)."
             ),
         ] = None,
         dry_run: Annotated[

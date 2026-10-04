@@ -8,7 +8,7 @@ runs ``check`` on the result unless ``--no-check``. This module is the library.
 
 An export directory holds:
 
-    events.jsonl    one standard record per line (``events.event_record`` shape), with
+    events.jsonl    one standard record per line (``scope.records.event_record`` shape), with
                     every string field redacted except the identity fields
                     (event_id, source, kind, time, actor_type)
     agents.jsonl    agent records, if given (every string but ``id`` redacted)
@@ -64,14 +64,14 @@ class ExportError(ValueError):
 
 
 def _split_event_id(value: Any) -> tuple[str, str]:
-    """(source, kind) of a ``<source>:<kind>:<local_id>`` id (see ``swarm_mcp.events``)."""
-    from swarm_mcp.events import parse_event_id  # deferred: pulls in the MCP toolkit
+    """(source, kind) of a ``<source>:<kind>:<native_id>`` evidence id (see ``scope.evidence``)."""
+    from swarm_mcp.scope import evidence  # deferred: pulls in the store and the MCP toolkit
 
     try:
-        eid = parse_event_id(value if isinstance(value, str) else "")
-    except ValueError as e:  # ToolInputError is a ValueError
+        ref = evidence.parse(value if isinstance(value, str) else "")
+    except ValueError as e:  # EvidenceError is a ToolInputError, a ValueError
         raise ExportError(str(e)) from None
-    return eid.source, eid.kind
+    return ref.source, ref.kind
 
 
 # --------------------------------------------------------------------------- writing

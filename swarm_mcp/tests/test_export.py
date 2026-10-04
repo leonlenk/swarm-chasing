@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pytest
 
-from swarm_mcp.events import event_record
 from swarm_mcp.export import AGENTS_FILE, EVENTS_FILE, MANIFEST_FILE, ExportError, check, export, select
 from swarm_mcp.redact import Redactor
+from swarm_mcp.scope.records import event_record
 
 GH_TOKEN = "gh" + "p_" + "a1B2c3D4e5" * 4
 API_VALUE = "Zx9Q" + "w8Er7Ty6Ui5Op4As"
@@ -27,7 +27,7 @@ SECRETS = (GH_TOKEN, API_VALUE, PASSWORD, EMAIL, "555 0134", "carol" + "@" + "ex
 def records() -> list[dict]:
     return [
         event_record(
-            "village:chat:m1",
+            "village:msg:m1",
             time="2026-01-05T13:00:00Z",
             actor="GPT-5.2",
             actor_type="agent",
@@ -35,7 +35,7 @@ def records() -> list[dict]:
             text=f"mail {EMAIL} or help@agentvillage.org, call {PHONE}",
         ),
         event_record(
-            "village:chat:m2",
+            "village:msg:m2",
             time="2026-01-06T09:30:00Z",
             actor="Claude Opus 4.5",
             actor_type="agent",
@@ -53,7 +53,7 @@ def records() -> list[dict]:
             text="nothing sensitive, commit 3f9a1c2b4d5e6f708192a3b4c5d6e7f8091a2b3c",
         ),
         event_record(
-            "git:commit:rpg-game@abc123",
+            "git:event:rpg-game@abc123",
             time="2026-01-08T00:00:00Z",
             actor="Gemini 2.5 Pro",
             text="clone git@github.com:org/rpg-game.git",
@@ -111,7 +111,7 @@ def test_manifest_has_counts_not_values(exported):
     rec = manifest["records"]
     assert rec["events"] == 4 and rec["agents"] == 2
     assert rec["by_source"] == {"git": 1, "village": 3}
-    assert rec["by_source_kind"] == {"git": {"commit": 1}, "village": {"chat": 2, "event": 1}}
+    assert rec["by_source_kind"] == {"git": {"event": 1}, "village": {"msg": 2, "event": 1}}
     assert rec["time_range"] == {"first": "2026-01-05T13:00:00Z", "last": "2026-01-08T00:00:00Z"}
     red = manifest["redaction"]
     # m1: email + phone; m2: token, api_key, password; agents: 1 email; filters: 1 email
@@ -144,7 +144,7 @@ def test_check_passes_on_clean_export(exported):
 def test_check_fails_on_tampered_export_without_leaking(exported):
     out, _ = exported
     with (out / EVENTS_FILE).open("a") as f:
-        f.write(json.dumps({"event_id": "village:chat:x", "text": f"ping {EMAIL}", "token": GH_TOKEN}) + "\n")
+        f.write(json.dumps({"event_id": "village:msg:x", "text": f"ping {EMAIL}", "token": GH_TOKEN}) + "\n")
     report = check(out)
     assert not report.ok
     found = {(f["file"], f["line"], f["field"], f["type"]) for f in report.findings}
@@ -180,7 +180,7 @@ def test_check_missing_manifest_and_dir(tmp_path):
 
 
 def test_check_is_stricter_than_default_export(tmp_path):
-    recs = [event_record("village:chat:1", time="2026-01-05T00:00:00Z", actor="a", text="server 10.0.0.5")]
+    recs = [event_record("village:msg:1", time="2026-01-05T00:00:00Z", actor="a", text="server 10.0.0.5")]
     export(recs, tmp_path / "a", Redactor())
     r = check(tmp_path / "a")
     assert not r.ok and r.counts == {"ip": 1}
@@ -203,7 +203,7 @@ def test_reexport_without_agents_removes_stale_file(exported):
 
 
 def test_bad_records_are_rejected(tmp_path):
-    with pytest.raises(ExportError, match="record 2: Malformed event_id"):
+    with pytest.raises(ExportError, match="record 2: Malformed evidence id"):
         export([records()[0], {"text": "no id"}], tmp_path / "x", Redactor())
     with pytest.raises(ExportError, match="record 1: expected a JSON object"):
         export(["nope"], tmp_path / "y", Redactor())
@@ -216,13 +216,13 @@ def test_bad_records_are_rejected(tmp_path):
 
 def test_select_filters():
     recs = records()
-    assert [r["event_id"] for r in select(recs, sources=["git"])] == ["git:commit:rpg-game@abc123"]
-    assert len(list(select(recs, kinds=["chat"]))) == 2
+    assert [r["event_id"] for r in select(recs, sources=["git"])] == ["git:event:rpg-game@abc123"]
+    assert len(list(select(recs, kinds=["msg"]))) == 2
     assert len(list(select(recs, kinds=["village:event"]))) == 1
     assert [r["actor"] for r in select(recs, actors=["GPT-5.2"])] == ["GPT-5.2"]
     # half-open; a bare-date upper bound includes that day
     got = [r["event_id"] for r in select(recs, since="2026-01-06", until="2026-01-07")]
-    assert got == ["village:chat:m2", "village:event:e1"]
+    assert got == ["village:msg:m2", "village:event:e1"]
     assert len(list(select(recs, since="2026-01-06T09:30:00Z", until="2026-01-07T00:00:00Z"))) == 1
 
 
@@ -240,7 +240,7 @@ def test_large_export_is_fast(tmp_path):
             if i % 100 == 0:
                 text += f" mail user{i}@example.com"
             yield event_record(
-                f"village:chat:m{i}",
+                f"village:msg:m{i}",
                 time=f"2026-01-15T00:{i // 1000 % 60:02d}:00Z",
                 actor="A",
                 location="general",
