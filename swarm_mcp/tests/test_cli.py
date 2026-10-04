@@ -348,3 +348,60 @@ def test_add_git_slugifies_the_default_source(project: Path, capsys):
     with db.connect(store) as s:
         ids = [r["evidence_id"] for r in s.all("SELECT evidence_id FROM periods WHERE source = 'my_repo'")]
     assert len(ids) == 5 and all(parse(i) for i in ids)
+
+
+def test_add_wiki_needs_a_db_in_the_given_folder(project: Path, capsys, monkeypatch: pytest.MonkeyPatch):
+    """Regression: with no *.db in the given folder, the wiki adapter searched the SIBLING folders and ingested
+    another dataset under that sibling's name. The adapter and ingest are fakes here (empty files, nothing is
+    opened); a refused path must never reach them."""
+    import swarm_mcp.scope.adapters as adapters
+    import swarm_mcp.scope.ingest as ingest_mod
+
+    calls: list[tuple[str, Path]] = []
+
+    class FakeWiki:
+        def __init__(self, source: str | None):
+            self.source = source
+
+        def inspect(self, path: Path) -> dict:
+            calls.append(("inspect", Path(path)))
+            return {"source": self.source or (path.parent if path.is_file() else path).name, "pages": 0}
+
+    def fake_get_adapter(name: str, source: str | None = None) -> FakeWiki:
+        assert name == "wiki"
+        return FakeWiki(source)
+
+    def fake_ingest(name: str, path: Path, db_path: Path, source: str | None = None, **_) -> dict:
+        calls.append(("ingest", Path(path)))
+        return {"source": source or Path(path).name, "adapter": name, "db": str(db_path), "counts": {}, "seconds": 0}
+
+    monkeypatch.setattr(adapters, "get_adapter", fake_get_adapter)
+    monkeypatch.setattr(ingest_mod, "ingest", fake_ingest)
+    data = project / "data"
+    (data / "mydata" / "nested").mkdir(parents=True)
+    (data / "mydata" / "notes.txt").write_text("no database here\n")
+    (data / "mydata" / "nested" / "inner.db").touch()  # not directly in mydata/
+    (data / "mydata" / "folder.db").mkdir()  # a folder, not a database file
+    (data / "sibling").mkdir()
+    (data / "sibling" / "sibling.db").touch()  # empty; the sibling the adapter used to fall back to
+
+    for bad in ("data/mydata", "data/mydata/notes.txt", "data/mydata/folder.db"):
+        for extra in ((), ("--dry-run",)):
+            assert cli("add", bad, "--adapter", "wiki", *extra) == 2
+            assert "no wiki database in" in capsys.readouterr().err
+    assert calls == []
+
+    assert cli("add", "data/sibling", "--adapter", "wiki", "--dry-run") == 0  # a folder with a *.db
+    assert "dry run: source 'sibling'" in capsys.readouterr().out
+    assert calls == [("inspect", data / "sibling")]
+    calls.clear()
+    assert cli("add", "data/sibling/sibling.db", "--adapter", "wiki", "--name", "wiki2") == 0  # a .db file
+    assert "ingested source 'wiki2'" in capsys.readouterr().out
+    assert calls == [("inspect", data / "sibling" / "sibling.db"), ("ingest", data / "sibling" / "sibling.db")]
+
+    calls.clear()
+    (data / "My Wiki").mkdir()
+    (data / "My Wiki" / "w.db").touch()
+    assert cli("add", "data/My Wiki", "--adapter", "wiki") == 2  # default source 'My Wiki': not an id part
+    assert "pass --name" in capsys.readouterr().err
+    assert [c[0] for c in calls] == ["inspect"]

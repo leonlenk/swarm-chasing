@@ -180,6 +180,10 @@ def cmd_add(args: argparse.Namespace, config: Config) -> int:
             )
         return _add_builtin(args, "git", repo, db, detected=adapter == "auto")
     if adapter == "wiki":
+        # only the given .db, or a *.db directly in the given folder: never a sibling dataset (file check only)
+        dbs = [path] if path.suffix == ".db" else list(path.glob("*.db")) if path.is_dir() else []
+        if not any(f.is_file() for f in dbs):
+            raise CommandError(f"no wiki database in {path} (pass a .db file or the folder that holds it)")
         return _add_builtin(args, "wiki", path, db, detected=False)
     return _add_mapped(args, config, path, db)
 
