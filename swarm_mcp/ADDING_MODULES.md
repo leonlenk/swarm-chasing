@@ -36,6 +36,25 @@ writes the same entry into `.mcp.json`, which already exists.
 | `SWARM_MCP_EMAIL_ALLOWLIST` | `agentvillage.org` | email domains left unmasked |
 | `SWARM_MCP_LOG_LEVEL` | INFO | stderr log level |
 | `SWARM_<MODULE>_<KEY>` | | per-module settings via `ctx.setting("key")`, e.g. `SWARM_VILLAGE_DIR` |
+| `SWARM_GIT_DIR` | `<data>/*/repos/` | folder of bare git clones for the `git` and `subtasks` modules |
+
+### Modules in this repo
+
+| module | data | what it gives |
+|---|---|---|
+| `core` | none | module report, config, and `core_get_event` / `core_get_events` / `core_event_sources` for any event id |
+| `village` | `<data>/ai-village/*.jsonl.gz` | agents, goals, chat search and windows, per-agent activity |
+| `git` | bare clones in `<data>/<dataset>/repos/*.git` | repos and PR listings; PRs and commits as event ids |
+| `subtasks` | `git` repos (+ village chat if present) | PRs grouped into subtasks by several methods, typed handoffs between agents, pair tracing |
+
+A repo for `git` is a bare clone with every PR head fetched, so closed and squash-merged PRs keep their commits:
+
+```bash
+git clone --bare https://github.com/ai-village-agents/rpg-game data/ai-village/repos/rpg-game.git
+git -C data/ai-village/repos/rpg-game.git fetch origin '+refs/pull/*/head:refs/pull/*/head'
+```
+
+The first `git`/`subtasks` call on a repo loads it (about 15 s for the RPG week's 458 PRs); later calls are instant.
 
 ## A module in five lines
 
