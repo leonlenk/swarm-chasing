@@ -145,3 +145,22 @@ def test_onboarding_handcheck_only_from_a_file(to, tmp_path):
     hc = to.handcheck_summary(rows)
     assert hc["n"] == 3 and hc["agreement"] == round(2 / 3, 3)
     assert hc["by_label"] == {"STATES": "1/1", "FOLLOWS": "0/1", "?": "1/1"}
+
+
+@pytest.mark.parametrize("module", ["tracer_hostility", "tracer_onboarding"])
+@pytest.mark.parametrize("argv", [[], ["expand"], ["nope"]])
+def test_stage_usage(module, argv, capsys):
+    import importlib
+    mod = importlib.import_module(module)
+    with pytest.raises(SystemExit) as e:
+        mod.main(argv)
+    assert e.value.code == 2
+    err = capsys.readouterr().err
+    assert "usage:" in err and "analyze" in err
+
+
+def test_sample2_warns_before_round1_labels(th, tmp_path, capsys):
+    th.write_csv(tmp_path / "candidates.csv", [_cand()])
+    th.write_csv(tmp_path / "sample.csv", [dict(_cand(), why="other_chat_rand")])
+    th.sample2()
+    assert "no round-1 labels yet" in capsys.readouterr().err

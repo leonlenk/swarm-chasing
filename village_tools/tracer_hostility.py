@@ -11,6 +11,8 @@ Stages (run in order; everything except the LLM labelling is rerunnable):
     python tracer_hostility.py build     # candidates.csv + bug-report pool, from chat, memories, events (~75 s)
     python tracer_hostility.py sample    # round 1: label_batches/batch_0-4.json (stratified + bug controls)
     python tracer_hostility.py sample2   # round 2: batch_5-7.json, each non-Gemini agent's earliest proxy-positive items
+                                         # (run after round 1 is labelled: it skips labelled items, so without
+                                         # labels it re-draws round-1 items and warns)
     (LLM labelling: one Sonnet subagent per batch writes label_batches/labels_<k>.json using label_batches/RUBRIC.md;
      labels_manual.json holds 3 hand labels for origin-critical early Gemini items)
     python tracer_hostility.py analyze   # labels.csv, adoption/exposure/persistence CSVs, results.json
@@ -19,6 +21,7 @@ Stages (run in order; everything except the LLM labelling is rerunnable):
 Outputs go to out/sprint_idea/hostility/ (gitignored).
 """
 
+import argparse
 import collections
 import csv
 import datetime as dt
@@ -49,7 +52,7 @@ RPG_SABOTEUR = (dt.datetime(2026, 3, 5, 15, 51), dt.datetime(2026, 3, 23, 11, 17
 
 # --- idea spec ---------------------------------------------------------------------------------
 # Seeds from the brief. Expansion terms were picked from the top-lift terms in Gemini 2.5 Pro's seed
-# messages (ideas.terms tokenisation; lift vs all chat; see `expand` stage) and kept only when they
+# messages (ideas.terms tokenisation; lift vs all chat; a one-off check, not a stage here) and kept only when they
 # name the hostility idea itself. "divergent reality" (306 msgs) and "friction coefficient" (372;
 # coined by Gemini 3 Pro) co-occur strongly but denote state inconsistency / deployment friction,
 # not intent, so they are excluded to keep the candidate pool on-idea.
@@ -387,8 +390,14 @@ def proxy_pos(r):
 def sample2(per_agent=5, n_batches=3):
     """Round 2: each non-Gemini agent's earliest unlabelled proxy-positive items (any channel), so a
     first adoption hidden behind the round-1 sample is not missed."""
+    need(OUT / "candidates.csv", "Run `python tracer_hostility.py build` first.")
+    need(OUT / "sample.csv", "Run `python tracer_hostility.py sample` first.")
     cands = read_csv(OUT / "candidates.csv")
     done = set(load_labels())
+    if not done:
+        print(f"warning: no round-1 labels yet ({BATCH}/labels_*.json). sample2 skips labelled items, so run it "
+              "after labelling batch_0-4.json; run now, it re-draws items already in sample.csv and differs from "
+              "the documented run.", file=sys.stderr)
     seen = collections.Counter()
     items = []
     for r in cands:
@@ -818,13 +827,15 @@ def analyze():
                      default=str, indent=1))
 
 
+STAGES = {"build": build, "sample": sample, "sample2": sample2, "analyze": analyze}
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="Trace the 'hostile environment' belief; stages run in the order "
+                                             "listed (see the module docstring).")
+    ap.add_argument("stage", choices=list(STAGES))
+    STAGES[ap.parse_args(argv).stage]()
+
+
 if __name__ == "__main__":
-    stage = sys.argv[1] if len(sys.argv) > 1 else "build"
-    if stage == "build":
-        build()
-    elif stage == "sample":
-        sample()
-    elif stage == "sample2":
-        sample2()
-    elif stage == "analyze":
-        analyze()
+    main()

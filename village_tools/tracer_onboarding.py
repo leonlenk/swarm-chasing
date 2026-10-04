@@ -29,6 +29,7 @@ exists (local, derived from this run's labels; never committed). It is a JSON ob
 seed 11; 24 agreed); those ids only fit that run's items, so they are not applied to new runs.
 """
 
+import argparse
 import csv
 import datetime as dt
 import gzip
@@ -713,6 +714,16 @@ def plot_uptake(res=None):
     print("wrote " + ", ".join(str(o) for o in out))
 
 
+STAGES = {"events": stage_events, "guides": stage_guides, "rules": stage_rules, "items": stage_items,
+          "analyze": stage_analyze, "plots": plot_uptake}
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="Trace onboarding-guide norms; stages run in the order listed "
+                                             "(see the module docstring).")
+    ap.add_argument("stage", choices=list(STAGES))
+    STAGES[ap.parse_args(argv).stage]()
+
+
 if __name__ == "__main__":
-    {"events": stage_events, "guides": stage_guides, "rules": stage_rules, "items": stage_items, "analyze": stage_analyze,
-     "plots": plot_uptake}[sys.argv[1]]()
+    main()
