@@ -26,6 +26,7 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
 
+from swarm_mcp.export import parse_kinds
 from swarm_mcp.scope import db, evidence
 from swarm_mcp.scope.analysis.timeline import record_filters, ts_iso
 from swarm_mcp.toolkit import ToolInputError, parse_time, truncate
@@ -159,10 +160,7 @@ def count_store_records(db_path: Path, filters: Mapping[str, Any] | None = None)
 def _select(s: Any, f: Mapping[str, Any]) -> tuple[list[str], list[Any]]:
     """(one SELECT per table, their params) for checked filters ``f`` on an open store session ``s``."""
     sources = _as_list(f.get("source"), "source")
-    kind_specs = []  # (source or None, schema kind): "source:kind" keeps its source
-    for k in _as_list(f.get("kind"), "kind"):
-        src, _, kind = k.rpartition(":")
-        kind_specs.append((src or None, kind))
+    kind_specs = parse_kinds(_as_list(f.get("kind"), "kind"))  # (source or None, kind), shared with export
     kinds = [k for _src, k in kind_specs]
     bad_kinds = sorted({k for k in kinds if k not in RECORD_KINDS})
     if bad_kinds:

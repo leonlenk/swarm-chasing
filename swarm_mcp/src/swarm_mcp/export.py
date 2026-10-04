@@ -397,7 +397,7 @@ def _parse_bound(value: str, *, end: bool) -> datetime:
 
 
 def parse_kinds(kinds: Iterable[str]) -> list[tuple[str | None, str]]:
-    """The record kind filter, shared by ``select`` and ``scope.records.store_records``: each value is a
+    """The record kind filter, shared by ``select`` and ``scope.records`` (store records, exports, sweeps): each is a
     bare kind ("event", any source) or "source:kind" (that source only) -> ``(source or None, kind)``."""
     out = []
     for k in kinds:
