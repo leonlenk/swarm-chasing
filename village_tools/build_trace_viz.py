@@ -21,14 +21,15 @@ defaults to 2025-04-02, America/Los_Angeles: the AI Village dataset README and S
 "day 1 = 2025-04-02", and every daily summary's day number equals its Pacific date minus
 2025-04-02, plus one. For any other input the day axis is off unless --day-one is given.
 
-Email addresses in free text (snippets, quotes, evidence, labels) are replaced with [email]
-unless their domain is passed with --keep-email-domain; --keep-emails turns this off.
+Free text (snippets, quotes, evidence, labels, statement, source) is scrubbed with swarmtrace's scrub, the
+same engine the exporter uses: email addresses become [email] and phone-number-like strings [phone]. Addresses at
+the AI Village agents' own mailbox domain (swarmtrace.adapters.aivillage.SCRUB_ALLOW_DOMAINS), which the export
+keeps on purpose, and at any --keep-email-domain are kept; --keep-emails turns scrubbing off.
 """
 from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -36,6 +37,8 @@ from zoneinfo import ZoneInfo
 
 import pagekit
 from swarmtrace import validate as strict_problems
+from swarmtrace.adapters.aivillage import SCRUB_ALLOW_DOMAINS
+from swarmtrace.format import scrub
 
 HERE = Path(__file__).resolve().parent
 TEMPLATE = HERE / "trace_viz_template.html"
@@ -100,25 +103,18 @@ def from_index(idx: Path) -> list[Path]:
     return files
 
 
-EMAIL = re.compile(r"[\w.+-]+@([\w-]+(?:\.[\w-]+)+)")
-
-
 def redact(trace: dict, keep: set[str]) -> int:
-    """Replace email addresses in free-text fields, in place. Returns the number replaced."""
+    """Scrub emails (outside `keep` domains) and phone numbers from free-text fields, in place, with swarmtrace's
+    scrub. Returns the number of fields changed."""
     n = 0
 
     def sub(text):
         nonlocal n
         if not isinstance(text, str):
             return text
-
-        def r(m):
-            nonlocal n
-            if m.group(1).lower() in keep:
-                return m.group(0)
-            n += 1
-            return "[email]"
-        return EMAIL.sub(r, text)
+        out = scrub(text, tuple(keep))
+        n += out != text
+        return out
 
     for key, fields in (("events", ("snippet",)), ("quotes", ("text", "note")), ("edges", ("evidence",)), ("annotations", ("label",))):
         for item in trace.get(key) or []:
@@ -189,8 +185,9 @@ def main(argv=None) -> int:
     ap.add_argument("inputs", nargs="*", type=Path, help=f"trace files, index.json files or directories (default: {DEFAULT_IN})")
     ap.add_argument("-o", "--out", type=Path, default=DEFAULT_OUT, help=f"output HTML (default: {DEFAULT_OUT})")
     ap.add_argument("--keep-email-domain", action="append", default=[], metavar="DOMAIN",
-                    help="leave addresses at this domain unredacted (repeatable), e.g. agent mailboxes")
-    ap.add_argument("--keep-emails", action="store_true", help="do not redact email addresses")
+                    help="also leave addresses at this domain unredacted (repeatable); "
+                         f"{', '.join(SCRUB_ALLOW_DOMAINS)} (the agents' mailboxes) is always kept")
+    ap.add_argument("--keep-emails", action="store_true", help="do not scrub emails or phone numbers")
     ap.add_argument("--schema", type=Path, default=SCHEMA, help="JSON Schema to bundle into the page's format section, if it exists")
     ap.add_argument("--day-one", metavar="YYYY-MM-DD",
                     help="date of Village day 1, so time axes can show 'Day N'; 'off' disables it. Default: "
@@ -223,11 +220,13 @@ def main(argv=None) -> int:
         if strict:
             print(f"note: {f.name} is not strict v0 ({len(strict)} problems, e.g. {strict[0]}); "
                   "the page reads it leniently", file=sys.stderr)
-        red = 0 if args.keep_emails else redact(t, {d.lower() for d in args.keep_email_domain})
+        red = 0 if args.keep_emails else redact(t, {d.lower() for d in [*SCRUB_ALLOW_DOMAINS, *args.keep_email_domain]})
         traces.append(t)
-        print(f"ok:   {f.name}  {t.get('kind'):6} {len(t.get('agents', [])):3d} agents  {len(t.get('events', [])):5d} events  {t.get('title', t['id'])}{f'  ({red} emails redacted)' if red else ''}")
+        print(f"ok:   {f.name}  {t.get('kind'):6} {len(t.get('agents', [])):3d} agents  {len(t.get('events', [])):5d} events  {t.get('title', t['id'])}{f'  ({red} fields scrubbed)' if red else ''}")
     if not traces:
-        print("No valid traces found. Pass trace files or a directory, e.g. out/sprint_idea/mock_trace.json", file=sys.stderr)
+        print(f"No valid traces found in {', '.join(map(str, inputs))}. Export the AI Village traces first with "
+              "`python village_tools/trace_export.py` (writes out/sprint_idea/traces/), or pass trace files, "
+              "index.json files or directories.", file=sys.stderr)
         return 1
 
     schema = None

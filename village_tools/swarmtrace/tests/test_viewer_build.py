@@ -206,3 +206,28 @@ def test_only_malformed_inputs_fail_cleanly(tmp_path, capsys):
     bad = _malformed(tmp_path)
     assert btv.main([*map(str, bad.values()), "-o", str(tmp_path / "page.html")]) == 1
     assert "No valid traces found" in capsys.readouterr().err
+
+
+def test_redaction_uses_swarmtrace_scrub(tmp_path):
+    t = toy_trace()
+    t["events"][0]["snippet"] = "連絡はbob@example.comまで, ops@agentvillage.org, call 555-123-4567"
+    t["quotes"][0]["text"] = "メールcat@keep.example.org確認"
+    src = tmp_path / "toy.json"
+    src.write_text(json.dumps(t))
+    out = tmp_path / "page.html"
+    assert btv.main([str(src), "-o", str(out), "--keep-email-domain", "keep.example.org"]) == 0
+    tr = _payload(out)["traces"][0]
+    snip = tr["events"][0]["snippet"]
+    assert snip.startswith("連絡は[email]まで")            # CJK next to the address survives
+    assert "ops@agentvillage.org" in snip                 # the agents' mailboxes are kept, as on export
+    assert "555-123-4567" not in snip and "[phone]" in snip
+    assert tr["quotes"][0]["text"] == "メールcat@keep.example.org確認"  # --keep-email-domain holds next to CJK
+    assert btv.main([str(src), "-o", str(out), "--keep-emails"]) == 0
+    assert _payload(out)["traces"][0]["events"][0]["snippet"] == t["events"][0]["snippet"]
+
+
+def test_empty_input_points_at_the_exporter(tmp_path, capsys):
+    (tmp_path / "empty").mkdir()
+    assert btv.main([str(tmp_path / "empty"), "-o", str(tmp_path / "page.html")]) == 1
+    err = capsys.readouterr().err
+    assert "trace_export.py" in err and "mock_trace" not in err
