@@ -241,6 +241,26 @@ def test_check_findings_ok_and_missing(store_path: Path, tmp_path: Path):
     assert nostore["ok"] is False and nostore["store_missing"] is True and "swarm-mcp ingest" in nostore["message"]
 
 
+def test_check_findings_uses_the_latest_line_and_skips_withdrawn(store_path: Path, tmp_path: Path):
+    """Regression: every line was checked, so a fixed or retracted finding kept failing the check forever."""
+    bad_ids = ["village:chat:does-not-exist"]
+    rows = [
+        _finding("f-fixed", bad_ids),
+        _finding("f-fixed", GOOD_IDS),  # re-recorded with good ids: the last line wins
+        {**_finding("f-gone", bad_ids), "status": "retracted"},
+        {**_finding("f-no", bad_ids), "status": "rejected"},
+        _finding("f-ok", GOOD_IDS),
+    ]
+    res = lib.check_findings(_write_findings(tmp_path / "f.jsonl", rows), store_path)
+    assert res["ok"] is True and res["checked"] == 2 and res["skipped"] == 3, res
+    rows.append(_finding("f-ok", bad_ids))  # ...and a later bad line for a good finding fails it
+    res = lib.check_findings(_write_findings(tmp_path / "g.jsonl", rows), store_path)
+    assert res["ok"] is False and [p["finding_id"] for p in res["problems"]] == ["f-ok"]
+    assert res["problems"][0]["line"] == 6
+    only_withdrawn = _write_findings(tmp_path / "h.jsonl", rows[2:4])
+    assert lib.check_findings(only_withdrawn, store_path)["ok"] is True
+
+
 def test_check_findings_corrupt(store_path: Path, tmp_path: Path):
     bad = _write_findings(
         tmp_path / "bad.jsonl",
@@ -399,6 +419,34 @@ def test_require_evidence_hook(tmp_path: Path, store_path: Path):
 
     r = _run(STOP_HOOK, stop, {**env, "PATH": ""})  # no uv: allow, with a note
     assert r.returncode == 0 and r.stdout == "" and "uv not found" in r.stderr
+
+
+@needs_uv
+def test_stop_hook_only_blocks_on_this_sessions_findings(tmp_path: Path, store_path: Path):
+    """Regression: one stale finding blocked every turn of every session in the checkout. Findings the audit
+    log ties to another session are reported, not blocking; unattributed ones still block."""
+    fdir = tmp_path / "sess-findings"
+    env = _hook_env(tmp_path, store_path, fdir)
+    bad = ["village:chat:does-not-exist"]
+    _write_findings(fdir / "findings.jsonl", [_finding("f-aaaaaaaaaaaa", bad), _finding("f-bbbbbbbbbbbb", bad)])
+    response = [{"type": "text", "text": json.dumps({"finding": {"finding_id": "f-aaaaaaaaaaaa"}})}]
+    payload = _hook_json("PostToolUse", tool_name="mcp__swarm__findings_record", tool_input={"claim": "x"},
+                         tool_use_id="toolu_9", tool_response=response, session_id="sess-old")  # fmt: skip
+    assert _run(AUDIT_HOOK, payload, env).returncode == 0
+    audit = [json.loads(x) for x in _lines(fdir / "audit.jsonl")]
+    assert audit[-1]["finding_ids"] == ["f-aaaaaaaaaaaa"] and audit[-1]["session_id"] == "sess-old"
+
+    # sess-1: f-aaaa belongs to sess-old (not blocking), f-bbbb has no session on record (blocks)
+    reason = _block_reason(_run(STOP_HOOK, _hook_json("Stop", stop_hook_active=False), env))
+    assert "f-bbbbbbbbbbbb" in reason and "f-aaaaaaaaaaaa" not in reason
+    # once f-bbbb is retracted, sess-1 may stop; the other session's finding is only noted
+    with (fdir / "findings.jsonl").open("a") as f:
+        f.write(json.dumps({**_finding("f-bbbbbbbbbbbb", bad), "status": "retracted"}) + "\n")
+    r = _run(STOP_HOOK, _hook_json("Stop", stop_hook_active=False), env)
+    assert r.returncode == 0 and r.stdout == "" and "other sessions" in r.stderr and "f-aaaaaaaaaaaa" in r.stderr
+    # the session that recorded it is still blocked
+    reason = _block_reason(_run(STOP_HOOK, _hook_json("Stop", stop_hook_active=False, session_id="sess-old"), env))
+    assert "f-aaaaaaaaaaaa" in reason
 
 
 def _settings_command(event: str) -> str:

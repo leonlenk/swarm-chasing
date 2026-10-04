@@ -30,6 +30,12 @@ come from ``swarm_mcp.config.Config.load(cwd=<project root>)``: ``[data] finding
 ``[data] db`` in <project root>/swarm.toml, defaulting to <project root>/findings and
 <data dir>/swarmscope.duckdb (SWARM_DATA_DIR is honoured).
 
+Which findings count: the last line per finding_id, minus rejected or retracted ones
+(``check_findings``). A finding that the audit log (``audit.jsonl``, written by
+``audit_log.py``) ties to a different session than the payload's ``session_id`` never blocks
+this session; it is reported on stderr instead. Findings with no session on record, and
+corrupt lines, still block.
+
 The stop is allowed (stdout empty) when all findings resolve, findings.jsonl is missing or
 empty, or the store is missing (warning on stderr).
 """
@@ -92,17 +98,53 @@ def explain(result: dict) -> str:
 # --------------------------------------------------------------------------- stage 2: the check
 
 
+def finding_sessions(audit_file: Path) -> dict[str, str]:
+    """finding_id -> session_id, from the ``finding_ids`` of audit.jsonl entries."""
+    owners: dict[str, str] = {}
+    try:
+        with open(audit_file, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if '"finding_ids"' not in line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except ValueError:
+                    continue
+                sid = entry.get("session_id") if isinstance(entry, dict) else None
+                if isinstance(sid, str) and sid:
+                    for fid in entry.get("finding_ids") or []:
+                        owners[str(fid)] = sid
+    except OSError:
+        pass
+    return owners
+
+
 def check_main() -> int:
     """Run in the swarm_mcp env: print one ``RESULT_PREFIX + json`` line and return 0."""
     from swarm_mcp.config import Config
     from swarm_mcp.scope.findings import check_findings
 
+    payload = read_payload() or {}
     config = Config.load(cwd=project_root())
     ffile = config.findings_path / "findings.jsonl"
     if ffile.exists():
         result = check_findings(ffile, config.store_path)
     else:
         result = {"ok": True, "message": f"No findings to check ({ffile} does not exist).", "findings_file": str(ffile)}
+    session = payload.get("session_id")
+    if result.get("problems") and isinstance(session, str) and session:
+        owners = finding_sessions(config.findings_path / "audit.jsonl")
+        mine = []
+        for p in result["problems"]:
+            owner = owners.get(str(p.get("finding_id")))
+            if owner and owner != session:
+                result.setdefault("other_sessions", []).append(p.get("finding_id"))
+            else:
+                mine.append(p)
+        result["problems"] = mine
+        if result.get("other_sessions"):
+            n_bad = len(mine) + len(result.get("parse_errors") or [])
+            result["message"] = f"{ffile}: {n_bad} problem(s) in findings from this session or with no session on record."
     sys.stdout.write(RESULT_PREFIX + json.dumps(result, default=str) + "\n")
     sys.stdout.flush()
     return 0
@@ -171,6 +213,14 @@ def hook_main() -> None:
     if result.get("store_missing"):
         note(f"{result.get('message')} Findings in {result.get('findings_file')} were not verified; allowing the stop.")
         return
+    others = result.get("other_sessions") or []
+    if others:
+        note(
+            f"{len(others)} finding(s) recorded in other sessions cite evidence that doesn't resolve "
+            f"({', '.join(map(str, others[:5]))}); not blocking this session. Run `swarm-mcp check-findings`."
+        )
+        if not (result.get("problems") or result.get("parse_errors")):
+            return
     if not (result.get("problems") or result.get("parse_errors")):
         note(f"the findings check failed without naming a finding ({result.get('message')}). Allowing the stop.")
         return
