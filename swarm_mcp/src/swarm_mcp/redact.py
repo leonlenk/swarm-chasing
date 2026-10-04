@@ -198,7 +198,9 @@ def _r_url_credential(m: re.Match[str], r: Redactor) -> str | None:
 
 _PRIVATE_KEY = re.compile(
     r"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----"
-    r"(?:[\s\S]*?-----END (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----"  # a complete block
+    # a complete block: the body can't run past another BEGIN/END line and is at most 20000 chars,
+    # so many headers without footers stay linear (an unbounded lazy body was quadratic)
+    r"(?:(?:(?!-----(?:BEGIN|END) )[\s\S]){0,20000}-----END (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----"
     r"|(?:[ \t]*\r?\n?[ \t]*[A-Za-z0-9+/=:,-]{8,})*)"  # or a truncated one: eat the base64 lines
 )
 

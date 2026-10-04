@@ -373,3 +373,13 @@ def test_pathological_inputs_stay_linear(blob):
     t = time.perf_counter()
     Redactor.strict().redact(blob)
     assert time.perf_counter() - t < 2
+
+
+def test_many_private_key_headers_stay_linear(r):
+    """Regression: an unbounded lazy body made 20k BEGIN headers without footers take ~24 s."""
+    text = (PK_HEAD + " x\n") * 20000
+    t0 = time.perf_counter()
+    out, c = r.redact(text)
+    assert time.perf_counter() - t0 < 2.0 and c == {"credential": 20000}
+    two = red(r, f"a {PEM} b {PEM} c")
+    assert two == "a [credential] b [credential] c"
