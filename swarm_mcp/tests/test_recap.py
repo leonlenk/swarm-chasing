@@ -102,6 +102,27 @@ def test_rising_term_hand_computed(store_path: Path, tmp_path: Path):
     assert [x["term"] for x in r["rising_terms"]] == ["zorblat"]  # "the" is a stopword: no bigram
 
 
+def test_rising_terms_author_count_paths_agree(store_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """The bitmask author count and its count(DISTINCT) fallback give the same terms; first_id
+    breaks a timestamp tie by evidence id; rows keep the score ranking."""
+    t = datetime(2026, 1, 9, 10, 0)
+    rows = [(who, t, "quuxle frobnitz") for who in ["gpt", "opus"]]  # same ts: syncopy0000 is first
+    rows += [(who, t + timedelta(minutes=5 * k), "quuxle") for k, who in enumerate(["gem", "opus", "gpt"])]
+    rows += [(who, t + timedelta(hours=1, minutes=k), "frobnitz") for k, who in enumerate(["gem", "gpt"])]
+    copy = _copy_with(store_path, tmp_path, rows)
+
+    def run() -> list[dict]:
+        with db.connect(copy) as s:
+            return recap.window_recap(s, "2026-01-08", "2026-01-14", min_term_msgs=3, min_term_agents=2)["rising_terms"]
+
+    masked = run()
+    monkeypatch.setattr(recap, "_MASK_AGENTS", 0)
+    assert run() == masked
+    got = {r["term"]: (r["n"], r["agents"], r["first_id"][-11:]) for r in masked}
+    assert got["quuxle"] == (5, 3, "syncopy0000") and got["frobnitz"] == (4, 3, "syncopy0000")
+    assert [r["score"] for r in masked] == sorted((r["score"] for r in masked), reverse=True)
+
+
 def test_bursts_are_runs_with_small_gaps(store_path: Path):
     with db.connect(store_path) as s:
         r = recap.window_recap(s, "2026-01-19", "2026-01-22", baseline=None)

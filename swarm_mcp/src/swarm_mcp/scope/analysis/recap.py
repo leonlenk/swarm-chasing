@@ -64,6 +64,7 @@ STOPWORDS = frozenset(
 assert all(w.isalpha() and w.islower() for w in STOPWORDS)  # inlined into SQL as a literal list
 _STOP_SQL = "[" + ",".join(f"'{w}'" for w in sorted(STOPWORDS)) + "]::VARCHAR[]"
 TOKEN_RE = "[a-z][a-z0-9_-]{2,}"
+_MASK_AGENTS = 64  # up to this many agents, distinct authors per term are counted with a bitmask
 PRIOR_MASS = 500.0  # cap on a0, the informative Dirichlet prior mass in the rising-terms log-odds
 PRIOR_SHARE = 0.10  # a0 = min(PRIOR_MASS, PRIOR_SHARE * messages in window + baseline)
 MAX_BURST_IDS = 40
@@ -250,15 +251,25 @@ def _recap_batch(
     )
 
     # rising terms: log-odds with an informative Dirichlet prior (Monroe et al. 2008), per
-    # segment against the previous one, over message counts (a message counts a term once)
+    # segment against the previous one, over message counts (a message counts a term once).
+    # Distinct authors per term: a bitmask when the author numbers fit 64 bits (a far smaller
+    # aggregate state than count(DISTINCT), which keeps a hash set per term)
+    agents_sql = "bit_count(bit_or(1::UBIGINT << (aid - 1)))" if len(agents) <= _MASK_AGENTS else "count(DISTINCT aid)"
     term_rows = store.all(
-        f"""{head}, {_terms_cte("(SELECT * FROM m WHERE author_id IN (SELECT agent_id FROM agents))", "seg, evidence_id, author_id, ts")},
-            c AS (SELECT seg, term, count(*) AS n, count(DISTINCT author_id) AS agents,
-                         arg_min(evidence_id, (ts, evidence_id)) AS first_id
+        f"""{head},
+            -- integer keys keep the per-term aggregate states small (fixed-size, no strings):
+            -- ord orders agent messages by (ts, evidence_id), aid numbers the authors
+            am AS (SELECT seg, content, row_number() OVER (ORDER BY ts, evidence_id) AS ord,
+                          dense_rank() OVER (ORDER BY author_id) AS aid
+                   FROM m WHERE author_id IN (SELECT agent_id FROM agents)),
+            {_terms_cte("am", "seg, ord, aid")},
+            c AS (SELECT seg, term, count(*) AS n, {agents_sql} AS agents, min(ord) AS first_ord
                   FROM terms GROUP BY 1, 2),
+            ids AS (SELECT row_number() OVER (ORDER BY ts, evidence_id) AS ord, evidence_id
+                    FROM m WHERE author_id IN (SELECT agent_id FROM agents)),
             tot AS (SELECT seg, count(*) AS N FROM m WHERE author_id IN (SELECT agent_id FROM agents) GROUP BY 1),
             cand AS (
-              SELECT w.seg, w.term, w.n, coalesce(b.n, 0) AS nb, w.agents, w.first_id,
+              SELECT w.seg, w.term, w.n, coalesce(b.n, 0) AS nb, w.agents, w.first_ord,
                      CAST(coalesce(ti.N, 0) AS DOUBLE) AS ni, CAST(coalesce(tj.N, 0) AS DOUBLE) AS nj
               FROM c w
               LEFT JOIN c b ON b.seg = w.seg - 1 AND b.term = w.term
@@ -271,10 +282,14 @@ def _recap_batch(
                     ln((n + a) / greatest(ni + a0 - n - a, 1e-9))
                   - ln((nb + a) / greatest(nj + a0 - nb - a, 1e-9)) AS delta,
                     sqrt(1.0 / (n + a) + 1.0 / (nb + a)) AS se
-                  FROM pr)
-            SELECT seg, term, n, nb, agents, first_id, ni, nj, delta, delta / se AS score
-            FROM z WHERE delta > 0
-            QUALIFY row_number() OVER (PARTITION BY seg ORDER BY delta / se DESC, term) <= ?""",
+                  FROM pr),
+            best AS (SELECT seg, term, n, nb, agents, first_ord, ni, nj, delta, delta / se AS score
+                    FROM z WHERE delta > 0
+                    QUALIFY row_number() OVER (PARTITION BY seg ORDER BY delta / se DESC, term) <= ?)
+            SELECT best.seg, best.term, best.n, best.nb, best.agents, ids.evidence_id AS first_id,
+                   best.ni, best.nj, best.delta, best.score
+            FROM best JOIN ids ON ids.ord = best.first_ord
+            ORDER BY best.seg, best.score DESC, best.term""",
         hp + [int(min_term_msgs), int(min_term_agents), int(top_terms) * 3],
     )
 
