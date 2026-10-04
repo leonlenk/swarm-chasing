@@ -16,13 +16,16 @@ The contract (all at module top level):
     ctx.lazy("key", loader)       compute-once, thread-safe, shared cache
     ctx.log                       logger -> stderr (NEVER print to stdout in stdio mode)
     ctx.limit(limit)              (effective_limit, note) using default 20 / max 200
-    ctx.scrub(text)               mask emails/phones per privacy config
+    ctx.untrusted(text, max_chars) dataset text -> {"content", "untrusted": True}, masked, capped
+                                  (default 500). Use it for EVERY agent/human-authored string you return.
+    ctx.store()                   ``with ctx.store() as s:`` short-lived SwarmScope DuckDB Store
+    ctx.scrub(text)               mask emails/phones per privacy config (untrusted() already does this)
     @ctx.tool()                   register "<NAME>_<fn name>" with clean error handling
     @ctx.resource("path")         register a resource at "<NAME>://path"
     @ctx.prompt()                 register a prompt "<NAME>_<fn name>"
 Use only ctx.* to register things; ``mcp`` is passed for the contract but its
 API is SDK-version-specific (swarm_mcp/sdk.py is the one adapter).
-Helpers in swarm_mcp.toolkit: ToolInputError, truncate, parse_time, iso.
+Helpers in swarm_mcp.toolkit: ToolInputError, untrusted, truncate, snippet, parse_time, iso.
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ from typing import Annotated, Any
 
 from pydantic import Field
 
-from swarm_mcp.toolkit import ToolInputError, truncate
+from swarm_mcp.toolkit import ToolInputError
 
 NAME = "example"
 DESCRIPTION = "One-line description of what these tools are for."
@@ -64,8 +67,8 @@ def register(mcp, ctx) -> None:
         hits = [r for r in rows if query.lower() in r["text"].lower()]
         out = []
         for r in hits[:limit]:
-            text, cut = truncate(ctx.scrub(r["text"]), ctx.config.max_text)
-            out.append({"id": r["id"], "text": text, "truncated": cut})
+            # dataset text is always wrapped: {"content": masked+capped text, "untrusted": True}
+            out.append({"id": r["id"], "text": ctx.untrusted(r["text"])})
         return {"total_matches": len(hits), "returned": len(out), "results": out, "notes": [n for n in [note] if n]}
 
     # Resource (read-only context a client can attach): served at "example://readme".

@@ -9,10 +9,12 @@ Every setting has a default so the server starts with no env at all.
 | SWARM_MCP_DISABLE            | (none)             | comma list of modules to skip                  |
 | SWARM_MCP_DEFAULT_LIMIT      | 20                 | default result count for list/search tools     |
 | SWARM_MCP_MAX_LIMIT          | 200                | hard cap on result counts                      |
-| SWARM_MCP_MAX_TEXT           | 1000               | default max chars per returned text field      |
+| SWARM_MCP_MAX_TEXT           | 500                | default max chars per returned text field      |
 | SWARM_MCP_SCRUB              | 1                  | mask emails/phones in returned text (0 = off)  |
 | SWARM_MCP_EMAIL_ALLOWLIST    | agentvillage.org   | email domains left unmasked (comma list)       |
 | SWARM_MCP_LOG_LEVEL          | INFO               | stderr log level                               |
+| SWARMSCOPE_DB                | <data>/swarmscope.duckdb | the SwarmScope DuckDB store (scope/*)    |
+| SWARMSCOPE_FINDINGS_DIR      | <project>/findings | findings.jsonl + audit.jsonl                   |
 
 A relative SWARM_DATA_DIR is resolved against the current directory if it
 exists there, otherwise against the project root (the nearest ancestor that
@@ -68,11 +70,23 @@ class Config:
     disable: tuple[str, ...] = ()
     default_limit: int = 20
     max_limit: int = 200
-    max_text: int = 1000
+    max_text: int = 500
     scrub: bool = True
     email_allowlist: tuple[str, ...] = ("agentvillage.org",)
     log_level: str = "INFO"
+    db_path: Path | None = None  # None = <data_dir>/swarmscope.duckdb
+    findings_dir: Path | None = None  # None = <project root>/findings
     env: Mapping[str, str] = field(default_factory=dict, repr=False)
+
+    @property
+    def store_path(self) -> Path:
+        """The SwarmScope DuckDB file (SWARMSCOPE_DB, default <data_dir>/swarmscope.duckdb)."""
+        return self.db_path or (self.data_dir / "swarmscope.duckdb")
+
+    @property
+    def findings_path(self) -> Path:
+        """Directory holding findings.jsonl and audit.jsonl."""
+        return self.findings_dir or (find_project_root(Path.cwd()) / "findings")
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None, cwd: Path | None = None) -> "Config":
@@ -83,10 +97,16 @@ class Config:
             disable=_split(env.get("SWARM_MCP_DISABLE")),
             default_limit=max(1, _int(env, "SWARM_MCP_DEFAULT_LIMIT", 20)),
             max_limit=max(1, _int(env, "SWARM_MCP_MAX_LIMIT", 200)),
-            max_text=max(80, _int(env, "SWARM_MCP_MAX_TEXT", 1000)),
+            max_text=max(80, _int(env, "SWARM_MCP_MAX_TEXT", 500)),
             scrub=env.get("SWARM_MCP_SCRUB", "1").strip().lower() not in ("0", "false", "no", "off"),
             email_allowlist=_split(env.get("SWARM_MCP_EMAIL_ALLOWLIST", "agentvillage.org")),
             log_level=(env.get("SWARM_MCP_LOG_LEVEL") or "INFO").upper(),
+            db_path=resolve_data_dir(env["SWARMSCOPE_DB"], cwd) if env.get("SWARMSCOPE_DB") else None,
+            findings_dir=(
+                resolve_data_dir(env["SWARMSCOPE_FINDINGS_DIR"], cwd)
+                if env.get("SWARMSCOPE_FINDINGS_DIR")
+                else find_project_root(cwd or Path.cwd()) / "findings"
+            ),
             env=env,
         )
 
@@ -107,4 +127,7 @@ class Config:
             "scrub": self.scrub,
             "email_allowlist": list(self.email_allowlist),
             "log_level": self.log_level,
+            "db_path": str(self.store_path),
+            "db_exists": self.store_path.exists(),
+            "findings_dir": str(self.findings_path),
         }

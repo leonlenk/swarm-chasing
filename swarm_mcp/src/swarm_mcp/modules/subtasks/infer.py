@@ -24,8 +24,9 @@ Handoffs are derived from the artifacts, independently of clustering, between *d
     resubmits   B's unit creates the same artifact A's earlier unit created (took over / re-opened A's work)
     duplicate   near-identical title+content, different actors, no link between them, not both completed
 
-Hub artifacts (touched by >8% of units and by at least 5, plus package.json/README/index.html/styles.css)
-never create handoffs, and imports re-added by pasting an older copy of a file are ignored (see git.data).
+Hub artifacts (touched by >8% of units and by at least 5, or flagged ``hub`` by the adapter) never create
+handoffs; ``tests`` needs the adapter to flag test artifacts (``role: test``). Artifact *names* (not ids) feed
+the text signals. Imports re-added by pasting an older copy of a file are ignored (see the git adapter).
 """
 
 from __future__ import annotations
@@ -63,7 +64,6 @@ METHOD_DESCRIPTIONS = {
 PR_RX = re.compile(r"(?:\bPRs?\s*#?|pull/)(\d{1,4})\b|(?<![\w&])#(\d{2,4})\b", re.I)
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}")
 FIXRE = re.compile(r"^\s*(?:\w+(?:\([^)]*\))?:\s*)?(fix|hotfix|repair|revert|restore)\b|\brevert\b", re.I)
-HUB_NAMES = {"package.json", "README.md", "index.html", "styles.css"}
 
 JS_STOP = set(
     """const let var function return import export from default class this new null undefined true false if else
@@ -77,9 +77,9 @@ TXT_STOP = set(
 from to of in on a an by pr prs merge merged pull request requests new system systems module modules integration
 integrate integrated integrating wire wired wiring implement implemented implementation support use using via all
 its it this that is are be as or vs our we i you please review approve approved approval lgtm thanks thank looks
-good can will now just also ready done check checked scan scanned clean egg eggs easter saboteur here there let lets
+good can will now just also ready done check checked scan scanned clean here there let lets
 im ive ill should would could has have had was were been more some any no not yes ok okay main branch commit
-commits rebase rebased conflict conflicts day issue issues game rpg comprehensive core basic initial""".split()
+commits rebase rebased conflict conflicts day issue issues comprehensive core basic initial""".split()
 )
 
 
@@ -132,6 +132,7 @@ class Action:
     time: str  # dataset timestamp format, UTC
     text: str  # commit subject, edit summary...
     changes: list[Change] = field(default_factory=list)
+    mentions: list[str] = field(default_factory=list)  # artifacts it links to without changing them
 
 
 @dataclass
@@ -277,8 +278,20 @@ def _ari(a: np.ndarray, b: np.ndarray) -> float:
 # --------------------------------------------------------------------------- main entry
 
 
-def infer(corpus: str, units: list[Unit], chat: list[ChatMsg], dup_min: float = DUP_MIN) -> Inference:
-    """Cluster ``units`` and derive handoffs. ``chat``: messages already linked to unit event ids."""
+def infer(
+    corpus: str,
+    units: list[Unit],
+    chat: list[ChatMsg],
+    dup_min: float = DUP_MIN,
+    artifact_meta: dict[str, dict] | None = None,
+) -> Inference:
+    """Cluster ``units`` and derive handoffs. ``chat``: messages already linked to unit event ids.
+    ``artifact_meta``: artifact id -> {"name", "hub", "role"} from the adapter."""
+    am = artifact_meta or {}
+
+    def aname(art: str) -> str:
+        return am.get(art, {}).get("name") or art.split(":", 2)[-1]
+
     order = sorted(units, key=lambda u: (u.start, u.event_id))
     idx = {u.event_id: i for i, u in enumerate(order)}
     N = len(order)
@@ -322,7 +335,7 @@ def infer(corpus: str, units: list[Unit], chat: list[ChatMsg], dup_min: float = 
                         for w in words(ident):
                             if w not in JS_STOP:
                                 code[stem(w)] += 1
-                for w in file_words(path):
+                for w in file_words(aname(path)):
                     code[w] += 2
         author = counts.most_common(1)[0][0] if counts else None
         if author:
@@ -398,7 +411,7 @@ def infer(corpus: str, units: list[Unit], chat: list[ChatMsg], dup_min: float = 
             v = np.asarray(X[c].sum(0)).ravel()
             for t in np.argsort(-v)[:8]:
                 if v[t] > 0:
-                    term = inv[t] if key != "files" else " ".join(file_words(inv[t]))
+                    term = inv[t] if key != "files" else " ".join(file_words(aname(inv[t])))
                     if term:
                         sc[term] += w * v[t]
         out: list[str] = []
@@ -416,10 +429,10 @@ def infer(corpus: str, units: list[Unit], chat: list[ChatMsg], dup_min: float = 
 
     # ---- handoffs
     touch_ct = collections.Counter(path for f in F for path in f["files"])
-    hub = {p for p, c in touch_ct.items() if c > max(0.08 * N, 4) or p.rsplit("/", 1)[-1] in HUB_NAMES}
+    hub = {p for p, c in touch_ct.items() if c > max(0.08 * N, 4) or am.get(p, {}).get("hub")}
     stem_of: dict[str, list[str]] = collections.defaultdict(list)
     for path in creator:
-        stem_of[module_stem(path)].append(path)
+        stem_of[module_stem(aname(path))].append(path)
     raw: dict[tuple[int, int, str], Edge] = {}
 
     def add(i: int, j: int, kind: str, path: str, a: str, b: str, act_a: str, act_b: str) -> None:
@@ -439,7 +452,7 @@ def infer(corpus: str, units: list[Unit], chat: list[ChatMsg], dup_min: float = 
                 if i == j or a == b or order[i].start > order[j].start:
                     continue
                 add(i, j, "resubmits" if path in f["created"] else "builds_on", path, a, b, sha_a, sha_b)
-        only_tests = all(q.startswith("test") or q in hub for q in f["files"])
+        only_tests = bool(f["files"]) and all(am.get(q, {}).get("role") == "test" or q in hub for q in f["files"])
         for target, (b, sha_b) in f["imports"].items():
             for path in stem_of.get(module_stem(target), []):
                 i, a, _, sha_a = creator[path]

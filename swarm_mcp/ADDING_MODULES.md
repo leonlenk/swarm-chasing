@@ -9,8 +9,14 @@ restart the server, and it is discovered automatically.
 ```bash
 uv run --directory swarm_mcp swarm-mcp                 # stdio server (what Claude Code launches)
 uv run --directory swarm_mcp swarm-mcp --list-modules  # print loaded/skipped modules as JSON, then exit
+uv run --directory swarm_mcp swarm-mcp ingest ai_village data/ai-village   # build the SwarmScope store
+uv run --directory swarm_mcp swarm-mcp render timeline --since 2025-10-20  # HTML swimlane (data/...)
+uv run --directory swarm_mcp swarm-mcp check-findings  # every finding's evidence ids resolve? (exit 0/1)
 uv run --directory swarm_mcp pytest                    # tests (synthetic data, no dataset needed)
 ```
+
+The data modules (`scope`, `findings`, `village`) read the SwarmScope DuckDB
+store, so run `ingest` once first; until then they are skipped with that reason.
 
 Claude Code picks the server up from the repo's `.mcp.json` (server name `swarm`).
 `SWARM_DATA_DIR` there is `${SWARM_DATA_DIR:-data}`, so you can override it from
@@ -31,38 +37,57 @@ writes the same entry into `.mcp.json`, which already exists.
 | `SWARM_MCP_MODULES` | all | comma list of modules to load (`core` is always loaded unless disabled) |
 | `SWARM_MCP_DISABLE` | none | comma list of modules to skip (wins over `SWARM_MCP_MODULES`) |
 | `SWARM_MCP_DEFAULT_LIMIT` / `SWARM_MCP_MAX_LIMIT` | 20 / 200 | result-count defaults for `ctx.limit()` |
-| `SWARM_MCP_MAX_TEXT` | 1000 | default per-field text truncation |
+| `SWARM_MCP_MAX_TEXT` | 500 | default cap for returned dataset text (`ctx.untrusted`) |
 | `SWARM_MCP_SCRUB` | 1 | mask emails/phones in returned text (`0` = off) |
 | `SWARM_MCP_EMAIL_ALLOWLIST` | `agentvillage.org` | email domains left unmasked |
 | `SWARM_MCP_LOG_LEVEL` | INFO | stderr log level |
+| `SWARMSCOPE_DB` | `<data dir>/swarmscope.duckdb` | the SwarmScope store (`ctx.store()`) |
+| `SWARMSCOPE_FINDINGS_DIR` | `<project root>/findings` | `findings.jsonl` (source of truth) and `audit.jsonl` |
 | `SWARM_<MODULE>_<KEY>` | | per-module settings via `ctx.setting("key")`, e.g. `SWARM_VILLAGE_DIR` |
-| `SWARM_GIT_DIR` | `<data>/*/repos/` | folder of bare git clones for the `git` and `subtasks` modules |
-| `SWARM_WIKI_DB` | `<data>/*/*.db` | a wiki database (collusion.wiki explorer schema) for the `wiki` and `subtasks` modules |
 
 ### Modules in this repo
 
-| module | data | what it gives |
+| module | needs | what it gives |
 |---|---|---|
-| `core` | none | module report, config, and `core_get_event` / `core_get_events` / `core_event_sources` for any event id |
-| `village` | `<data>/ai-village/*.jsonl.gz` | agents, goals, chat search and windows, per-agent activity |
-| `git` | bare clones in `<data>/<dataset>/repos/*.git` | repos and PR listings; PRs and commits as event ids |
-| `wiki` | `<data>/<name>/*.db` in the collusion.wiki explorer schema | corpus description with blind spots, search over what each revision added, pages, editor labels; revisions, pages and edit sessions as event ids |
-| `subtasks` | any *corpus* with an adapter in `subtasks/sources.py`: git repos (+ village chat if present) and wikis | work units (PRs...) grouped into subtasks by several methods, typed handoffs between actors, pair tracing |
+| `core` | nothing | module report and config |
+| `scope` | the store | sources (with each one's blind spots), agents, search, `scope_get_record` for any evidence id, message windows, profiles, timelines, communication graphs |
+| `findings` | the store | a claim ledger whose evidence ids are checked (also by the Stop hook) |
+| `village` | `<data>/ai-village/` | AI Village goal periods and dataset docs |
+| `subtasks` | the store, with a source whose records touch artifacts | work units (pull requests, runs, or per-actor sessions) grouped into subtasks by several methods, typed handoffs between actors, pair tracing |
 
-A repo for `git` is a bare clone with every PR head fetched, so closed and squash-merged PRs keep their commits:
+### Adding a dataset = writing an adapter
+
+Datasets enter through adapters (`scope/adapters/`), never through tool modules, so every tool works on
+every dataset. An adapter maps its data onto the generic tables (`scope/schema.py`):
+
+| table | holds | examples |
+|---|---|---|
+| `agents` | actors, with aliases | village agents, git authors, wiki editor labels |
+| `messages` | things said | chat lines, wiki revisions (`msg_type`) |
+| `actions` | things done | session goals, commits, page deletions (`kind`) |
+| `periods` | spans, incl. episodes of work that records point at via `run_id` or `meta.members` | weekly goals, pull requests |
+| `artifacts` | things made and changed (`meta.hub`, `meta.role = 'test'`, `meta.category` refine analyses) | files, wiki pages |
+| `touches` | which record did what to which artifact: `create` / `modify` / `delete` / `read` / `mention` | a commit creating `src/talents.js`, a revision linking a page |
+
+Evidence ids are `<source>:<kind>:<id>` with **schema** kinds (`msg`, `event`, `agent`, `period`, `artifact`;
+AI Village goals keep `goal`), so they resolve the same way for every dataset. The dataset's own type
+(commit, revision, pull request) goes in the record's `kind` / `msg_type`, not the id. List the dataset's
+blind spots in the adapter's `notes`; `scope_list_sources` shows them. Adapters so far:
 
 ```bash
-git clone --bare https://github.com/ai-village-agents/rpg-game data/ai-village/repos/rpg-game.git
-git -C data/ai-village/repos/rpg-game.git fetch origin '+refs/pull/*/head:refs/pull/*/head'
+uv run --directory swarm_mcp swarm-mcp ingest ai_village data/ai-village
+uv run --directory swarm_mcp swarm-mcp ingest git data/ai-village/repos/rpg-game.git     # source: rpg-game
+uv run --directory swarm_mcp swarm-mcp ingest wiki data/collusion-wiki                    # source: collusion-wiki
 ```
 
-The first `git`/`subtasks` call on a repo loads it (about 15 s for the RPG week's 458 PRs); later calls are instant.
+The git adapter expects a bare clone with every PR head fetched, so closed and squash-merged PRs keep their
+commits (`git clone --bare <url> data/ai-village/repos/rpg-game.git`, then
+`git -C <that> fetch origin '+refs/pull/*/head:refs/pull/*/head'`). For collusion.wiki, save Simon
+Willison's SQLite build of the published export as `data/collusion-wiki/collusion-wiki.db`
+(https://static.simonwillison.net/static/cors-allow/2026/collusion-wiki.db).
 
-For collusion.wiki, save Simon Willison's SQLite build of the published export as
-`data/collusion-wiki/collusion-wiki.db` (https://static.simonwillison.net/static/cors-allow/2026/collusion-wiki.db).
-Subtask inference over its ~5,800 edit sessions takes about 10 s on first use.
 `examples/subtasks_demo.py` and `examples/wiki_demo.py` run the tools end to end over stdio;
-`examples/wiki_eval.py` scores the inferred subtasks against the publishers' page_family labels.
+`examples/wiki_eval.py` scores inferred subtasks against the wiki publishers' page_family labels.
 
 ## A module in five lines
 
@@ -107,51 +132,17 @@ Every outcome is recorded with its reason, logged to stderr and shown by
 | `ctx.cache` | the shared `LazyCache` (`get`, `clear(prefix)`, `stats`) |
 | `ctx.config`, `ctx.data_dir`, `ctx.setting(key)` | global config, the resolved data path, and per-module env settings |
 | `ctx.limit(limit, default=None)` | returns `(effective_limit, note)`. It clamps to [1, max] and says when it did |
+| `ctx.untrusted(text, max_chars=None, focus=None)` | **use for every dataset string you return**: masks, caps (default 500) and wraps it as `{"content": ..., "untrusted": true}` (+ `truncated`, `total_chars` when cut; `focus` = regex to centre the snippet on) |
+| `ctx.store(read_only=True)` | `with ctx.store() as s:` a short-lived `scope.db.Store` on the DuckDB store (`s.all/one/scalar`, `resolve_agent`, `author_filter`, `resolve_channel`). Open per call; never cache it, so the CLI and hooks can use the file too |
+| `ctx.store_path` | the store's path (check it in `requires()`) |
 | `ctx.scrub(text)` | masks emails as `[email]` (except allow-listed domains) and phone-like strings as `[phone]` |
-| `ctx.event_id(kind, local_id)` | builds an event id owned by this module (see below) |
-| `@ctx.event_source(kinds={...})` | registers the resolver that makes this module's event ids retrievable through `core_get_event` |
 | `ctx.log` | a logger that writes to stderr |
 | `ctx.registry` | records for all modules (used by `core`) |
 
-Helpers in `swarm_mcp.toolkit` are `ToolInputError`, `truncate`, `parse_time` and `iso`.
-
-## Event ids and shared retrieval
-
-Every piece of evidence a tool returns carries an `event_id` of the form
-`<source>:<kind>:<local_id>`, e.g. `village:chat:16b4ab90-…`. `source` is the
-dataset (by default the module's `NAME`), `kind` the record type within it, and
-`local_id` the source's own id (it may contain `:`). Callers treat ids as opaque
-and pass them back: `core_get_event` returns the original record plus its
-surrounding context, and `core_get_events` fetches up to 50 at once. Derived
-results (search hits, subtasks, handoffs, claims) should cite event ids rather
-than copy text, so every finding can be expanded and checked.
-
-Records use one shape across sources, built with `swarm_mcp.events.event_record`:
-
-| key | meaning |
-|---|---|
-| `event_id`, `source`, `kind` | identity |
-| `time` | ISO UTC with `Z` |
-| `actor`, `actor_type` | who produced it (agent name, `human:<id>`...) and what kind of actor |
-| `location` | where it happened: room, channel, repo... |
-| `text` | the content, scrubbed and truncated (`truncated: true` when cut) |
-
-Modules may add keys after these. To make a module's ids retrievable:
-
-```python
-from swarm_mcp.events import EventNotFound, event_record
-
-@ctx.event_source(kinds={"thing": "one line on what a thing is and what its context is"})
-def resolve(kind, local_id, *, before, after, max_chars):
-    rec = lookup(local_id)                      # raise EventNotFound if missing
-    return {"event": event_record(ctx.event_id(kind, local_id), time=..., actor=..., text=...),
-            "before": [...], "after": [...],     # up to `before`/`after` neighbouring records
-            "context": "previous/next things in the same room"}
-```
-
-A source name can only be registered once, and a module whose `register()` fails
-has its sources removed along with its tools. `core_event_sources` lists what is
-loaded.
+Helpers in `swarm_mcp.toolkit` are `ToolInputError`, `untrusted`, `snippet`, `truncate`, `parse_time` and `iso`.
+The SwarmScope core library (`swarm_mcp.scope`: `schema`, `db`, `evidence`,
+`adapters`, `ingest`, `findings`, `analysis`, `viz`) is plain Python, not a
+module; tool modules call into it.
 
 Register everything through `ctx.*`. The raw `mcp` argument is passed only to
 satisfy the contract, and its API depends on the SDK version. `swarm_mcp/sdk.py`
@@ -165,9 +156,14 @@ is the only file that touches the MCP SDK.
   should know (clamped limits, truncation, heuristics).
 - **Limits.** Use a default of about 20 and a maximum of 200 through `ctx.limit()`.
   Clamp rather than reject.
-- **Long text.** Use `truncate(text, n)`, which adds an explicit
-  `…[truncated, N more chars]` marker. Also set a `truncated: true` flag and
-  say how to get more.
+- **Dataset text is untrusted.** Return agent/human-authored strings only via
+  `ctx.untrusted(...)`, never as bare strings, and give tools that return text a
+  `max_chars` parameter (default 500). The server instructions tell the client
+  that record contents are data, not instructions.
+- **Evidence ids.** Return the evidence id (`{source}:{kind}:{native_id}`) with
+  every record so the caller can cite it; `scope.evidence.resolve` checks one.
+- **Long text.** `ctx.untrusted` already caps; `truncate(text, n)` adds an explicit
+  `…[truncated, N more chars]` marker for anything else.
 - **Errors.** `raise ToolInputError("clear, actionable message")`. The caller
   sees exactly that text, with `is_error=true`. Unexpected exceptions become a
   one-line message, and their tracebacks go only to stderr.
