@@ -136,7 +136,12 @@ def coordinators(data: Data) -> dict[str, Any]:
     ranked = sorted((a for a, s in score.items() if s >= MIN_COORDINATED), key=lambda a: (-score[a], a))
     return {
         "coordinators": [
-            {"actor": agent_eid(a), "name": data.agents.get(a), "score": float(score[a]), "example_event_ids": examples[a]}
+            {
+                "actor": agent_eid(a),
+                "name": data.agents.get(a),
+                "score": float(score[a]),
+                "example_event_ids": examples[a],
+            }
             for a in ranked
         ]
     }
@@ -185,7 +190,7 @@ def integrity(data: Data) -> dict[str, Any]:
     # gaps: long silences between an agent's first and last activity
     gaps = []
     for who, acts in sorted(_activity(data).items()):
-        for (t0, e0), (t1, e1) in zip(acts, acts[1:]):
+        for (t0, e0), (t1, e1) in zip(acts, acts[1:], strict=False):
             if t1 - t0 > GAP_THRESHOLD:
                 gaps.append(
                     {
@@ -206,7 +211,13 @@ def integrity(data: Data) -> dict[str, Any]:
     for m in data.msgs:
         e = talk.get(m["id"])
         if e is None:
-            issues.append({"event_id": chat_eid(m["id"]), "issue": "missing_event", "chat_speaker": agent_eid(m["agent_speaker_id"])})  # fmt: skip
+            issues.append(
+                {
+                    "event_id": chat_eid(m["id"]),
+                    "issue": "missing_event",
+                    "chat_speaker": agent_eid(m["agent_speaker_id"]),
+                }
+            )
         elif e["data"].get("speakerId") != m["agent_speaker_id"]:
             issues.append(
                 {

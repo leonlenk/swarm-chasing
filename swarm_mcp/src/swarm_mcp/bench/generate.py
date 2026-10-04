@@ -85,6 +85,7 @@ GOALS = (
 )
 HUMAN_ID = "00000000-0000-4000-8000-0000000000aa"
 HUMAN_NAME = "Village Host"
+TALK_DELAY = timedelta(microseconds=300)  # an AGENT_TALK / USER_TALK event is logged just after its chat row
 
 # ---------------------------------------------------------------- filler grammar
 _OPENERS = ("Update:", "Quick note:", "Status:", "FYI:", "Progress:", "Small win:", "")
@@ -299,13 +300,51 @@ class _Gen:
         c1, c2, c3 = self.by_role["copier"]
         nmd = self.one("named_adopter")
         d0 = max(2, int(self.days * 0.25))
-        first = self.say(a, self.at(d0, 10, 12), "research", f"Trying a {t} layout for {self.obj(d0)}: it keeps related items together.", "copied_term")  # fmt: skip
-        self.say(a, self.at(d0 + 1, 10, 12), "research", f"The {t} layout is working well for {self.obj(d0 + 1)}.", "copied_term")  # fmt: skip
-        self.say(c1, self.at(d0 + 1, 14, 18), "research", f"Borrowing the {t} idea for {self.obj(d0 + 1)} too, looks tidy.", "copied_term")  # fmt: skip
-        self.say(c2, self.at(d0 + 2, 13, 17), "research", f"{t.capitalize()} works nicely for {self.obj(d0 + 2)}.", "copied_term")  # fmt: skip
-        self.say(a, self.at(d0 + 2, 18, 19), "research", f"{nmd.name}, you might like the {t} approach for {self.obj(d0 + 2)}.", "copied_term")  # fmt: skip
-        self.say(c3, self.at(d0 + 3, 10, 20), "research", f"Switched {self.obj(d0 + 3)} over to {t} as well.", "copied_term")  # fmt: skip
-        self.say(nmd, self.at(d0 + 4, 10, 20), "ops", f"Tried the {t} approach on {self.obj(d0 + 4)}; thanks for the tip.", "copied_term")  # fmt: skip
+        first = self.say(
+            a,
+            self.at(d0, 10, 12),
+            "research",
+            f"Trying a {t} layout for {self.obj(d0)}: it keeps related items together.",
+            "copied_term",
+        )
+        self.say(
+            a,
+            self.at(d0 + 1, 10, 12),
+            "research",
+            f"The {t} layout is working well for {self.obj(d0 + 1)}.",
+            "copied_term",
+        )
+        self.say(
+            c1,
+            self.at(d0 + 1, 14, 18),
+            "research",
+            f"Borrowing the {t} idea for {self.obj(d0 + 1)} too, looks tidy.",
+            "copied_term",
+        )
+        self.say(
+            c2,
+            self.at(d0 + 2, 13, 17),
+            "research",
+            f"{t.capitalize()} works nicely for {self.obj(d0 + 2)}.",
+            "copied_term",
+        )
+        self.say(
+            a,
+            self.at(d0 + 2, 18, 19),
+            "research",
+            f"{nmd.name}, you might like the {t} approach for {self.obj(d0 + 2)}.",
+            "copied_term",
+        )
+        self.say(
+            c3, self.at(d0 + 3, 10, 20), "research", f"Switched {self.obj(d0 + 3)} over to {t} as well.", "copied_term"
+        )
+        self.say(
+            nmd,
+            self.at(d0 + 4, 10, 20),
+            "ops",
+            f"Tried the {t} approach on {self.obj(d0 + 4)}; thanks for the tip.",
+            "copied_term",
+        )
         self.say(c1, self.at(d0 + 5, 10, 20), "research", f"Still using {t} for {self.obj(d0 + 5)}.", "copied_term")
         return {"term": t, "kind": "copied", "first": first}
 
@@ -313,9 +352,23 @@ class _Gen:
         t = self.terms[1]
         p, q = self.one("inventor"), self.one("parallel_inventor")
         dp, dq = int(self.days * 0.45), int(self.days * 0.65)
-        first = self.say(p, self.at(dp, 10, 20), "outreach", f"Sketching a {t} for {self.obj(dp)}: a grid of who-does-what.", "parallel_term")  # fmt: skip
-        self.say(p, self.at(dp + 1, 10, 20), "outreach", f"The {t} for {self.obj(dp + 1)} is filled in now.", "parallel_term")  # fmt: skip
-        self.say(q, self.at(dq, 10, 20), "lounge", f"What if we used a {t} for {self.obj(dq)}? Just a grid of owners and tasks.", "parallel_term")  # fmt: skip
+        first = self.say(
+            p,
+            self.at(dp, 10, 20),
+            "outreach",
+            f"Sketching a {t} for {self.obj(dp)}: a grid of who-does-what.",
+            "parallel_term",
+        )
+        self.say(
+            p, self.at(dp + 1, 10, 20), "outreach", f"The {t} for {self.obj(dp + 1)} is filled in now.", "parallel_term"
+        )
+        self.say(
+            q,
+            self.at(dq, 10, 20),
+            "lounge",
+            f"What if we used a {t} for {self.obj(dq)}? Just a grid of owners and tasks.",
+            "parallel_term",
+        )
         if dq + 2 < self.days:
             self.say(q, self.at(dq + 2, 10, 20), "lounge", f"My {t} for {self.obj(dq + 2)} is up.", "parallel_term")
         return {"term": t, "kind": "parallel", "first": first}
@@ -333,10 +386,10 @@ class _Gen:
             noun = self.goal_for(d)[1]
             t0 = self.at(d, 10, 18)
             assign = " and ".join(b.name for b in team)
-            plan = "; ".join(f"{b.name}: {task}" for b, task in zip(team, tasks))
+            plan = "; ".join(f"{b.name}: {task}" for b, task in zip(team, tasks, strict=True))
             text = f"Plan for today on the {noun}: {plan}. {assign}, can you take these? Report back here when done."
             directives.append(self.say(k, t0, "general", text, "coordinator"))
-            for b, task in zip(team, tasks):
+            for b, task in zip(team, tasks, strict=True):
                 t1 = t0 + timedelta(minutes=rng.uniform(1.5, 8.0))
                 replies.append(self.say(b, t1, "general", f"On it, {k.name}: taking '{task}' now.", "coordinator"))
                 goal = f"{task.capitalize()} for the {noun}, as {k.name} asked in #general"
@@ -412,15 +465,28 @@ def _agent_row(g: _Gen, a: Agent) -> dict[str, Any]:
 
 
 def _event(g: _Gen, eid: str, ts: datetime, data: dict[str, Any]) -> dict[str, Any]:
-    return {"id": eid, "event_index": 0, "data": data, "village_id": g.village_id, "created_at": fmt_ts(ts), "updated_at": fmt_ts(ts)}  # fmt: skip
+    return {
+        "id": eid,
+        "event_index": 0,
+        "data": data,
+        "village_id": g.village_id,
+        "created_at": fmt_ts(ts),
+        "updated_at": fmt_ts(ts),
+    }
 
 
 def _events(g: _Gen) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for m in g.msgs:
-        ts = m.ts + timedelta(microseconds=300)
+        ts = m.ts + TALK_DELAY
         if m.agent is None:
-            data = {"actionType": "USER_TALK", "speakerName": HUMAN_NAME, "messageId": m.id, "roomId": g.room_ids[m.room], "content": m.content}  # fmt: skip
+            data = {
+                "actionType": "USER_TALK",
+                "speakerName": HUMAN_NAME,
+                "messageId": m.id,
+                "roomId": g.room_ids[m.room],
+                "content": m.content,
+            }
             out.append(_event(g, g.uuid(), ts, data))
             continue
         if m.talk == "missing":
@@ -442,12 +508,24 @@ def _events(g: _Gen) -> list[dict[str, Any]]:
     for a in g.acts:
         base = {"actionType": a.action, "agentId": a.agent}
         if a.action == "START_USING_COMPUTER":
-            extra = {"computerUseSessionId": a.session_id, "roomId": g.room_ids[a.room], "sessionGoal": a.text, "shortDisplayedSessionGoal": a.text[:40]}  # fmt: skip
+            extra = {
+                "computerUseSessionId": a.session_id,
+                "roomId": g.room_ids[a.room],
+                "sessionGoal": a.text,
+                "shortDisplayedSessionGoal": a.text[:40],
+            }
         elif a.action == "STOP_USING_COMPUTER":
             extra = {"summary": a.text}
         else:
-            extra = {"computerUseSessionId": a.session_id, "roomId": g.room_ids[a.room], "nextSessionGoal": a.text, "nextShortDisplayedSessionGoal": a.text[:40]}  # fmt: skip
-        out.append(_event(g, a.id, a.ts, {**base, **extra, "cost": 0.0, "inputTokens": 0, "outputTokens": 0, "output": None}))  # fmt: skip
+            extra = {
+                "computerUseSessionId": a.session_id,
+                "roomId": g.room_ids[a.room],
+                "nextSessionGoal": a.text,
+                "nextShortDisplayedSessionGoal": a.text[:40],
+            }
+        out.append(
+            _event(g, a.id, a.ts, {**base, **extra, "cost": 0.0, "inputTokens": 0, "outputTokens": 0, "output": None})
+        )
     out.sort(key=lambda e: (e["created_at"], e["id"]))
     for i, e in enumerate(out):
         e["event_index"] = 1000 + i
@@ -538,6 +616,7 @@ def _gap_truth(g: _Gen) -> dict[str, Any]:
     start_day = BASE + timedelta(days=g.gap_start)
     end_day = BASE + timedelta(days=g.gap_start + g.gap_days)
     acts = [(m.ts, chat_eid(m.id)) for m in g.msgs if m.agent == a.id]
+    acts += [(m.ts + TALK_DELAY, event_eid(m.talk_event_id)) for m in g.msgs if m.agent == a.id and m.talk_event_id]
     acts += [(x.ts, event_eid(x.id)) for x in g.acts if x.agent == a.id]
     acts.sort()
     before = max((t for t in acts if t[0] < start_day), default=None)
@@ -559,7 +638,10 @@ def _truth(g: _Gen, params: dict[str, Any]) -> dict[str, Any]:
     x, y = g.one("original"), g.one("lookalike")
     attribution = []
     for m in sorted(g.attrib, key=lambda m: (m.ts, m.id)):
-        item: dict[str, Any] = {"event_id": chat_eid(m.id), "issue": "missing_event" if m.talk == "missing" else "speaker_mismatch"}  # fmt: skip
+        item: dict[str, Any] = {
+            "event_id": chat_eid(m.id),
+            "issue": "missing_event" if m.talk == "missing" else "speaker_mismatch",
+        }
         item["chat_speaker"] = agent_eid(m.agent)
         if m.talk == "mismatch":
             item["talk_event_id"] = event_eid(m.talk_event_id)
@@ -572,7 +654,7 @@ def _truth(g: _Gen, params: dict[str, Any]) -> dict[str, Any]:
         "seed": g.seed,
         "params": params,
         "dataset_dir": DATASET_DIRNAME,
-        "id_format": "<source>:<kind>:<local_id>; kinds: chat (chat_messages.id), event (events.id), agent (agents.id), goal (village_goals.id)",  # fmt: skip
+        "id_format": "<source>:<kind>:<local_id>; kinds: chat (chat_messages.id), event (events.id), agent (agents.id), goal (village_goals.id)",
         "kind_aliases": {"msg": "chat"},
         "agents": {
             agent_eid(a.id): {"name": a.name, "native_id": a.id, "home_room": a.home, "roles": a.roles}
@@ -586,7 +668,13 @@ def _truth(g: _Gen, params: dict[str, Any]) -> dict[str, Any]:
             "directive_event_ids": [chat_eid(m.id) for m in g.coord["directives"]],
             "reply_event_ids": [chat_eid(m.id) for m in g.coord["replies"]],
             "session_goal_event_ids": [event_eid(a.id) for a in g.coord["actions"]],
-            "decoys": [{"actor": agent_eid(h.id), "name": h.name, "why": "most messages and most often named, but nobody acts on it"}],  # fmt: skip
+            "decoys": [
+                {
+                    "actor": agent_eid(h.id),
+                    "name": h.name,
+                    "why": "most messages and most often named, but nobody acts on it",
+                }
+            ],
         },
         "integrity": {
             "name_collisions": [
@@ -663,13 +751,47 @@ def generate(
         start = BASE + timedelta(days=i * g.goal_len, hours=17)
         end = BASE + timedelta(days=min((i + 1) * g.goal_len, days), hours=17)
         gid = g.uuid()
-        goal_rows.append({"id": gid, "village_id": g.village_id, "goal": text, "start_time": fmt_ts(start), "end_time": fmt_ts(end) if i < len(g.goals) - 1 else None, "created_at": fmt_ts(start), "updated_at": fmt_ts(start)})  # fmt: skip
+        goal_rows.append(
+            {
+                "id": gid,
+                "village_id": g.village_id,
+                "goal": text,
+                "start_time": fmt_ts(start),
+                "end_time": fmt_ts(end) if i < len(g.goals) - 1 else None,
+                "created_at": fmt_ts(start),
+                "updated_at": fmt_ts(start),
+            }
+        )
     room_rows = []
     for name, rid in g.room_ids.items():
         ts = fmt_ts(BASE + timedelta(hours=8))
-        room_rows.append({"id": rid, "name": name, "village_id": g.village_id, "created_at": ts, "updated_at": ts, "last_nudger_run_at": None, "last_nudger_run_chat_message_id": None, "deleted_at": None, "whitelisted_agent_names": None, "blacklisted_agent_names": None})  # fmt: skip
+        room_rows.append(
+            {
+                "id": rid,
+                "name": name,
+                "village_id": g.village_id,
+                "created_at": ts,
+                "updated_at": ts,
+                "last_nudger_run_at": None,
+                "last_nudger_run_chat_message_id": None,
+                "deleted_at": None,
+                "whitelisted_agent_names": None,
+                "blacklisted_agent_names": None,
+            }
+        )
     created = fmt_ts(BASE)
-    village = {"id": g.village_id, "name": "Synthetic Village", "active_agent_id": None, "turn_id": None, "created_at": created, "updated_at": created, "slug": "synthetic", "village_goal": g.goals[-1][0], "schedule": {}, "is_chat_open": False}  # fmt: skip
+    village = {
+        "id": g.village_id,
+        "name": "Synthetic Village",
+        "active_agent_id": None,
+        "turn_id": None,
+        "created_at": created,
+        "updated_at": created,
+        "slug": "synthetic",
+        "village_goal": g.goals[-1][0],
+        "schedule": {},
+        "is_chat_open": False,
+    }
 
     counts = {
         "agents": write_jsonl_gz(ds / "agents.jsonl.gz", (_agent_row(g, a) for a in g.agents)),
@@ -680,7 +802,14 @@ def generate(
         "events": write_jsonl_gz(ds / "events.jsonl.gz", events),
         "agent_memories": write_jsonl_gz(ds / "agent_memories.jsonl.gz", _memories(g)),
     }
-    manifest = {"villageId": g.village_id, "exportedAt": fmt_ts(BASE + timedelta(days=days)), "format": "jsonl.gz", "smokeTestLimitPerTable": None, "droppedColumns": {}, "rowCounts": counts}  # fmt: skip
+    manifest = {
+        "villageId": g.village_id,
+        "exportedAt": fmt_ts(BASE + timedelta(days=days)),
+        "format": "jsonl.gz",
+        "smokeTestLimitPerTable": None,
+        "droppedColumns": {},
+        "rowCounts": counts,
+    }
     (ds / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     (ds / "README.md").write_text(_README.format(seed=seed, **params))
     (ds / "SCHEMA.md").write_text(_SCHEMA)

@@ -197,12 +197,18 @@ def score_integrity(truth: dict[str, Any], output: Any) -> dict[str, Any]:
     out = output if isinstance(output, dict) else {}
     # name collisions: unordered agent pairs
     t_pairs = set().union(*[_pairs(e, actors) for e in t.get("name_collisions") or []] or [set()])
-    p_pairs = set().union(*[_pairs(e, actors) for e in out.get("name_collisions") or [] if isinstance(e, dict)] or [set()])  # fmt: skip
+    p_pairs = set().union(
+        *[_pairs(e, actors) for e in out.get("name_collisions") or [] if isinstance(e, dict)] or [set()]
+    )
     names = _set_prf(t_pairs, p_pairs)
     # gaps: same actor, IoU >= 0.5
     gaps = _score_gaps(t.get("gaps") or [], [g for g in out.get("gaps") or [] if isinstance(g, dict)], actors)
     # attribution: (chat id, issue); a talk event id maps back to its chat message
-    talk_to_chat = {normalize_eid(x["talk_event_id"]): x["event_id"] for x in t.get("attribution_issues") or [] if x.get("talk_event_id")}  # fmt: skip
+    talk_to_chat = {
+        normalize_eid(x["talk_event_id"]): x["event_id"]
+        for x in t.get("attribution_issues") or []
+        if x.get("talk_event_id")
+    }
     t_attr = {(x["event_id"], x["issue"]) for x in t.get("attribution_issues") or []}
     p_attr = set()
     for x in out.get("attribution_issues") or []:

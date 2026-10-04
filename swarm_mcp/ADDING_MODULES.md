@@ -187,3 +187,22 @@ commit data. `tests/conftest.py` shows the patterns:
 - `call(app, "tool", **args)` calls a tool in-process and returns its structured result.
 - `call_error(...)` returns the error text from a failing call.
 - `mcp.Client(app)` gives a full protocol round trip in-process.
+
+## Synthetic benchmark (`swarm_mcp.bench`)
+
+`swarm_mcp.bench` generates fake swarms in the AI Village file layout with planted
+ground truth, then scores investigation tools against it with precision, recall
+and F1. The plants are a copied term, a parallel invention, a coordinator, a hidden
+activity gap, a homoglyph name pair and attribution gaps. Everything is synthetic.
+Write the output to a gitignored place such as `data/` or a temp dir.
+
+```bash
+uv run --directory swarm_mcp python -m swarm_mcp.bench generate --out ../data/bench/s1 --seed 1 [--size small|medium]
+uv run --directory swarm_mcp python -m swarm_mcp.bench reference --data ../data/bench/s1 --out ../data/bench/s1/outputs.json
+uv run --directory swarm_mcp python -m swarm_mcp.bench score --truth ../data/bench/s1/truth.json --outputs ../data/bench/s1/outputs.json
+```
+
+`generate` writes `<out>/ai-village/` and `<out>/truth.json`. Point `SWARM_DATA_DIR`
+at `<out>`, or ingest `<out>/ai-village` with the `ai_village` adapter. The output
+shapes the scope tools must return, and the scoring rules, are in
+`src/swarm_mcp/bench/contracts.md`.
