@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+__PAPER_CSS__
+/* ---- timeline page ---------------------------------------------------------------- */
+#plot { position: relative; width: 100%; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
+#plot canvas { position: absolute; left: 0; top: 0; display: block; }
+#ov { cursor: crosshair; }
+#ov.grab { cursor: grabbing; }
+#ov.pointer { cursor: pointer; }
+#empty { padding: 18px 0; color: var(--ink-2); font-style: italic; }
+.view-line { font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.hint { font-size: 13px; color: var(--ink-3); margin: -18px 0 18px; }
+.two-col { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 8px 40px; align-items: start; }
+@media (max-width: 880px) { .two-col { grid-template-columns: minmax(0, 1fr); } }
+.panel-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin: 0 0 4px; }
+.panel-head .window { color: var(--ink-2); font-size: 14px; }
+/* thread reader: a drawer on the right (a sheet on phones) */
+.reader { position: fixed; z-index: 40; top: 0; right: 0; bottom: 0; width: min(460px, 100vw); background: var(--paper);
+  border-left: 1px solid var(--rule); box-shadow: -6px 0 18px rgba(0,0,0,.10); display: flex; flex-direction: column; }
+.reader[hidden] { display: none; }
+.reader-head { padding: 12px 16px 8px; border-bottom: 0.75px solid var(--rule); }
+.reader-head h3 { margin: 0 0 2px; font-size: 16px; }
+.reader-head .sub { font-size: 13px; color: var(--ink-2); }
+.reader-head .close { position: absolute; right: 12px; top: 10px; }
+.reader-body { overflow-y: auto; padding: 4px 16px 24px; flex: 1; }
+.reader-note { font-size: 12.5px; color: var(--ink-3); font-style: italic; margin: 8px 0; }
+.rmsg { padding: 8px 0 8px 10px; border-bottom: 0.5px solid var(--hair); border-left: 2px solid transparent; }
+.rmsg.focus { background: var(--wash); border-left-color: var(--ink); }
+.rmsg .who { font-weight: 700; }
+.rmsg .who.human { font-style: italic; font-weight: 400; }
+.rmsg .when { color: var(--ink-3); font-size: 12.5px; font-variant-numeric: tabular-nums; margin-left: 6px; }
+.rmsg .txt { margin: 3px 0 4px; white-space: pre-wrap; word-break: break-word; font-size: 14.5px; line-height: 1.4; }
+.rmsg .meta { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; font-size: 11.5px; color: var(--ink-3); }
+.rmsg .meta code { font-size: 11px; word-break: break-all; }
+.rmsg .meta button { font: 12px var(--serif); color: var(--ink-2); background: none; border: 0; padding: 0; text-decoration: underline; cursor: pointer; }
+.rmsg.link { cursor: pointer; }
+.rmsg.link:hover { background: var(--wash); }
+.reader-more { display: flex; gap: 8px; margin: 10px 0; }
+@media (max-width: 560px) { .reader { width: 100vw; border-left: 0; } .hint { margin-top: -14px; } }
+</style>
+</head>
+<body>
+<main class="paper">
+<header>__HEADER__</header>
+
+<div class="controls" id="controls">
+  <span class="ctl"><span class="ctl-label">Rows</span>
+    <span class="seg" id="sort" role="group" aria-label="Row order">
+      <button type="button" class="btn" data-v="first" aria-pressed="true" title="Order rows by each agent's first message">First message</button><button type="button" class="btn" data-v="n" aria-pressed="false" title="Order rows by message count">Messages</button><button type="button" class="btn" data-v="lab" aria-pressed="false" title="Group rows by model lab (from the agents table)">Lab</button>
+    </span></span>
+  <span class="ctl" id="axis-ctl" hidden><span class="ctl-label">Time axis</span>
+    <span class="seg" id="axis" role="group" aria-label="Time axis labels">
+      <button type="button" class="btn" data-v="both" aria-pressed="true">Date + day</button><button type="button" class="btn" data-v="day" aria-pressed="false">Village day</button><button type="button" class="btn" data-v="date" aria-pressed="false">Date</button>
+    </span></span>
+  <span class="ctl"><span class="ctl-label">Heights</span>
+    <span class="seg" id="scale" role="group" aria-label="Bar heights">
+      <button type="button" class="btn" data-v="row" aria-pressed="true" title="Each row is scaled to its own busiest bin, so quiet agents stay visible">Each row</button><button type="button" class="btn" data-v="shared" aria-pressed="false" title="One scale for all rows, so heights compare across agents">Shared</button>
+    </span></span>
+  <span class="ctl"><span class="ctl-label">Marks</span>
+    <span class="seg" id="mode" role="group" aria-label="Marks">
+      <button type="button" class="btn" data-v="auto" aria-pressed="true" title="Counts when zoomed out, single messages when zoomed in">Auto</button><button type="button" class="btn" data-v="bins" aria-pressed="false">Counts</button><button type="button" class="btn" data-v="msgs" aria-pressed="false">Messages</button>
+    </span></span>
+  <span class="ctl"><button type="button" class="btn" id="zout" title="Zoom out" aria-label="Zoom out">−</button><button type="button" class="btn" id="zin" title="Zoom in" aria-label="Zoom in">+</button><button type="button" class="btn" id="reset" title="Show the full range (or double-click the plot)">Full range</button></span>
+</div>
+<div class="keys" id="keys" aria-label="Channels (click to hide or show)"></div>
+
+<figure class="fig" id="fig-tl">
+  <div class="fig-tools" id="tools-tl"><span class="view-line" id="view"></span><span style="flex:1"></span></div>
+  <div class="fig-body" id="plot"><canvas id="cv" aria-hidden="true"></canvas><canvas id="ov" tabindex="0" aria-label="Timeline. Use the zoom buttons, or the arrow keys to pan and plus/minus to zoom."></canvas></div>
+  <figcaption id="cap-tl"></figcaption>
+</figure>
+<p class="hint" id="hint">Scroll or pinch to zoom, drag to pan, double-click to reset. Hover for counts or a message; click a bar to zoom into it, a message to copy its evidence id and read the thread around it, a goal to zoom to it. <span class="status" id="status" aria-live="polite"></span></p>
+
+<section id="sec-window" aria-labelledby="h-window">
+  <h2 id="h-window"><span class="secnum">2</span>The window on screen</h2>
+  <div class="panel-head"><span class="window" id="win-label"></span></div>
+  <div class="two-col">
+    <figure class="fig" id="fig-mx">
+      <div class="fig-tools" id="tools-mx"></div>
+      <div class="fig-body" id="mx"></div>
+      <figcaption id="cap-mx"></figcaption>
+    </figure>
+    <figure class="fig" id="fig-act">
+      <div class="fig-tools" id="tools-act"></div>
+      <div class="fig-body" id="act"></div>
+      <figcaption id="cap-act"></figcaption>
+    </figure>
+  </div>
+</section>
+
+<footer class="paper-foot">__FOOTER__</footer>
+</main>
+
+<aside class="reader" id="reader" hidden aria-labelledby="reader-title" tabindex="-1">
+  <div class="reader-head">
+    <h3 id="reader-title">Thread</h3>
+    <div class="sub" id="reader-sub"></div>
+    <button type="button" class="btn close" id="reader-close" aria-label="Close the thread reader">Close</button>
+  </div>
+  <div class="reader-body" id="reader-body"></div>
+</aside>
+<div class="tip" id="tip" role="tooltip" hidden></div>
+
+<script type="application/json" id="data">__DATA__</script>
+<script>
+__PAPERKIT_JS__
+</script>
+<script>
+__TIMELINE_JS__
+</script>
+</body>
+</html>
