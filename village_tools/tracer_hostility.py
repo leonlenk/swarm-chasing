@@ -13,8 +13,10 @@ Stages (run in order; everything except the LLM labelling is rerunnable):
     python tracer_hostility.py sample2   # round 2: batch_5-7.json, each non-Gemini agent's earliest proxy-positive items
                                          # (run after round 1 is labelled: it skips labelled items, so without
                                          # labels it re-draws round-1 items and warns)
-    (LLM labelling: one Sonnet subagent per batch writes label_batches/labels_<k>.json using label_batches/RUBRIC.md;
-     labels_manual.json holds 3 hand labels for origin-critical early Gemini items)
+    (LLM labelling: one Sonnet subagent per batch writes label_batches/labels_<k>.json using the rubric in
+     village_tools/prompts/hostility_stance_rubric.md; labels_manual.json holds 3 hand labels for origin-critical
+     early Gemini items. The original runs' exact prompts were not preserved; the files in prompts/ are
+     reconstructions.)
     python tracer_hostility.py analyze   # labels.csv, adoption/exposure/persistence CSVs, results.json
                                          # (figures: export the hostility trace from the Idea Spread Viewer)
 

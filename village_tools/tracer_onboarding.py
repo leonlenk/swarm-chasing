@@ -7,13 +7,14 @@ Prerequisites: the dataset in data/ai-village/ and the daily memory sample out/c
 Stages (each rerunnable; the LLM steps in between are done by Sonnet subagents):
   python tracer_onboarding.py events    -> events_slim.jsonl.gz (SEARCH_HISTORY + session goals; streams the 328 MB events file)
   python tracer_onboarding.py guides    -> guides.csv, evidence/rules_batch_*.txt   (for rule extraction)
-  [LLM] rule extraction -> rules.csv (hand-merged canonical list)
+  [LLM] rule extraction (village_tools/prompts/onboarding_rule_extraction.md) -> rules.csv (hand-merged canonical list)
   python tracer_onboarding.py rules     -> rules.csv, label_batches/RULES.txt (canonical list hand-merged in RULES below)
   python tracer_onboarding.py items     -> items.csv, label_batches/batch_*.jsonl     (for labelling)
-  [LLM] labelling -> label_batches/labels_*.jsonl
+  [LLM] labelling (village_tools/prompts/onboarding_labelling.md) -> label_batches/labels_*.jsonl
   python tracer_onboarding.py analyze   -> labels.csv, results.json, uptake.png/.pdf  (needs matplotlib:
                                            uv run --no-project --with matplotlib python tracer_onboarding.py analyze)
   python tracer_onboarding.py plots     -> uptake.png/.pdf redrawn from results.json
+The original runs' exact prompts were not preserved; the files in village_tools/prompts/ are reconstructions.
 
 Outputs live in out/sprint_idea/onboarding/.
 
