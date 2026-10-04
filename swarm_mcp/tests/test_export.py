@@ -157,6 +157,14 @@ def test_check_fails_on_tampered_export_without_leaking(exported):
         assert secret not in dumped
 
 
+def test_check_finds_pii_next_to_non_ascii_letters(exported):
+    out, _ = exported
+    with (out / EVENTS_FILE).open("a") as f:
+        f.write(json.dumps({"event_id": "village:chat:y", "text": "連絡はbob@example.comまで、電話+81 90 1234 5678です"}) + "\n")
+    report = check(out)
+    assert {(f["field"], f["type"]) for f in report.findings} == {("text", "email"), ("text", "phone")}
+
+
 def test_check_detects_benign_tampering_and_unlisted_files(exported):
     out, _ = exported
     p = out / AGENTS_FILE

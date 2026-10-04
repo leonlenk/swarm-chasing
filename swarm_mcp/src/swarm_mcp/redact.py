@@ -368,7 +368,15 @@ def _r_keyword_secret(m: re.Match[str], r: Redactor) -> str | None:
 # --------------------------------------------------------------------------- email
 
 # The email pattern record-level masking (toolkit.Scrubber, via mask_text) and exports share.
-_EMAIL = re.compile(r"(?<![\w.+%-])[A-Za-z0-9._%+-]+@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})(?![\w-])")
+# Local part: ASCII plus letters of scripts written with spaces (jöhn, иван). Scripts written
+# without spaces (Han, kana, Hangul, Thai, ...) are excluded, so in "連絡はbob@example.comまで"
+# the address starts at "bob". The lookahead is ASCII-only. Both boundaries used Python's
+# Unicode \w, so a CJK character or an accented letter next to an address used to hide it.
+_NO_SPACE_SCRIPTS = (
+    "\u0e00-\u0eff\u1000-\u109f\u1780-\u17ff\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff66-\uff9f"
+)
+_EMAIL_LOCAL = f"(?:[^\\W{_NO_SPACE_SCRIPTS}]|[.%+-])"
+_EMAIL = re.compile(rf"(?<!{_EMAIL_LOCAL}){_EMAIL_LOCAL}+@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{{2,}})(?![A-Za-z0-9-])")
 
 
 def _r_email(m: re.Match[str], r: Redactor) -> str | None:
@@ -378,7 +386,8 @@ def _r_email(m: re.Match[str], r: Redactor) -> str | None:
     ``help@agentvillage.org`` and ``x@mail.agentvillage.org``, but not
     ``x@notagentvillage.org`` or ``x@agentvillage.org.evil.com``.
     False negatives: obfuscated addresses ("bob at example dot com"), addresses
-    without a TLD (``root@localhost``). False positives: ``name@2x.png``-style
+    without a TLD (``root@localhost``), non-ASCII (IDN) domains, and local parts in
+    scripts written without spaces (Han, kana, Thai...). False positives: ``name@2x.png``-style
     asset names whose "TLD" is alphabetic (e.g. ``icon@retina.png``).
     VCS service users (``git@github.com:org/repo.git``, ``ssh://hg@host``) are kept:
     they are not people and repo remotes are common research evidence.
@@ -396,14 +405,14 @@ _VCS_USERS = frozenset({"git", "hg", "svn"})
 # --------------------------------------------------------------------------- phone
 
 _PHONE = re.compile(
-    r"(?<![\w/.:#=@+-])(?:"
+    r"(?<![A-Za-z0-9_/.:#=@+-])(?:"  # ASCII boundaries: '電話+81 ...です' is still a phone number
     # international: '+', then 8-15 digits with at most two separators between digits
     r"\+[1-9](?:[ .()-]{0,2}[0-9]){7,14}"
     # North American 3-3-4: optional leading 1, separators required. Any digits are accepted
     # (not just valid NANP area codes/exchanges), keeping the recall of the old regex-only
     # toolkit.Scrubber, which masked placeholder-style numbers such as 555-123-4567 too.
     r"|(?:1[ .-])?(?:\([0-9]{3}\)[ .-]?|[0-9]{3}[ .-])[0-9]{3}[ .-][0-9]{4}"
-    r")(?![\w-]|\.[0-9])"
+    r")(?![A-Za-z0-9_-]|\.[0-9])"
 )
 
 

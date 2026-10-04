@@ -80,6 +80,22 @@ def test_email_allowlist_matches_whole_labels():
     assert Redactor().redact("help@agentvillage.org")[0] == "[email]"  # no allowlist by default
 
 
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("連絡はbob@example.comまで", "連絡は[email]まで"),
+        ("jöhn@example.com", "[email]"),
+        ("émail bob@example.comé", "émail [email]é"),
+        ("иван@example.com", "[email]"),
+        ("mail: josé.garcía@example.org!", "mail: [email]!"),
+        ("메일bob@example.com입니다", "메일[email]입니다"),
+    ],
+)
+def test_email_next_to_non_ascii_letters(r, text, expected):
+    """Regression: the boundaries used Unicode \\w, so an address touching a non-ASCII letter was kept."""
+    assert red(r, text) == expected
+
+
 def test_vcs_remotes_are_not_emails(r):
     text = "clone git@github.com:org/repo.git or ssh://git@github.com/org/repo"
     assert red(r, text) == text
@@ -106,6 +122,15 @@ def test_phone_positives(r, number):
 )  # fmt: skip
 def test_phone_negatives(r, text):
     assert red(r, text) == text
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [("電話+81 90 1234 5678です", "電話[phone]です"), ("電話555-867-5309です", "電話[phone]です"),
+     ("Tél. +33 1 23 45 67 89é", "Tél. [phone]é"), ("teléfono 415-555-0134ñ", "teléfono [phone]ñ")],
+)  # fmt: skip
+def test_phone_next_to_non_ascii_letters(r, text, expected):
+    assert red(r, text) == expected
 
 
 def test_two_phones_in_a_row(r):
