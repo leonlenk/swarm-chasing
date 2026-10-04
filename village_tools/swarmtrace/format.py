@@ -162,13 +162,42 @@ def parse_iso(s):
     return dt.datetime.fromisoformat(s[:-1])
 
 
-def clip(text, start=None, end=None, limit=SNIPPET_MAX):
-    """Collapse whitespace and cut `text` to <= limit chars, keeping text[start:end] (the key phrase) in view,
-    with an ellipsis on each cut side."""
+_EDGE_DIGITS = re.compile(r"^[\d\s().+\-/]+")       # digits and phone separators left at a cut edge
+
+
+def _drop_edge(flat, lead):
+    """Drop the word fragment at a cut edge of `flat` (lead: the start, else the end), plus any digits and phone
+    separators next to it, so a cut never leaves part of an email address or phone number. Returns the new text
+    and how many characters were dropped."""
+    if lead:
+        m = re.match(r"^\S*", flat)
+        rest = flat[m.end():]
+        d = _EDGE_DIGITS.match(rest)
+        rest = rest[d.end() if d else 0:].lstrip()
+        return rest, len(flat) - len(rest)
+    rev, n = _drop_edge(flat[::-1], True)
+    return rev[::-1], n
+
+
+def clip(text, start=None, end=None, limit=SNIPPET_MAX, allow_domains=(), cut_before=False, cut_after=False):
+    """Scrub PII from `text`, collapse whitespace and cut it to <= limit chars, keeping text[start:end] (the key
+    phrase) in view, with an ellipsis on each cut side.
+
+    Scrubbing (see scrub(); emails in allow_domains are kept) happens before the cut, so a cut can't leave part of
+    an email or phone number that scrub() would no longer recognise. A cut also drops the word fragment at its edge
+    and any digits next to it. cut_before / cut_after say `text` was already cut on that side (a stored excerpt):
+    its edge fragment is dropped the same way, and no ellipsis is added for it (the caller keeps its own)."""
     text = text or ""
     if start is None:
         start, end = 0, 0
     end = start if end is None else end
+    text, (start, end) = scrub_tracking(text, (start, end), allow_domains)
+    if cut_before and text:
+        text, n = _drop_edge(text, True)
+        start, end = max(0, start - n), max(0, end - n)
+    if cut_after and text:
+        text, _ = _drop_edge(text, False)
+        start, end = min(start, len(text)), min(end, len(text))
     # collapse whitespace while tracking where the key phrase moves to
     out, pos_map = [], []
     prev_space = False
@@ -191,7 +220,12 @@ def clip(text, start=None, end=None, limit=SNIPPET_MAX):
     lo = max(0, s - (room - key) // 3)                # a third of the spare room before the phrase
     lo = min(lo, max(0, len(flat) - room))
     hi = min(len(flat), lo + room)
-    snip = flat[lo:hi].strip()
+    snip = flat[lo:hi]
+    if lo > 0:
+        snip, _ = _drop_edge(snip, True) if not flat[lo - 1].isspace() else _drop_edge(" " + snip, True)
+    if hi < len(flat):
+        snip, _ = _drop_edge(snip, False) if not flat[hi].isspace() else _drop_edge(snip + " ", False)
+    snip = snip.strip()
     return ("…" if lo > 0 else "") + snip + ("…" if hi < len(flat) else "")
 
 
@@ -221,8 +255,29 @@ def scrub(text, allow_domains=()):
     phone-number-like strings with [phone]."""
     if not text:
         return text
-    text = EMAIL_RX.sub(lambda m: m.group(0) if _allowed(m.group(1), allow_domains) else "[email]", text)
-    return PHONE_RX.sub("[phone]", text)
+    return scrub_tracking(text, (), allow_domains)[0]
+
+
+def scrub_tracking(text, marks, allow_domains=()):
+    """scrub(text), also moving the character offsets in `marks` (a tuple) along with the text. An offset inside a
+    replaced match moves to the start of its placeholder (the end, for the last mark of a (start, end) pair)."""
+    marks = list(marks)
+    for rx, repl in ((EMAIL_RX, lambda m: m.group(0) if _allowed(m.group(1), allow_domains) else "[email]"),
+                     (PHONE_RX, lambda m: "[phone]")):
+        out, pos, delta, moved = [], 0, 0, list(marks)
+        for m in rx.finditer(text):
+            r = repl(m)
+            out += [text[pos:m.start()], r]
+            for i, k in enumerate(marks):
+                if m.start() < k < m.end():
+                    moved[i] = m.start() + delta + (len(r) if i == len(marks) - 1 and i > 0 else 0)
+                elif k >= m.end():
+                    moved[i] += len(r) - (m.end() - m.start())
+            delta += len(r) - (m.end() - m.start())
+            pos = m.end()
+        out.append(text[pos:])
+        text, marks = "".join(out), moved
+    return text, tuple(marks)
 
 
 def pii_hits(text, allow_domains=()):

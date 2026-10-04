@@ -10,8 +10,8 @@ from pathlib import Path
 import pytest
 
 from swarmtrace import cli
-from swarmtrace.format import (check, clip, dumps, fit_window, index_entry, iso, parse_iso, scrub, scrub_trace,
-                               validate, validate_index)
+from swarmtrace.format import (check, clip, dumps, fit_window, index_entry, iso, parse_iso, pii_hits, scrub,
+                               scrub_trace, scrub_tracking, validate, validate_index)
 
 SCHEMA = Path(__file__).resolve().parents[1] / "trace.schema.json"
 
@@ -138,6 +138,46 @@ def test_helpers():
     c = clip(text, i, i + 10, limit=80)
     assert "KEY PHRASE" in c and len(c) <= 80 and c.startswith("…") and c.endswith("…")
     assert clip("  short\n\n text  ") == "short text"
+
+
+def _cut_through(pii, limit=60):
+    """A long text whose clip window (around KEY) ends inside `pii`."""
+    head = "KEY " + "word " * 9
+    room = limit - 2
+    pad = room - len(head) - 5                          # the window ends 5 chars into the PII
+    return head + "x" * max(0, pad - 1) + " " + pii + " tail" * 40
+
+
+@pytest.mark.parametrize("pii", ["jane.doe@examplecorp.com", "555-867-5309", "+1 415 555 0134", "+44 20 7946 0958"])
+def test_clip_never_leaves_partial_pii(pii):
+    """Regression: clip cut first and scrub ran on the snippet, so 'jane.doe@examplecor…' or '555-86…' survived
+    scrubbing with pii_hits() == []."""
+    text = _cut_through(pii)
+    c = clip(text, 0, 3, limit=60)
+    assert c.startswith("KEY") and c.endswith("…") and len(c) <= 60
+    assert pii[:5] not in c and pii[-4:] not in c and not any(ch.isdigit() for ch in c)
+    assert pii not in scrub(c) and pii_hits(c) == []
+    # the whole PII inside the window is scrubbed, with the key phrase still in view
+    whole = "lorem " * 30 + f"KEY then {pii} then more" + " ipsum" * 30
+    i = whole.index("KEY")
+    c = clip(whole, i, i + 3, limit=80)
+    assert "KEY" in c and pii not in c and ("[email]" in c or "[phone]" in c)
+
+
+def test_clip_drops_partial_pii_at_edges_of_stored_excerpts():
+    stored = "ne.doe@examplecorp.com said KEY is broken, call 555-867-53"   # already cut on both sides
+    c = clip(stored, stored.index("KEY"), stored.index("KEY") + 3, cut_before=True, cut_after=True)
+    assert c == "said KEY is broken, call"
+    assert clip("bot@agentvillage.org and x@gmail.com", allow_domains=("agentvillage.org",)) == \
+        "bot@agentvillage.org and [email]"
+
+
+def test_scrub_tracking_moves_marks():
+    text = "mail jane@gmail.com about KEY now"
+    out, (a, b) = scrub_tracking(text, (text.index("KEY"), text.index("KEY") + 3))
+    assert out == "mail [email] about KEY now" and out[a:b] == "KEY"
+    out, (a, b) = scrub_tracking(text, (text.index("jane") + 2, text.index("about")))
+    assert out[a:b] == "[email] "
 
 
 @pytest.mark.parametrize("raw,allow,want", [

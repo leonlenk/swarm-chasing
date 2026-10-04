@@ -25,7 +25,8 @@ if str(VT) not in sys.path:
 
 import common  # noqa: E402
 
-from ..format import QUOTE_MAX, SNIPPET_MAX, clip, fit_window, iso  # noqa: E402
+from ..format import QUOTE_MAX, SNIPPET_MAX, fit_window, iso  # noqa: E402
+from ..format import clip as _clip  # noqa: E402
 
 SPRINT = common.OUT / "sprint_idea"
 TRACES = SPRINT / "traces"                       # default output directory
@@ -34,6 +35,12 @@ ONB = SPRINT / "onboarding"
 IDEAS = common.OUT / "ideas.json"
 LEAD_IN = dt.timedelta(days=7)                   # display window starts this long before the first origin / event
 SCRUB_ALLOW_DOMAINS = ("agentvillage.org",)      # the agents' own mailboxes; other emails are scrubbed on export
+
+
+def clip(text, start=None, end=None, limit=SNIPPET_MAX, **kw):
+    """format.clip with this adapter's allowlist: PII is scrubbed from the raw text before it is cut, so a cut
+    can't leave a partial email or phone number behind (export scrubs again, but can't see partial ones)."""
+    return _clip(text, start, end, limit, allow_domains=SCRUB_ALLOW_DOMAINS, **kw)
 
 
 def _t(s):
@@ -46,7 +53,7 @@ def _excerpt(s, find, limit=SNIPPET_MAX):
     lead, tail = s.startswith("…"), s.endswith("…")
     body = s.strip("…").strip()
     h = find(body)
-    c = clip(body, h.start() if h else None, h.end() if h else None, limit=limit - 2)
+    c = clip(body, h.start() if h else None, h.end() if h else None, limit=limit - 2, cut_before=lead, cut_after=tail)
     if lead and not c.startswith("…"):
         c = "…" + c
     if tail and not c.endswith("…"):
