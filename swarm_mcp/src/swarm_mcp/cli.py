@@ -585,7 +585,9 @@ def build_parser() -> argparse.ArgumentParser:
     r.set_defaults(fn=cmd_render)
 
     e = sub.add_parser("export", help="export a redacted subset of the store, then rescan it (the check)")
-    e.add_argument("--out", required=True, metavar="DIR", help="export directory (created; keep it under data/)")
+    e.add_argument(
+        "--out", required=True, metavar="DIR", help="new, empty or previous export folder (keep it under data/)"
+    )
     e.add_argument("--source", action="append", default=[], help="only these sources (repeatable)")
     e.add_argument("--kind", action="append", default=[], help="only these id kinds, e.g. msg, event (repeatable)")
     e.add_argument(
