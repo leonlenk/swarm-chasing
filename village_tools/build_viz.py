@@ -1,10 +1,15 @@
-"""Bundle out/*.json into one self-contained page: out/village_idea_flow.html."""
+"""Bundle out/*.json into one self-contained page: out/village_idea_flow.html.
+
+The page is assembled by pagekit: the shared paper style (paper.css), PaperKit (figure export)
+and a vendored d3 are inlined, so it opens offline from file:// and makes no network requests.
+"""
 
 import collections
 import datetime as dt
 import json
 import statistics
 
+import pagekit
 from common import OUT, ROOT
 
 GROUPS = ["Anthropic", "OpenAI", "Google", "Other labs", "Human"]
@@ -21,17 +26,10 @@ def load(name):
 
 def main():
     coop, ideas, mem = load("cooperation.json"), load("ideas.json"), load("memories.json")
-    agent_group = {a["name"]: group(a["family"]) for a in coop["agents"]}
-
-    def graph(g):
-        return {"nodes": [{"id": n["id"], "g": agent_group[n["id"]], "msgs": n["msgs"]} for n in g["nodes"]],
-                "edges": [[e["s"], e["t"], e["w"]] for e in g["edges"]]}
-
     goal_keys = ("idx", "goal", "type", "start", "end", "msgs", "human_msgs", "agents", "mention_rate", "reciprocity",
                  "density", "hub", "hub_share", "homophily", "we_share", "requests", "division_of_labour",
                  "verification", "gratitude", "competition")
     goals = [{k: g[k] for k in goal_keys} for g in coop["goals"]]
-    graphs = {"all": graph(coop["overall_graph"])} | {str(g["idx"]): graph(g["graph"]) for g in coop["goals"]}
 
     # Goal-type summary: each goal counts once, so a long goal doesn't swamp the type.
     metrics = ("mention_rate", "reciprocity", "we_share", "division_of_labour", "requests", "competition")
@@ -58,6 +56,7 @@ def main():
     payload = {
         "meta": {
             "start": coop["weekly"][0]["week"], "end": coop["weekly"][-1]["week"],
+            "data_start": min(a["first"] for a in coop["agents"]), "data_end": max(a["last"] for a in coop["agents"]),
             "agent_msgs": coop["overall"]["msgs"], "human_msgs": coop["overall"]["human_msgs"],
             "agents": len(coop["agents"]), "goals": len(goals),
             "mention_rate": coop["overall"]["mention_rate"],
@@ -65,11 +64,9 @@ def main():
             "params": ideas["params"],
         },
         "groups": GROUPS,
-        "agentGroup": agent_group,
         "overall": {k: v for k, v in coop["overall"].items()},
         "weekly": coop["weekly"],
         "goals": goals,
-        "graphs": graphs,
         "typeSummary": type_summary,
         "ideas": {
             "counts": c,
@@ -84,8 +81,10 @@ def main():
         },
         "memory": {"weekly": mem["weekly"]},
     }
-    data = json.dumps(payload, separators=(",", ":")).replace("</", "<\\/")
-    html = (ROOT / "viz_template.html").read_text().replace("__DATA__", data)
+    # JSON inside <script type="application/json">: escape <, > and & so no data can close the tag
+    data = (json.dumps(payload, separators=(",", ":"))
+            .replace("&", "\\u0026").replace("<", "\\u003c").replace(">", "\\u003e"))
+    html = pagekit.build((ROOT / "viz_template.html").read_text(), {"__DATA__": data})
     path = OUT / "village_idea_flow.html"
     path.write_text(html)
     print(f"wrote {path} ({path.stat().st_size / 1e6:.2f} MB)")
