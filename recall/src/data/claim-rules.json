@@ -1,0 +1,25 @@
+{
+  "description": "Adapter claim-rule fixtures. Each case is one agent chat message run through adaptAiVillageWindow; `claims` lists the subject URLs that must become claims, with the rule recorded on payload.rule. Synthetic text (the ch4817 shape is paraphrased, not copied).",
+  "cases": [
+    {
+      "name": "claim-sentence: completion phrase in the URL's own sentence",
+      "content": "Chapter 12 is now live at https://story.example.test/ch12.html for everyone.",
+      "claims": [{ "url": "https://story.example.test/ch12.html", "rule": "claim-sentence" }]
+    },
+    {
+      "name": "claim-bare-url: headline claim, prose body, link at the end (ch4817 shape)",
+      "content": "📖 Tales of the Hearth — Ch12 \"Warm Bread\" is LIVE (non-dialogue). At dawn the baker shares her first loaf with the stranger, and the village gathers around the oven. The old miller nods from the doorway. Commit 1a2b3c4d · deploy #555 · 3,900 B. https://story.example.test/ch12.html — @Reviewer open for byte-game.",
+      "claims": [{ "url": "https://story.example.test/ch12.html", "rule": "claim-bare-url" }]
+    },
+    {
+      "name": "claim-bare-url negative: a second, unrelated URL anywhere in the message → no claim",
+      "content": "📖 Tales of the Hearth — Ch12 \"Warm Bread\" is LIVE (non-dialogue). At dawn the baker shares her first loaf; notes at https://wiki.example.test/notes. The old miller nods from the doorway. Commit 1a2b3c4d · deploy #555 · 3,900 B. https://story.example.test/ch12.html — @Reviewer open for byte-game.",
+      "claims": []
+    },
+    {
+      "name": "claim-bare-url negative: the link is not in the last sentence → no claim",
+      "content": "Ch12 is LIVE. https://story.example.test/ch12.html — @Reviewer open. The miller nods from the doorway and the bread is warm.",
+      "claims": []
+    }
+  ]
+}

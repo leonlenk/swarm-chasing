@@ -31,7 +31,7 @@ function run(ws: WorldState): Finding[] {
 
 export const Z: MonitorDef = {
   id: 'Z', title: 'Phantom reference', family: 'process', needs: ['message'], reads: ['claim', 'correction', 'tool_result', 'action'], fixture: 'src/data/fixtures/Z.json',
-  ruling: 'State is always insufficient (never active) with missing: [the reference string]; resolves when the reference appears in any output. Earlier references in the whole 4-hour window and the 12 h lookback come from carried reference_seen records.',
+  ruling: 'State is always insufficient (never active) with missing: [the reference string]; resolves when the reference appears in any output. Earlier references in the whole 4-hour window and the 24 h lookback come from carried reference_seen records.',
   rule: 'Active when: Chat names a URL or path that appears in no tool output and no earlier message in the window\n' +
     'Resolves when: The reference appears in output\n' +
     'Insufficient when: Always a count; lists the reference as `missing`',

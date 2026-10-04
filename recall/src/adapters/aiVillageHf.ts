@@ -75,20 +75,32 @@ const NEGATIVE_RE =
 /** Future or conditional wording: "will be live at", "once set up", "soon". Not a completion claim. */
 const FUTURE_RE = /\b(will (?:be|go)|once\b|soon\b|going to|planning|plan to|about to|should be|when (?:it|this) (?:is|goes))\b/i;
 
+export type ClaimRule = 'claim-sentence' | 'claim-bare-url';
+
 /**
- * URLs a message actually claims: the completion phrase must be in the same paragraph as the URL,
- * and that paragraph must not be future/conditional or report a failure.
+ * URLs a message actually claims, with the rule that matched:
+ *  - 'claim-sentence': the URL's own sentence has a completion phrase and is not future/conditional or a failure report.
+ *  - 'claim-bare-url' (owner ruling): announcement shape "headline claim, body, link at the end". The URL is the ONLY
+ *    URL in the message, it stands in the message's LAST sentence, that sentence is bare (<= 4 words once URLs and
+ *    @mentions are removed), and an earlier sentence is a URL-less claim. The only-URL condition is what keeps a stray
+ *    link from attaching to a claim.
  */
-export function claimedUrls(content: string, urls: string[]): string[] {
+export function claimedUrlsWithRule(content: string, urls: string[]): { url: string; rule: ClaimRule }[] {
   const sentences = sentencesOf(content);
   const isClaim = (s: string) => CLAIM_RE.test(s) && !FUTURE_RE.test(s) && !NEGATIVE_RE.test(s);
-  // Rule 'claim-sentence+bare-url': a URL standing in a bare sentence (<= 4 words once URLs and @mentions are
-  // removed) inherits the claim of a claim sentence in the same message that names no URL itself
-  // ("Ch4817 is LIVE. … https://…/chapter-4817.html — @GPT-5 open for byte-game.").
-  const urllessClaim = sentences.some((s) => isClaim(s) && urlsIn(s).length === 0);
-  const bare = (s: string) => s.replace(/https?:\/\/\S+/g, ' ').replace(/@\S+/g, ' ').split(/\s+/).filter((w) => /[a-z0-9]/i.test(w)).length <= 4;
-  return urls.filter((u) => sentences.some((s) => urlsIn(s).includes(u) && (isClaim(s) || (urllessClaim && bare(s)))));
+  const out: { url: string; rule: ClaimRule }[] = [];
+  for (const u of urls) {
+    if (sentences.some((s) => urlsIn(s).includes(u) && isClaim(s))) { out.push({ url: u, rule: 'claim-sentence' }); continue; }
+    const last = sentences[sentences.length - 1] ?? '';
+    const bare = last.replace(/https?:\/\/\S+/g, ' ').replace(/@\S+/g, ' ').split(/\s+/).filter((w) => /[a-z0-9]/i.test(w)).length <= 4;
+    const onlyUrl = urlsIn(content).length === 1 && urlsIn(last).includes(u);
+    const headline = sentences.slice(0, -1).some((s) => isClaim(s) && urlsIn(s).length === 0);
+    if (onlyUrl && bare && headline) out.push({ url: u, rule: 'claim-bare-url' });
+  }
+  return out;
 }
+
+export const claimedUrls = (content: string, urls: string[]) => claimedUrlsWithRule(content, urls).map((x) => x.url);
 
 /**
  * Sentences (rule 'claim-sentence'): split at line breaks, bullets, and at . ! ? followed by whitespace.
@@ -537,16 +549,16 @@ export function adaptAiVillageWindow(input: HfWindowInput): DataSource {
       continue;
     }
     // A claim names one or two deployed pages; long URL roundups are status lists, not specific claims.
-    const claimed = pageUrls.length >= 1 && pageUrls.length <= 2 && !NEGATIVE_RE.test(content) ? claimedUrls(content, pageUrls) : [];
+    const claimed = pageUrls.length >= 1 && pageUrls.length <= 2 && !NEGATIVE_RE.test(content) ? claimedUrlsWithRule(content, pageUrls) : [];
     if (claimed.length) {
-      claimed.forEach((url, i) => {
+      claimed.forEach(({ url, rule }, i) => {
         const claimId = `C-${c.id.slice(0, 5)}${claimed.length > 1 ? `-${i + 1}` : ''}`;
         const eventId = claimed.length > 1 ? `chat/${c.id}#${i + 1}` : `chat/${c.id}`;
         claimCount++;
         prior.push({ claimId, eventId, url });
         push(c.at, 6, {
           ...base, id: eventId, type: 'claim', provenance: 'inferred', evidenceRefs: [],
-          payload: { claimId, asserts: 'complete', subject: { artifact: url, version: 'live' } },
+          payload: { claimId, asserts: 'complete', subject: { artifact: url, version: 'live' }, rule },
         });
       });
       claimsBy.set(speaker, prior);

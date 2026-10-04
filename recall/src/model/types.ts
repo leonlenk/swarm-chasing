@@ -54,6 +54,8 @@ export interface Payloads {
     claimId: string;
     asserts: 'verification_passed' | 'complete';
     subject?: ArtifactRef;
+    /** Adapter claim rule that produced this claim ('claim-sentence', 'claim-bare-url'). */
+    rule?: string;
   };
   tool_result: {
     tool: string;
@@ -158,8 +160,8 @@ export interface DataSource {
   };
   /**
    * Lightweight reference_seen records carried into a window part: every URL/path named in a message or
-   * output earlier in the whole window (and its 12 h lookback). `sequence` is in this part's numbering;
-   * 0 means before the part begins.
+   * output earlier in the whole window (and its 24 h lookback). `sequence` is the record's original window
+   * sequence (parts keep window numbering); 0 means the lookback, before the window opens.
    */
   referencesSeen?: ReferenceSeen[];
   /** Optional evidence visibility experiment: records to withhold from the analysis input. */

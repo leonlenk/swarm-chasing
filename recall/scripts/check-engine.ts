@@ -13,6 +13,7 @@ import { reconstruct } from '../src/engine/reconstruct';
 import { assertFinding, findingProblems, register, registry, runMonitors, type Finding, type MonitorDef } from '../src/engine/monitors';
 import type { FixtureBlock, FixtureExpect } from '../src/data/fixtures';
 import { goalChurn } from '../src/engine/meta';
+import { adaptAiVillageWindow } from '../src/adapters/aiVillageHf';
 import type { DataSource } from '../src/model/types';
 
 const ROOT = join(import.meta.dirname, '..');
@@ -145,11 +146,26 @@ for (const m of registry) if (existsSync(join(ROOT, m.fixture))) runFixture(`fix
   record('meta BG', 'quiet: the agent made a claim in the window', at(mk(distinct, true)) === 0);
 }
 
+// ---------------------------------------------------------------- 2c. adapter claim rules
+{
+  const cr = JSON.parse(readFileSync(join(ROOT, 'src/data/claim-rules.json'), 'utf8')) as { cases: { name: string; content: string; claims: { url: string; rule: string }[] }[] };
+  for (const c of cr.cases) {
+    const doc = adaptAiVillageWindow({
+      id: 'claim-rules', label: 'claim rules', window: { from: '2026-01-02T09:00:00Z', to: '2026-01-02T13:00:00Z' },
+      agents: [{ id: 'a1', name: 'Agent One' }], sessions: [], boundaries: [], turns: [], generatedAt: '2026-01-02T00:00:00Z',
+      chats: [{ id: 'c0000000-0000', speaker_type: 'agent', agent_speaker_id: 'a1', content: c.content, created_at: '2026-01-02 10:00:00' }],
+    });
+    const got = doc.events.flatMap((e) => (e.type === 'claim' && e.payload.subject ? [{ url: e.payload.subject.artifact, rule: e.payload.rule ?? '' }] : []));
+    const ok = got.length === c.claims.length && c.claims.every((x) => got.some((g) => g.url === x.url && g.rule === x.rule));
+    record('claim rules', c.name, ok, ok ? undefined : `got ${JSON.stringify(got)}`);
+  }
+}
+
 // ---------------------------------------------------------------- 3. integration
 runFixture('integration', 'src/data/synthetic-release.json', load('src/data/synthetic-release.json'));
 
 // ---------------------------------------------------------------- 4. regression
-interface RegCase { name: string; slice: string; monitor?: string; claimId?: string; claimEventId?: string; subject?: string; monitors?: string[]; state: 'active' | 'resolved' | 'insufficient' | 'none' }
+interface RegCase { name: string; slice: string; monitor?: string; claimId?: string; claimEventId?: string; subject?: string; expect?: Record<string, 'none' | 'allowed'>; reason?: string; state: 'active' | 'resolved' | 'insufficient' | 'none' }
 const reg = JSON.parse(readFileSync(join(ROOT, 'src/data/regression.json'), 'utf8')) as { cases: RegCase[] };
 // Skip only when no data has been built at all. Once public/data exists, a missing pinned slice is a failure:
 // it means the window plan or the build changed underneath a validated finding.
@@ -176,9 +192,14 @@ for (const c of reg.cases) {
   if (c.state === 'none') {
     const hits = perPart.flatMap((x) => {
       const ws = world(x.doc, x.last);
-      return x.findings.filter((f) => (!c.monitors || c.monitors.includes(f.monitor)) && ws.claims.get(f.claimId)?.subject?.artifact === c.subject).map((f) => `${x.id}:${f.id}[${f.state}]`);
+      return x.findings.filter((f) => c.expect?.[f.monitor] !== 'allowed' && ws.claims.get(f.claimId)?.subject?.artifact === c.subject).map((f) => `${x.id}:${f.id}[${f.state}]`);
     });
-    record('regression', c.name, hits.length === 0, hits.slice(0, 3).join(', '));
+    const allowed = perPart.flatMap((x) => {
+      const ws = world(x.doc, x.last);
+      return x.findings.filter((f) => c.expect?.[f.monitor] === 'allowed' && ws.claims.get(f.claimId)?.subject?.artifact === c.subject).map((f) => f.id);
+    });
+    const allowedNote = Object.entries(c.expect ?? {}).filter(([, v]) => v === 'allowed').map(([m]) => `${m} allowed: ${new Set(allowed.filter((id) => id.startsWith(`${m}:`))).size} finding(s)`).join('; ');
+    record('regression', `${c.name}${allowedNote ? ` (${allowedNote})` : ''}`, hits.length === 0, hits.slice(0, 3).join(', '));
     continue;
   }
   const containing = perPart.filter((x) => x.findings.some((f) => f.monitor === c.monitor && (f.claimId === c.claimId || f.detectedEventId === c.claimEventId)));

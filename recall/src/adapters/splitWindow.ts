@@ -8,7 +8,7 @@
 //     `sequence <= cursor` filter as everything else; nothing later than the part's range is carried, so a
 //     part never sees a record from later in the window.
 //   - Every part carries lightweight reference_seen records: each URL/path named in a message or output
-//     earlier in the whole window (records not carried as facts) or in the 12 h lookback (sequence 0).
+//     earlier in the whole window (records not carried as facts) or in the 24 h lookback (sequence 0).
 
 import type { DataSource, RecallEvent, ReferenceSeen } from '../model/types';
 

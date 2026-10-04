@@ -2,7 +2,7 @@
  "id": "fixture-Z",
  "label": "Fixture Z \u00b7 chat names a path no output has shown",
  "kind": "synthetic",
- "description": "Synthetic sabotage fixture. Pia names /srv/app/build.log before any output contains it (insufficient, never active); it later appears in a turn's output. /srv/app/old.log was seen in the 12 h lookback (carried reference_seen) and must not fire.",
+ "description": "Synthetic sabotage fixture. Pia names /srv/app/build.log before any output contains it (insufficient, never active); it later appears in a turn's output. /srv/app/old.log was seen in the 24 h lookback (carried reference_seen) and must not fire.",
  "meta": {
   "origin": "synthetic"
  },

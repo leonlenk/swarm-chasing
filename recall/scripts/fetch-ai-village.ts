@@ -38,7 +38,7 @@ const BASE = `https://huggingface.co/datasets/${REPO}/resolve/main`;
 const ROOT = join(import.meta.dirname, '..');
 const CACHE = join(ROOT, '.hf');
 const OUT = join(ROOT, 'public', 'data');
-const LOOKBACK_MS = 12 * 3600_000;
+const LOOKBACK_MS = 24 * 3600_000;
 
 const args = process.argv.slice(2);
 const flag = (name: string) => { const i = args.indexOf(`--${name}`); return i >= 0 ? args[i + 1] : undefined; };
@@ -419,7 +419,7 @@ async function main() {
   const wanted = new Set(sessions.map((s) => s.id));
   const turns = verdicts.filter((t) => wanted.has(t.session_id));
   log(`→ ${turns.length} verdict-bearing turns in selected sessions (from local index)`);
-  const planKey = createHash('sha1').update(JSON.stringify(['v4-lookback', ...plans.map((p) => [p.id, p.from, p.to])])).digest('hex').slice(0, 12);
+  const planKey = createHash('sha1').update(JSON.stringify(['v5-lookback24', ...plans.map((p) => [p.id, p.from, p.to])])).digest('hex').slice(0, 12);
   const sessionTurns = await sessionTurnIndex(planKey, wanted, (raw) => inAny(raw, true)); // lookback turns feed reference_seen only
 
   // ---- build each window, split into parts of <= EVENT_CAP events, validate and index every part
@@ -467,7 +467,7 @@ async function main() {
       : input.label;
     whole.label = windowLabel;
 
-    // reference_seen from the 12 h lookback: refs in chat and session turns before the window opens.
+    // reference_seen from the 24 h lookback: refs in chat and session turns before the window opens.
     const lbFrom = rawTs(p.from - LOOKBACK_MS); const lbTo = rawTs(p.from);
     const lookbackRefs = [
       ...chats.filter((c) => c.created_at >= lbFrom && c.created_at < lbTo).flatMap((c) => refsIn(c.content ?? '').map((ref) => ({ ref, sourceEventId: `chat/${c.id}` }))),
