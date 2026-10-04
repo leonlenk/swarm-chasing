@@ -150,10 +150,12 @@ def export(
                 if key in KEEP_EVENT_FIELDS:
                     clean[key] = value
                     continue
-                clean[key], c = redactor.redact_value(value, key)
+                out_key, kc = redactor.redact_key(key, clean)
+                clean[out_key], c = redactor.redact_value(value, key)
+                c = c + kc
                 if c:
                     rec_counts.update(c)
-                    by_field[key] += sum(c.values())
+                    by_field[out_key] += sum(c.values())
             if rec_counts:
                 changed += 1
                 redactions.update(rec_counts)

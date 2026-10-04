@@ -630,9 +630,24 @@ class Redactor:
                 return "[credential]", Counter({"credential": 1})
         return self.redact(value)
 
+    def redact_key(self, key: Any, taken: Iterable[Any] = ()) -> tuple[Any, Counter[str]]:
+        """Redact a dict key (keys can hold data too: ``{"carol@example.com": "reacted"}``).
+        Non-string keys pass through. If the result is already in ``taken`` (two keys that
+        redact alike), `` (2)``, `` (3)``... is appended so no value is overwritten."""
+        if not isinstance(key, str):
+            return key, Counter()
+        out, counts = self.redact(key)
+        taken = taken if isinstance(taken, (set, frozenset, dict)) else set(taken)
+        if out in taken:
+            i = 2
+            while f"{out} ({i})" in taken:
+                i += 1
+            out = f"{out} ({i})"
+        return out, counts
+
     def redact_value(self, value: Any, key: str | None = None) -> tuple[Any, Counter[str]]:
         """Redact every string inside a JSON-like value (str, dict, list; other types pass
-        through). ``key`` is the field name the value sits under, if any."""
+        through), dict keys included. ``key`` is the field name the value sits under, if any."""
         counts: Counter[str] = Counter()
 
         def walk(v: Any, k: str | None) -> Any:
@@ -641,7 +656,12 @@ class Redactor:
                 counts.update(c)
                 return out
             if isinstance(v, dict):
-                return {dk: walk(dv, str(dk)) for dk, dv in v.items()}
+                d: dict[Any, Any] = {}
+                for dk, dv in v.items():
+                    nk, c = self.redact_key(dk, d)
+                    counts.update(c)
+                    d[nk] = walk(dv, str(dk))
+                return d
             if isinstance(v, (list, tuple)):
                 return [walk(x, k) for x in v]
             return v
@@ -650,7 +670,7 @@ class Redactor:
 
     def redact_obj(self, obj: Any, *, skip_keys: Iterable[str] = ()) -> tuple[Any, Counter[str]]:
         """``redact_value`` for a record: top-level keys in ``skip_keys`` are copied
-        unchanged (identity fields such as ``event_id``)."""
+        unchanged (identity fields such as ``event_id``); other keys are redacted too."""
         if not isinstance(obj, dict):
             return self.redact_value(obj)
         skip = frozenset(skip_keys)
@@ -660,7 +680,9 @@ class Redactor:
             if k in skip:
                 out[k] = v
                 continue
-            out[k], c = self.redact_value(v, str(k))
+            nk, c = self.redact_key(k, out)
+            counts.update(c)
+            out[nk], c = self.redact_value(v, str(k))
             counts.update(c)
         return out, counts
 

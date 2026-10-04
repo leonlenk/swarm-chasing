@@ -101,6 +101,15 @@ def test_vcs_remotes_are_not_emails(r):
     assert red(r, text) == text
 
 
+def test_dict_keys_are_redacted_without_collisions(r):
+    carol, dan = "carol" + "@" + "example.com", "dan" + "@" + "example.com"
+    out, c = r.redact_value({"meta": {carol: "reacted", dan: "liked", "count": 2}, 3: "x"})
+    assert out == {"meta": {"[email]": "reacted", "[email] (2)": "liked", "count": 2}, 3: "x"}
+    assert c == {"email": 2}
+    out, c = r.redact_obj({"event_id": "keep", carol: 1}, skip_keys=["event_id"])
+    assert out == {"event_id": "keep", "[email]": 1} and c == {"email": 1}
+
+
 # --------------------------------------------------------------------------- phone
 
 
