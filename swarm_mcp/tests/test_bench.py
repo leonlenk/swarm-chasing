@@ -23,6 +23,7 @@ from swarm_mcp.bench._common import (
     chat_eid,
     event_eid,
     name_pattern,
+    parse_ts,
     read_jsonl_gz,
     skeleton,
 )
@@ -122,6 +123,16 @@ def _native(eid: str) -> str:
 
 
 # ---------------------------------------------------------------- generation
+def test_parse_ts_converts_an_offset_to_utc():
+    from datetime import timezone
+
+    want = datetime(2025, 12, 29, 18, 0)
+    assert parse_ts("2025-12-29T10:00:00-08:00") == want  # converted to UTC, not just stripped
+    assert parse_ts(datetime(2025, 12, 29, 10, tzinfo=timezone(timedelta(hours=-8)))) == want
+    assert parse_ts("2025-12-29T18:00:00Z") == want and parse_ts("2025-12-29 18:00:00") == want  # naive = UTC
+    assert parse_ts(want) == want and parse_ts("") is None and parse_ts("nope") is None
+
+
 def test_generation_is_deterministic(tmp_path: Path):
     a, b, c = (generate(tmp_path / n, s, days=14, msgs_per_day=40) for n, s in (("a", 11), ("b", 11), ("c", 12)))
     da, db = _digest(tmp_path / "a"), _digest(tmp_path / "b")
@@ -434,6 +445,23 @@ def test_scorer_other_penalties_and_leniency(bench, solved):
     assert score(old_truth, solved)["summary"]["macro_f1"] == 1.0
     # missing tasks are reported
     assert set(score(truth, {"diffusion": solved["diffusion"]})["summary"]["missing"]) == {"coordinators", "integrity"}
+
+
+def test_scorer_skips_non_dict_adopters_and_dedupes(bench, solved):
+    """A malformed adopter entry is ignored (no crash), and a repeated adopter counts once, so
+    it can't pad the matched-adopter accuracies."""
+    truth = bench["truth"]
+    base = score(truth, solved)["tasks"]["diffusion"]
+    noisy = copy.deepcopy(solved)
+    term = next(t for t in noisy["diffusion"].values() if t["adopters"])
+    first = term["adopters"][0]
+    dup = copy.deepcopy(first)
+    dup["first_event_id"] = dup["basis_event_id"] = "village:msg:nope"  # a wrong repeat of a right adopter
+    term["adopters"] += ["not-an-object", None, 42, ["a", "list"], copy.deepcopy(first), dup]
+    d = score(truth, noisy)["tasks"]["diffusion"]
+    for k in ("tp", "fp", "fn", "f1", "adopter_first_event_accuracy", "basis_accuracy"):
+        assert d[k] == base[k], k
+    assert d["adopter_first_event_accuracy"] == 1.0
 
 
 def test_cli_generate_reference_score(tmp_path: Path, capsys):
