@@ -413,3 +413,33 @@ def test_external_actors_are_not_agents(store_path: Path, tmp_path: Path):
     assert kinds["external:visitor"] == "external" and all(
         v != "external" for k, v in kinds.items() if k != "external:visitor"
     )
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_busiest_threads_show_their_day():
+    """Regression: the busiest-threads table showed only '03:00–03:09 UTC' outside the Village, so threads on
+    different days looked like duplicates."""
+    import subprocess
+
+    js = (Path(render_timeline.__code__.co_filename).parent / "assets" / "timeline.js").read_text(encoding="utf-8")
+    when = re.search(r"tbl-bursts.*?label: 'When', get: function \(b\) \{ return (.*?); \}", js, re.S)
+    assert when and when.group(1) == "fmtSpan(b.s, b.e)"
+    pieces = [
+        re.search(r"^  var MON = .*$", js, re.M),
+        re.search(r"^  function pad2\(.*$", js, re.M),
+        re.search(r"^  function fmtDate\(.*$", js, re.M),
+        re.search(r"^  function fmtTime\(.*$", js, re.M),
+        re.search(r"^  function fmtSpan\(.*?^  \}$", js, re.M | re.S),
+    ]
+    assert all(pieces)
+    t = "Date.UTC(2026, 0, 5, 3, 0), Date.UTC(2026, 0, 5, 3, 9)"
+    late = "Date.UTC(2026, 0, 5, 23, 50), Date.UTC(2026, 0, 6, 0, 10)"
+    script = "\n".join(m.group(0) for m in pieces if m) + (
+        "\nvar DAYS = null; function dayOf() { return null; }"
+        f"\nconsole.log(JSON.stringify([fmtSpan({t}), fmtSpan({late})]));"
+        "\nDAYS = {}; dayOf = function (ms) { return ms < Date.UTC(2026, 0, 6) ? 5 : 6; };"
+        f"\nconsole.log(JSON.stringify([fmtSpan({t}), fmtSpan({late})]));"
+    )
+    out = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout.splitlines()
+    assert json.loads(out[0]) == ["5 Jan 2026, 03:00–03:09 UTC", "5 Jan 2026, 23:50–6 Jan 2026, 00:10 UTC"]
+    assert json.loads(out[1]) == ["Day 5, 03:00–03:09 UTC", "Day 5, 23:50–Day 6, 00:10 UTC"]

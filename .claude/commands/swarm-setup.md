@@ -65,7 +65,9 @@ This runs the check again, then ingests. It is idempotent: re-running replaces t
 After a restart of the `swarm` MCP server (`/mcp`):
 - `core_info` lists `<source>` with every mapped kind and its row counts;
 - `scope_search` finds a phrase you know is in the data;
-- `core_get` resolves one id of each kind (`<source>:<kind>:<id>`).
+- `core_get` resolves one id of each mapped kind: `<source>:msg:<kind>/<id>` for a message kind,
+  `<source>:event:<kind>/<id>` for an action or other kind, `<source>:period:<kind>/<id>` for a
+  period (`<kind>` is the mapping's own kind, e.g. `forum:msg:post/42`; copy ids from `scope_search`).
 
 ### 6. Report
 Report back with:

@@ -463,7 +463,13 @@ def _draft(args: argparse.Namespace, path: Path, source: str, mappings_dir: Path
 RenderView = tuple[str, Callable[[argparse.ArgumentParser], None], Callable[[argparse.Namespace, Config], Any]]
 
 
+def _window_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--since", help="inclusive start, ISO date/datetime (UTC)")
+    p.add_argument("--until", help="exclusive end, ISO date/datetime (UTC); a bare date includes that day")
+
+
 def _timeline_args(p: argparse.ArgumentParser) -> None:
+    _window_args(p)
     p.add_argument("--top", type=int, default=12, help="number of agents (by message count) to show")
     p.add_argument("--channel", help="only this channel (e.g. general)")
     p.add_argument("--snippet-chars", type=int, default=160, help="hover snippet length (masked)")
@@ -499,6 +505,9 @@ def _subtasks_args(p: argparse.ArgumentParser) -> None:
         "--corpus", help="source to infer subtasks for (defaults to --source; required if the store has several)"
     )
     p.add_argument("--title-chars", type=int, default=140, help="unit title length (masked)")
+    # subtasks are inferred over the whole corpus: a time window is refused, not silently ignored
+    p.add_argument("--since", help=argparse.SUPPRESS)
+    p.add_argument("--until", help=argparse.SUPPRESS)
     p.add_argument(
         "--llm-names",
         action="store_true",
@@ -514,6 +523,11 @@ def _subtasks_run(args: argparse.Namespace, config: Config) -> Any:
     from swarm_mcp.scope.viz.subtasks_html import render_subtasks
     from swarm_mcp.toolkit import Scrubber
 
+    if args.since or args.until:
+        raise CommandError(
+            "render subtasks has no --since/--until: subtasks are inferred over the whole corpus "
+            "(the time window applies to render timeline)"
+        )
     try:
         client = llm.get_client(config) if args.llm_names else None  # no key: a clear error before any work
     except llm.LLMUnavailable as e:
@@ -546,6 +560,9 @@ RENDER_VIEWS: dict[str, RenderView] = {
 }
 
 
+RENDER_OUT = {"subtasks": "swarmscope-subtasks-<corpus>.html, or swarmscope-subtasks.html when the corpus is inferred"}
+
+
 def cmd_render(args: argparse.Namespace, config: Config) -> int:
     result = RENDER_VIEWS[args.view][2](args, config)
     print(json.dumps(result, indent=2, default=str))
@@ -561,6 +578,7 @@ def cmd_export(args: argparse.Namespace, config: Config) -> int:
     filters = {
         "source": args.source or None,
         "kind": args.kind or None,
+        "type": args.type or None,
         "channel": args.channel,
         "author": args.author,
         "since": args.since,
@@ -659,18 +677,24 @@ def build_parser() -> argparse.ArgumentParser:
     views = r.add_subparsers(dest="view", required=True)
     for name, (help_text, add_args, _run) in RENDER_VIEWS.items():
         v = views.add_parser(name, help=help_text)
-        v.add_argument("--out", help=f"output HTML file (default: <data dir>/swarmscope-{name}.html, gitignored)")
-        v.add_argument("--since", help="inclusive start, ISO date/datetime (UTC)")
-        v.add_argument("--until", help="exclusive end, ISO date/datetime (UTC); a bare date includes that day")
-        v.add_argument("--source", help="only this source (e.g. village)")
+        out = RENDER_OUT.get(name, f"swarmscope-{name}.html")
+        v.add_argument("--out", help=f"output HTML file (default: <data dir>/{out}, gitignored)")
+        v.add_argument("--source", help="same as --corpus" if name == "subtasks" else "only this source (e.g. village)")
         v.add_argument("--db", help="store path")
         add_args(v)
     r.set_defaults(fn=cmd_render)
 
     e = sub.add_parser("export", help="export a redacted subset of the store, then rescan it (the check)")
-    e.add_argument("--out", required=True, metavar="DIR", help="export directory (created; keep it under data/)")
+    e.add_argument(
+        "--out", required=True, metavar="DIR", help="new, empty or previous export folder (keep it under data/)"
+    )
     e.add_argument("--source", action="append", default=[], help="only these sources (repeatable)")
     e.add_argument("--kind", action="append", default=[], help="only these id kinds, e.g. msg, event (repeatable)")
+    e.add_argument(
+        "--type", action="append", default=[],
+        help="only these dataset types, e.g. commit, revision, session_goal (messages.msg_type / actions.kind; "
+        "repeatable)",
+    )  # fmt: skip
     e.add_argument("--channel", help="only messages in this channel")
     e.add_argument("--author", help="only this author: agent name/alias/id, 'human' or 'human:<id>'")
     e.add_argument("--since", help="inclusive UTC start (ISO date or datetime)")
