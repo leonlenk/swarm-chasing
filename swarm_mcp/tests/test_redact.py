@@ -218,6 +218,25 @@ def test_secret_named_json_field_is_masked_whole(r):
 # --------------------------------------------------------------------------- url credentials
 
 
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("postgres://admin:pa/ssw0rd@db.internal:5432/x", "postgres://[url-credential]@db.internal:5432/x"),
+        ("mysql://root:a?b#c@10.0.0.1/db", "mysql://[url-credential]@10.0.0.1/db"),
+        ("amqp://svc:p@ss/w0rd@mq.example.com/vhost", "amqp://[url-credential]@mq.example.com/vhost"),
+        # host:port, then an '@' in the path: not userinfo
+        ("http://localhost:8000/users/bob@example.com", "http://localhost:8000/users/[email]"),
+        ("https://example.com:443/a?to=bob@example.org", "https://example.com:443/a?to=[email]"),
+        ("ftp://bob:pw@files.example.com/a@b", "ftp://[url-credential]@b"),  # over-masks, never leaks
+    ],
+)
+def test_url_credentials_with_slash_in_password(r, text, expected):
+    """Regression: userinfo stopped at '/', '?' or '#', so part of the password leaked."""
+    out = red(r, text)
+    assert out == expected
+    assert "ssw0rd" not in out and "a?b#c" not in out and "w0rd" not in out
+
+
 def test_url_credentials_mask_only_userinfo(r):
     out, c = r.redact("see https://alice:s3cretpw@example.com/path?q=1 now")
     assert out == "see https://[url-credential]@example.com/path?q=1 now" and c == {"url-credential": 1}

@@ -162,9 +162,15 @@ def _looks_token(v: str, min_len: int = 16) -> bool:
 # --------------------------------------------------------------------------- url_credential
 
 _URL_CRED = re.compile(
-    # scheme://userinfo@  ; userinfo may itself contain an unencoded '@' (greedy to the last one
-    # before the host), but never whitespace, '/', '?', '#', brackets or quotes.
-    r"(?<![A-Za-z0-9+.-])([A-Za-z][A-Za-z0-9+.-]{1,30}://)([^\s/?#\[\]<>\"'`@]+(?:@[^\s/?#\[\]<>\"'`@]+)*)@(?=[A-Za-z0-9\[])"
+    r"(?<![A-Za-z0-9+.-])([A-Za-z][A-Za-z0-9+.-]{1,30}://)("
+    # user:password, where the unencoded password may hold '/', '?', '#' or '@': greedy to the
+    # last '@' in the URL. Skipped when what follows ':' is a port (digits, then '/', '?', '#'
+    # or the end), so host:port/path@x is left to the email rule.
+    r"[^\s/?#\[\]<>\"'`@:]+:(?![0-9]+(?:[/?#\s]|$))[^\s<>\"'`]*"
+    # or userinfo with no ':'; it may itself contain an unencoded '@' (greedy to the last one
+    # before the host), but never whitespace, '/', '?', '#', brackets or quotes
+    r"|[^\s/?#\[\]<>\"'`@]+(?:@[^\s/?#\[\]<>\"'`@]+)*"
+    r")@(?=[A-Za-z0-9\[])"
 )
 
 
@@ -174,8 +180,13 @@ def _r_url_credential(m: re.Match[str], r: Redactor) -> str | None:
     The whole userinfo is masked (usernames are often identities or tokens too).
     Userinfo *without* a colon is masked only when it looks like a token
     (``https://<token>@github.com``); ``ssh://git@github.com`` is kept.
+    A password with an unencoded ``/``, ``?``, ``#`` or ``@`` is masked too
+    (``postgres://admin:pa/ss@db``): with a password, everything up to the last ``@``
+    in the URL is masked, so a later ``@`` in the path also hides the host and path
+    before it (over-masking, never a leak).
     False negatives: credentials passed as query parameters (``?token=...``) are left
-    to ``keyword_secret``; schemeless ``user:pass@host`` is not matched.
+    to ``keyword_secret``; schemeless ``user:pass@host`` is not matched; a password
+    that starts with digits followed by ``/`` (read as a port).
     """
     userinfo = m.group(2)
     if ":" in userinfo or _looks_token(userinfo, 16):
