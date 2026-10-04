@@ -22,8 +22,9 @@ sweep_precision(sweep_id)                    precision, Wilson 95% CI, labels it
   EventSources registry, the same path `core_get_event` uses. It can also take `filters` for a
   registered record provider (see below).
 - **Prompting.** The rubric is trusted. Each record (metadata and text) goes inside
-  `<record untrusted="true">…</record>`, with any `<record`/`<rubric` tags in the data escaped.
-  The system prompt says the record is data, not instructions.
+  `<record-ID untrusted="true">…</record-ID>`, where ID is a random token per request, and any
+  tag-like text in the data (case, spacing and look-alike variants) is escaped as `&lt;`.
+  The system prompt says the record is data, not instructions, and ends only at its own token.
 - **Output.** The model replies in strict JSON:
   `{"verdict": "yes|no|unclear", "confidence": "low|medium|high", "rationale": "<= 40 words"}`.
   The parser tolerates code fences, prose around the object, single quotes, trailing commas,

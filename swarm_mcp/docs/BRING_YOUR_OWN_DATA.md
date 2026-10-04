@@ -241,10 +241,13 @@ with `--full`. A `field_missing` error suggests close field names that do exist.
 | `api` | An LLM, via `swarm_mcp.llm.get_client()`, gets the profile, the mapping JSON Schema and the heuristic draft, and returns `{"mapping": …, "rationale": …}`. The mapping is validated and checked, and failures are fed back, for at most `--rounds` (default 3) model calls. This needs `ANTHROPIC_API_KEY`. Without it, setup stops with an error suggesting `--agent none` or `--agent claude-code`. The model and effort come from `SWARM_MCP_LLM_MODEL` / `SWARM_MCP_LLM_EFFORT` |
 | `claude-code` | Writes the heuristic draft plus `mappings/<source>.task.md`, which holds a profile summary (field names and guesses only), the schema and check commands, and the done criteria. Then run `/swarm-setup <source> <path>` in Claude Code (`.claude/commands/swarm-setup.md`) |
 
-In `api` mode, everything derived from the dataset (the profile, check reports and
-parse errors) is wrapped in `<data untrusted="true">…</data>`. The system prompt says
-that content is data and never instructions. Any `</data` inside it is escaped, so the
-data cannot close the block early.
+In `api` mode, everything derived from the dataset (the profile, the heuristic draft, the
+previous mapping, check reports and parse errors) is wrapped in
+`<data-ID untrusted="true">…</data-ID>`, with a random token ID per block. The system prompt
+says that content is data and never instructions, and that a block ends only at its own
+token. Any tag-like text inside it is escaped, so the data cannot close the block early. In
+`claude-code` mode, field and table names in the task file are escaped onto one line inside
+a fence longer than any backtick run, so a name can't add a heading or close the fence.
 
 ## Outputs
 
