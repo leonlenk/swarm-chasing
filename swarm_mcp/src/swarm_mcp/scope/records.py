@@ -14,7 +14,7 @@ One filter vocabulary, shared by sweeps and exports:
     query    str           case-insensitive substring of the text
 
 Records come from ``messages`` and ``actions`` in time order (ts, then evidence id).
-``store_records`` yields them lazily; ``StoreRecordProvider`` is the
+``store_records`` yields them lazily (``count_store_records`` counts them); ``StoreRecordProvider`` is the
 ``sweep.RecordProvider`` the scope module registers as ``"store"``; ``export_store``
 feeds them to ``export.export`` with a ``redact.Redactor``. ``from_store_record`` turns a
 ``store_api["get_record"]`` result (a message, action or period) into the same record shape.
@@ -126,6 +126,38 @@ def store_records(
     (sweeps pass the server's scrubber; exports pass nothing and redact everything afterwards).
     The read-only connection stays open while the generator is consumed."""
     f = check_filters(filters)
+    with db.connect(db_path) as s:
+        parts, params = _select(s, f)
+        if not parts:
+            return
+        sql = " UNION ALL ".join(parts) + " ORDER BY ts NULLS LAST, evidence_id"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(int(limit))
+        names = s.display_names()
+        cur = s.con.execute(sql, params)
+        cols = [d[0] for d in cur.description or []]
+        while True:
+            rows = cur.fetchmany(_BATCH)
+            if not rows:
+                break
+            for row in rows:
+                yield _record(dict(zip(cols, row, strict=True)), names, max_chars, mask)
+
+
+def count_store_records(db_path: Path, filters: Mapping[str, Any] | None = None) -> int:
+    """How many records ``store_records(db_path, filters)`` would yield without a limit (same WHERE)."""
+    f = check_filters(filters)
+    with db.connect(db_path) as s:
+        parts, params = _select(s, f)
+        if not parts:
+            return 0
+        row = s.con.execute(f"SELECT count(*) FROM ({' UNION ALL '.join(parts)})", params).fetchone()
+    return int(row[0]) if row else 0
+
+
+def _select(s: Any, f: Mapping[str, Any]) -> tuple[list[str], list[Any]]:
+    """(one SELECT per table, their params) for checked filters ``f`` on an open store session ``s``."""
     sources = _as_list(f.get("source"), "source")
     kind_specs = []  # (source or None, schema kind): "source:kind" keeps its source
     for k in _as_list(f.get("kind"), "kind"):
@@ -144,58 +176,43 @@ def store_records(
     hi = parse_time(_one(f.get("until"), "until"), end=True, field="until")
     if lo and hi and lo >= hi:
         raise ToolInputError(f"since ({f.get('since')}) must be before until ({f.get('until')})")
-    with db.connect(db_path) as s:
-        known = {r["source"] for r in s.all("SELECT source FROM sources")}
-        bad = [x for x in [*sources, *(src for src, _k in kind_specs if src)] if x not in known]
-        if bad:
-            raise ToolInputError(f"Unknown source(s) {', '.join(bad)}. Sources: {', '.join(sorted(known)) or 'none'}")
-        one_source = sources[0] if len(sources) == 1 else None
-        channel = s.resolve_channel(_one(f.get("channel"), "channel"), one_source)
-        author = s.author_filter(_one(f.get("author"), "author"), one_source)
-        parts: list[str] = []
-        params: list[Any] = []
-        for table in ("messages", "actions"):
-            if channel is not None and table == "actions":
-                continue
-            if kinds and not any(RECORD_KINDS[k] == table for k in kinds):
-                continue
-            where, p = record_filters(table, channel=channel, since=lo, until=hi)
-            if sources:
-                where.append(f"source IN ({', '.join('?' * len(sources))})")
-                p += sources
-            if kind_specs:
-                kind_sources = [src for src, k in kind_specs if RECORD_KINDS[k] == table]
-                if None not in kind_sources:  # only qualified kinds for this table: keep their sources
-                    where.append(f"source IN ({', '.join('?' * len(kind_sources))})")
-                    p += kind_sources
-            if types:
-                col = "msg_type" if table == "messages" else "kind"
-                where.append(f"{col} IN ({', '.join('?' * len(types))})")
-                p += types
-            if author is not None:
-                sql, ap, _ = author
-                where.append(sql.replace("author_id", "agent_id") if table == "actions" else sql)
-                p += ap
-            if query:
-                where.append("content ILIKE ? ESCAPE '\\'")
-                p.append("%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%")
-            parts.append(f"{_SELECT[table]} WHERE {' AND '.join(where) or 'TRUE'}")
-            params += p
-        if not parts:
-            return
-        sql = " UNION ALL ".join(parts) + " ORDER BY ts NULLS LAST, evidence_id"
-        if limit is not None:
-            sql += " LIMIT ?"
-            params.append(int(limit))
-        names = s.display_names()
-        cur = s.con.execute(sql, params)
-        cols = [d[0] for d in cur.description or []]
-        while True:
-            rows = cur.fetchmany(_BATCH)
-            if not rows:
-                break
-            for row in rows:
-                yield _record(dict(zip(cols, row, strict=True)), names, max_chars, mask)
+    known = {r["source"] for r in s.all("SELECT source FROM sources")}
+    bad = [x for x in [*sources, *(src for src, _k in kind_specs if src)] if x not in known]
+    if bad:
+        raise ToolInputError(f"Unknown source(s) {', '.join(bad)}. Sources: {', '.join(sorted(known)) or 'none'}")
+    one_source = sources[0] if len(sources) == 1 else None
+    channel = s.resolve_channel(_one(f.get("channel"), "channel"), one_source)
+    author = s.author_filter(_one(f.get("author"), "author"), one_source)
+    parts: list[str] = []
+    params: list[Any] = []
+    for table in ("messages", "actions"):
+        if channel is not None and table == "actions":
+            continue
+        if kinds and not any(RECORD_KINDS[k] == table for k in kinds):
+            continue
+        where, p = record_filters(table, channel=channel, since=lo, until=hi)
+        if sources:
+            where.append(f"source IN ({', '.join('?' * len(sources))})")
+            p += sources
+        if kind_specs:
+            kind_sources = [src for src, k in kind_specs if RECORD_KINDS[k] == table]
+            if None not in kind_sources:  # only qualified kinds for this table: keep their sources
+                where.append(f"source IN ({', '.join('?' * len(kind_sources))})")
+                p += kind_sources
+        if types:
+            col = "msg_type" if table == "messages" else "kind"
+            where.append(f"{col} IN ({', '.join('?' * len(types))})")
+            p += types
+        if author is not None:
+            sql, ap, _ = author
+            where.append(sql.replace("author_id", "agent_id") if table == "actions" else sql)
+            p += ap
+        if query:
+            where.append("content ILIKE ? ESCAPE '\\'")
+            p.append("%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%")
+        parts.append(f"{_SELECT[table]} WHERE {' AND '.join(where) or 'TRUE'}")
+        params += p
+    return parts, params
 
 
 def _record(
@@ -308,6 +325,10 @@ class StoreRecordProvider:
     def iter_records(self, filters: Mapping[str, Any], limit: int) -> list[dict[str, Any]]:
         # materialized, so the read-only connection is closed before the caller does slow work
         return list(store_records(self.db_path, filters, limit=limit, max_chars=self.max_chars, mask=self.mask))
+
+    def count(self, filters: Mapping[str, Any]) -> int:
+        """How many records match ``filters`` in all (``iter_records`` returns the oldest ``limit`` of them)."""
+        return count_store_records(self.db_path, filters)
 
 
 def export_store(

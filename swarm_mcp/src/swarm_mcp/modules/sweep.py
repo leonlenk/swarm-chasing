@@ -65,14 +65,20 @@ def register(mcp, ctx) -> None:
         return lambda eid: from_store_record(get_record(eid, max_chars=max_chars))
 
     def gather(ids: list[str] | None, filters: dict[str, Any] | None, limit: int):
-        """Records for a sweep, plus resolution errors, notes and the provider used."""
+        """Records for a sweep, plus resolution errors, notes, the provider used, how many records matched
+        in all and the note to show if the cap leaves some unsent."""
         if ids and filters is not None:
             raise ToolInputError("Pass either ids or filters, not both.")
         if ids:
             if len(ids) > engine.MAX_CAP * 4:
                 raise ToolInputError(f"At most {engine.MAX_CAP * 4} ids per call (got {len(ids)}).")
             records, errors = engine.resolve_ids(resolver(), ids, max_chars)
-            return records, errors, [], None
+            n = min(limit, len(records))
+            cap_note = (
+                f"{n} of {len(records):,} resolved ids sent (the first {n} in the order given; "
+                "pass the rest in another call or raise cap)"
+            )
+            return records, errors, [], None, len(records), cap_note
         if filters is not None:
             table = engine.providers(ctx.registry)
             if not table:
@@ -81,8 +87,19 @@ def register(mcp, ctx) -> None:
                     "`filters` cannot be used. Pass ids (from scope_search or other tools) instead."
                 )
             name = DEFAULT_PROVIDER if DEFAULT_PROVIDER in table else sorted(table)[0]
-            records = list(table[name].iter_records(filters, limit + 1))
-            return records, [], [f"records from provider {name!r}"], name
+            provider = table[name]
+            count = getattr(provider, "count", None)
+            total = count(filters) if callable(count) else None
+            # without a count, one record past the cap shows that some were left out
+            records = list(provider.iter_records(filters, limit if total is not None else limit + 1))
+            n = min(limit, len(records))
+            if total is None:
+                cap_note = (
+                    f"{n} of more than {n} matching records sent (the first {n}; narrow the filters or raise cap)"
+                )
+            else:
+                cap_note = f"{n} of {total:,} matching records sent (the oldest {n}; narrow since/until or raise cap)"
+            return records, [], [f"records from provider {name!r}"], name, total, cap_note
         raise ToolInputError(
             "Pass ids (from scope_search or other tools), or filters such as "
             "{'source': 'village', 'channel': 'general', 'since': '2026-01-05', 'until': '2026-01-12', "
@@ -131,7 +148,7 @@ def register(mcp, ctx) -> None:
                 client = llm.get_client(config)  # before any work: no key, nothing happens
             except llm.LLMUnavailable as e:
                 raise ToolInputError(str(e)) from None
-        records, errors, notes, provider = gather(ids, filters, cap)
+        records, errors, notes, provider, total, cap_note = gather(ids, filters, cap)
         if not records:
             if errors:
                 raise ToolInputError(
@@ -141,7 +158,8 @@ def register(mcp, ctx) -> None:
             raise ToolInputError("No records match these filters, so nothing was swept.")
         model = llm.configured_model(config)
         if dry_run:
-            out = engine.run(rubric, records, None, cap=cap, dry_run=True, model=model, prices=_prices(ctx))
+            out = engine.run(rubric, records, None, cap=cap, dry_run=True, model=model, prices=_prices(ctx),
+                             total=total, cap_note=cap_note)  # fmt: skip
             out["notes"] = notes + out["notes"] + ["call again with dry_run=false to run it"]
         else:
             out = engine.run(
@@ -154,6 +172,8 @@ def register(mcp, ctx) -> None:
                 prices=_prices(ctx),
                 concurrency=config.llm_concurrency,
                 meta={"source_tool": "sweep_run", "unresolved": len(errors), "provider": provider},
+                total=total,
+                cap_note=cap_note,
             )
             out["notes"] = notes + out.get("notes", [])
         out["unresolved"] = errors

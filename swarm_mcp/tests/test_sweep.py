@@ -224,7 +224,8 @@ def test_run_applies_cap_and_writes_jsonl(tmp_path: Path):
     assert [v["verdict"] for v in out["verdicts"]] == ["yes", "no", "unclear", "yes"]
     assert all(v["untrusted"] for v in out["verdicts"]) and out["verdicts"][2]["parse_ok"] is False
     assert out["counts"] == {"yes": 2, "no": 1, "unclear": 1, "error": 0, "unparsed": 1}
-    assert any("cap 4 applied: 6 of 10" in n for n in out["notes"])
+    assert "4 of 10 records sent (the first 4 given; raise cap or split the sweep)" in out["notes"]
+    assert out["matching"] == 10
     assert out["tokens"]["input"] == sum((len(s) + len(p)) // 4 for s, p, _ in fake.calls)
     assert out["cost_usd"] == 0.0  # fake-model is priced at zero
 
@@ -444,6 +445,32 @@ def test_filters_need_a_registered_provider(sweep_app, monkeypatch):
     assert "No records match" in call_error(app, "sweep_run", rubric="q", filters={"actor": "Nobody"})
     with pytest.raises(TypeError):
         engine.register_provider(app.swarm_registry, "bad", object())
+
+
+def test_capped_sweep_reports_the_real_total(data_dir: Path, tmp_path: Path, monkeypatch):
+    """More matching store records than the cap: the note and the output give the real total, not cap+1."""
+    app = build_server(config_for(data_dir, sweeps=tmp_path / "sweeps"))
+    flt = {"source": "village"}
+    every = [r["event_id"] for r in store_records(data_dir / "swarmscope.duckdb", flt)]
+    assert len(every) > 4  # enough synthetic records that cap=2 leaves more than one unsent
+    dry = call(app, "sweep_run", rubric="q", filters=flt, cap=2)
+    assert dry["matching"] == len(every) and dry["would_send"] == 2 and dry["event_ids"] == every[:2]
+    want = f"2 of {len(every)} matching records sent (the oldest 2; narrow since/until or raise cap)"
+    assert want in dry["notes"]
+    monkeypatch.setattr(llm, "get_client", lambda config=None: FakeClient(lambda s, p: NO))
+    out = call(app, "sweep_run", rubric="q", filters=flt, cap=2, dry_run=False)
+    assert out["matching"] == len(every) and out["sent"] == 2 and want in out["notes"]
+    got = call(app, "sweep_get", sweep_id=out["sweep_id"])
+    assert got["n_input"] == len(every) and got["n_sent"] == 2
+    # ids: the total is the number of (resolved) ids given, sent in the order given
+    picked = every[:5]
+    dry = call(app, "sweep_run", rubric="q", ids=picked, cap=3)
+    assert dry["matching"] == 5 and dry["event_ids"] == picked[:3]
+    want = "3 of 5 resolved ids sent (the first 3 in the order given; pass the rest in another call or raise cap)"
+    assert want in dry["notes"]
+    # large totals are written with thousands separators
+    big = engine.run("q", [rec(i) for i in range(3)], None, cap=2, dry_run=True, total=1637, cap_note=None)
+    assert big["matching"] == 1637 and big["notes"][0].startswith("2 of 1,637 records sent")
 
 
 def test_real_package_loads_sweep_without_data(tmp_path: Path):
