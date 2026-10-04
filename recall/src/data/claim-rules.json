@@ -32,11 +32,11 @@
       "claims": []
     },
     {
-      "name": "link-target exclusion: the URL after 'it points to' is a mention, not a claim (AE #5928 message)",
-      "content": "@DeepSeek-V4-Pro Done as promised: the \"AI Village News\" link is now live in my store footer (verified via curl on https://claude-fable-5-shop.fourthwall.com \u2014 it points to https://ai-village-news-cb5c4b.gitlab.io/). Also gave the homepage a proper hero: \"A pause, not a stop.\" Thanks for the coverage of the shop! \ud83e\udd8a",
+      "name": "link-target exclusion: the URL after 'it points to' is a mention, not a claim (synthetic, modelled on a real message)",
+      "content": "@Agent-Two Done as agreed: the \"Village Gazette\" link is now live in my shop footer (verified via curl on https://fox-shop.example.test \u2014 it points to https://gazette.example.test/). I also gave the homepage a new banner. Thanks for featuring the shop!",
       "claims": [
         {
-          "url": "https://claude-fable-5-shop.fourthwall.com",
+          "url": "https://fox-shop.example.test",
           "rule": "claim-sentence"
         }
       ]
@@ -67,7 +67,7 @@
     },
     {
       "name": "arrow as claim pointer: 'text \u2192 URL' with a completion phrase is a claim",
-      "content": "@Ana Your \"Responsible Growth\" section is live on the hub ethics page \u2192 https://hub.example.test/ethics.html (below the one-line rule, credited to you).",
+      "content": "@Bo The \"Shared Norms\" section you drafted is live on the hub values page \u2192 https://hub.example.test/ethics.html (under the summary line, with credit to you).",
       "claims": [
         {
           "url": "https://hub.example.test/ethics.html",
@@ -77,7 +77,7 @@
     },
     {
       "name": "arrow as claim pointer: 'published and deploying now \u2192 URL'",
-      "content": "@Ana Chapter Three is published and deploying now \u2192 https://story.example.test/chapter-3.html \u2014 I titled it \"The Index of Ages\".",
+      "content": "@Bo Part Two is published and deploying now \u2192 https://story.example.test/chapter-3.html \u2014 its title is \"Lanterns\".",
       "claims": [
         {
           "url": "https://story.example.test/chapter-3.html",
@@ -110,8 +110,8 @@
       ]
     },
     {
-      "name": "plural claim: 'two new products live (\u2026): Sticker URL1 and Mug URL2' claims both",
-      "content": "\ud83e\udd8a Two new products live in my shop (both curl-verified 200): Sticker $6.95 https://shop.example.test/products/sticker and Mug $14.95 https://shop.example.test/products/mug for fox fans.",
+      "name": "plural claim: 'two new products live (\u2026): Poster URL1 and Tote URL2' claims both",
+      "content": "Two new products live in my store (both curl-verified 200): Poster $9.50 https://shop.example.test/products/sticker and Tote $18.00 https://shop.example.test/products/mug for the community.",
       "claims": [
         {
           "url": "https://shop.example.test/products/sticker",
@@ -149,7 +149,7 @@
     },
     {
       "name": "failure report negative: hedged '\u2026can take a couple minutes to stop 404ing' \u2192 no quote (E false shape)",
-      "content": "GitHub Pages is enabled now, viewers can play at https://game.example.test/play (it can take a couple minutes to stop 404'ing after enablement).",
+      "content": "Pages hosting is switched on now, so people can try it at https://game.example.test/play (it can take a few minutes to stop 404'ing once enabled).",
       "claims": [],
       "quotes": []
     },
