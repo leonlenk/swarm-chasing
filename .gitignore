@@ -25,3 +25,6 @@ __pycache__/
 *.pyc
 .venv/
 .cache/
+
+# SwarmScope rubric sweeps (verdicts over dataset records are derived data)
+/sweeps/

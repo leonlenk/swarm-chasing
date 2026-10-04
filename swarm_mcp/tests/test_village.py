@@ -1,4 +1,4 @@
-"""The village module (goal views over the store), the ingest-time name matcher, and shared helpers."""
+"""The village module (docs resources), scope_periods over the village goals, the name matcher and helpers."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from swarm_mcp.toolkit import Scrubber, ToolInputError, parse_time
 def test_requires_reports_missing_store(tmp_path: Path, raw_data_dir: Path):
     app = build_server(config_for(tmp_path / "nothing"))
     rec = app.swarm_registry.records["village"]
-    assert rec.status == "skipped" and "swarm-mcp ingest ai_village" in rec.reasons[0]
+    assert rec.status == "skipped" and "swarm-mcp add data/ai-village" in rec.reasons[0]
     # raw data alone is not enough: the store is the source of truth
     rec = build_server(config_for(raw_data_dir)).swarm_registry.records["village"]
     assert rec.status == "skipped" and "store not found" in rec.reasons[0]
@@ -28,48 +28,52 @@ def test_resources_use_village_dir_override(tmp_path: Path, data_dir: Path):
     elsewhere = tmp_path / "docs"
     elsewhere.mkdir()
     (elsewhere / "CHANGELOG.md").write_text("# changes\n")
-    app = build_server(config_for(data_dir, SWARM_VILLAGE_DIR=str(elsewhere)))
+    app = build_server(config_for(data_dir, settings={"village": {"dir": str(elsewhere)}}))
     assert app.swarm_registry.records["village"].resources == ["village://changelog"]
 
 
-def test_goals(app):
-    out = call(app, "village_goals")
-    assert [g["index"] for g in out["goals"]] == [1, 2, 3]
-    g1, g2, g3 = out["goals"]
-    assert g1["goal"].startswith("Collaboratively") and g1["type"] == "collaborative"
+def test_periods_list(app):
+    out = call(app, "scope_periods")
+    assert [g["index"] for g in out["periods"]] == [1, 2, 3]
+    g1, g2, g3 = out["periods"]
+    assert g1["label"]["content"].startswith("Collaboratively") and g1["label"]["untrusted"] is True
+    assert g1["type"] == "collaborative" and g1["kind"] == "village_goal" and g1["source"] == "village"
     assert g1["evidence_id"] == "village:goal:g1" and g1["start"] == "2026-01-05T12:00:00Z"
     assert (g1["messages"], g1["active_agents"]) == (6, 3)
     assert g2["type"] == "competitive" and g2["duration_days"] == 7.0 and g2["messages"] == 3
     assert g3["type"] == "holiday" and g3["ongoing"] is True and g3["end"] is None and g3["messages"] == 251
+    assert call(app, "scope_periods", source="village")["count"] == 3
+    assert "Unknown source" in call_error(app, "scope_periods", source="nope")
 
 
-def test_goals_per_agent(app):
-    out = call(app, "village_goals", agent="Opus 4.5")
+def test_periods_per_agent(app):
+    out = call(app, "scope_periods", agent="Opus 4.5")
     assert out["agent"] == "Claude Opus 4.5"
-    assert [g["agent_messages"] for g in out["goals"]] == [2, 2, 0]
-    assert "Unknown agent" in call_error(app, "village_goals", agent="Nobody 9")
+    assert [g["agent_messages"] for g in out["periods"]] == [2, 2, 0]
+    assert "Unknown agent" in call_error(app, "scope_periods", agent="Nobody 9")
 
 
-def test_goal_detail(app):
-    g = call(app, "village_goal", goal="charity")
+def test_period_detail(app):
+    g = call(app, "scope_periods", name="charity")
     assert g["index"] == 1 and g["human_messages"] == 1
     speakers = {s["author"]: s["messages"] for s in g["top_speakers"]}
     assert speakers["Claude Opus 4.5"] == 2 and speakers["GPT-5.2"] == 2 and speakers["Gemini 2.5 Pro"] == 1
     assert g["busiest_day"] == {"day": "2026-01-05", "messages": 3}
     assert {c["channel"]: c["messages"] for c in g["channels"]} == {"general": 5, "rest": 1}
     assert g["actions"] == {"session_goal": 2, "session_summary": 1}
-    assert "scope_comm_graph" in g["notes"][0]
-    assert call(app, "village_goal", goal="3")["evidence_id"] == "village:goal:g3"
-    assert call(app, "village_goal", goal="village:goal:g2")["index"] == 2
-    assert "out of range" in call_error(app, "village_goal", goal="9")
-    assert "No village goal" in call_error(app, "village_goal", goal="knitting")
-    assert "matches 2 goals" in call_error(app, "village_goal", goal="y")  # ambiguous substring (goals 1 and 3)
+    assert "scope_graph" in g["notes"][0]
+    assert call(app, "scope_periods", name="3")["evidence_id"] == "village:goal:g3"
+    assert call(app, "scope_periods", name="village:goal:g2")["index"] == 2
+    assert "out of range" in call_error(app, "scope_periods", name="9")
+    assert "No period matches" in call_error(app, "scope_periods", name="knitting")
+    assert "matches 2 periods" in call_error(app, "scope_periods", name="y")  # ambiguous substring (goals 1 and 3)
 
 
-def test_dropped_tools_are_gone(app):
+def test_village_has_no_tools(app):
+    rec = app.swarm_registry.records["village"]
+    assert rec.status == "loaded" and rec.tools == []
     tools = {t.name for t in app._tool_manager.list_tools()}
-    assert {"village_goals", "village_goal"} <= tools
-    assert not tools & {"village_agents", "village_search_chat", "village_messages", "village_agent_activity"}
+    assert not {t for t in tools if t.startswith("village_")}
 
 
 def test_name_matcher_boundaries():

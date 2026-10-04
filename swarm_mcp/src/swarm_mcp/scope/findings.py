@@ -47,7 +47,7 @@ SpotKind = Literal["findings", "messages", "actions"]
 
 MIRROR_TIMEOUT = 3.0  # seconds to wait for a read-write handle before giving up on the DuckDB mirror
 _COPY_HINT = (
-    "Evidence ids must be copied exactly from tool results (the evidence_id / agent_id fields), "
+    "Evidence ids must be copied exactly from tool results (the evidence_id / agent_id / artifact_id fields), "
     "e.g. 'village:msg:<uuid>'. Nothing was written."
 )
 
@@ -150,6 +150,8 @@ def record_text(table: str, record: dict[str, Any]) -> str:
         return record.get("label") or ""
     if table == "agents":
         return record.get("display_name") or ""
+    if table == "artifacts":
+        return record.get("name") or ""
     return ""
 
 
@@ -166,6 +168,8 @@ def evidence_view(resolved: dict[str, Any]) -> dict[str, Any]:
         out.update(ts=_iso(rec.get("ts")), agent_id=rec.get("agent_id"), kind=rec.get("kind"))
     elif table == "periods":
         out.update(start_ts=_iso(rec.get("start_ts")), end_ts=_iso(rec.get("end_ts")), kind=rec.get("kind"))
+    elif table == "artifacts":
+        out.update(kind=rec.get("kind"))
     out["text"] = record_text(table, rec)
     return out
 
@@ -432,8 +436,9 @@ def spotcheck_sample(
     channel: str | None = None,
     since: str | None = None,
     until: str | None = None,
+    status: str | None = None,
 ) -> list[dict[str, Any]]:
-    """A deterministic random sample for human review.
+    """A deterministic random sample for human review (``status`` filters findings).
 
     Records (``messages``/``actions``) are ordered by ``md5(evidence_id || seed)``
     (stable across runs and DuckDB versions) after the filters. Findings use
@@ -459,6 +464,8 @@ def spotcheck_sample(
             ]
         if since_p or until_p:
             items = [e for e in items if _in_window(e["finding"].get("created_at"), since_p, until_p)]
+        if status is not None:
+            items = [e for e in items if e["finding"].get("status", "open") == status]
         picked = random.Random(seed).sample(items, min(n, len(items)))
         out = []
         for e in picked:

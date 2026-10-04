@@ -43,11 +43,11 @@ def _lines(path: Path) -> list[str]:
 def test_module_loads_and_skips_without_store(app, tmp_path: Path):
     tools = {r.name: r for r in app.swarm_registry.records.values()}
     assert tools["findings"].status == "loaded"
-    assert set(tools["findings"].tools) == {"findings_record", "findings_list", "findings_spotcheck"}
+    assert set(tools["findings"].tools) == {"findings_record", "findings_list"}
 
     empty = build_server(config_for(tmp_path / "nodata"))
     rec = empty.swarm_registry.records["findings"]
-    assert rec.status == "skipped" and "swarm-mcp ingest ai_village" in rec.reasons[0]
+    assert rec.status == "skipped" and "swarm-mcp add data/ai-village" in rec.reasons[0]
 
 
 def test_record_valid_finding_writes_jsonl_and_duckdb(app, fdir: Path, store_path: Path):
@@ -126,6 +126,26 @@ def test_record_finding_library_errors(store_path: Path, tmp_path: Path):
     assert not (tmp_path / "f").exists()
 
 
+def test_record_generic_kinds_artifact_and_old_chat_kind(store_path: Path, tmp_path: Path):
+    """Evidence checks use the schema kinds (msg, event, agent, period/goal, artifact); pre-v2 'chat' ids fail."""
+    art = "village:artifact:notes.md"
+    con = db.duckdb.connect(str(store_path))
+    try:
+        con.execute("INSERT INTO artifacts (artifact_id, source, kind, name, meta) VALUES (?, 'village', 'file', ?, '{}')",
+                    [art, "notes.md"])  # fmt: skip
+    finally:
+        con.close()
+    out = lib.record_finding(tmp_path / "f", store_path, claim="c", evidence_ids=[art, *GOOD_IDS])
+    ev = {e["evidence_id"]: e for e in out["evidence"]}
+    assert ev[art]["table"] == "artifacts" and ev[art]["kind"] == "file" and ev[art]["text"] == "notes.md"
+    assert ev["village:msg:m0003"]["table"] == "messages" and ev["village:goal:g1"]["table"] == "periods"
+    assert lib.check_findings(tmp_path / "f" / "findings.jsonl", store_path)["ok"] is True
+    with pytest.raises(EvidenceError, match="Unknown evidence kind 'chat'"):
+        lib.record_finding(tmp_path / "g", store_path, claim="c", evidence_ids=["village:chat:m0003"])
+    with pytest.raises(EvidenceError, match="does not resolve"):
+        lib.record_finding(tmp_path / "g", store_path, claim="c", evidence_ids=["village:artifact:missing.md"])
+
+
 def test_record_survives_locked_store(store_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     def locked(*a, **kw):
         raise db.duckdb.IOException("Could not set lock on file: Conflicting lock is held in pid 1")
@@ -172,30 +192,6 @@ def test_findings_list(app, fdir: Path):
 # --------------------------------------------------------------------------- spotcheck
 
 
-def test_spotcheck_messages_is_deterministic(app):
-    a = call(app, "findings_spotcheck", kind="messages", n=5, seed=7)
-    b = call(app, "findings_spotcheck", kind="messages", n=5, seed=7)
-    ids = [i["evidence_id"] for i in a["items"]]
-    assert ids == [i["evidence_id"] for i in b["items"]] and len(set(ids)) == 5
-    assert all(i["content"]["untrusted"] is True for i in a["items"])
-    others = {
-        tuple(i["evidence_id"] for i in call(app, "findings_spotcheck", kind="messages", seed=s)["items"])
-        for s in range(5)
-    }
-    assert len(others) > 1
-
-    gen = call(app, "findings_spotcheck", kind="messages", n=50, channel="rest")
-    assert gen["returned"] == 1 and gen["items"][0]["evidence_id"] == "village:msg:m0006" and gen["notes"]
-    window = call(app, "findings_spotcheck", kind="messages", n=50, since="2026-01-05", until="2026-01-05")
-    assert {i["evidence_id"] for i in window["items"]} == {
-        "village:msg:m0001",
-        "village:msg:m0002",
-        "village:msg:m0003",
-    }
-    capped = call(app, "findings_spotcheck", kind="messages", n=200, max_chars=40)
-    assert all(len(i["content"]["content"]) < 80 for i in capped["items"])
-
-
 def test_spotcheck_library_stable_order(store_path: Path):
     with db.connect(store_path) as s:
         one = [r["evidence_id"] for r in lib.spotcheck_sample(s, kind="messages", n=10, seed=3)]
@@ -208,26 +204,25 @@ def test_spotcheck_library_stable_order(store_path: Path):
     assert {a["evidence_id"] for a in acts} == {"village:event:e0001", "village:event:e0003", "village:event:e0004"}
 
 
-def test_spotcheck_findings(app):
+def test_findings_list_sample(app):
     for i in range(6):
         call(
             app, "findings_record", claim=f"claim {i}", evidence_ids=[f"village:msg:m{100 + i:04d}", "village:goal:g3"]
         )
-    a = call(app, "findings_spotcheck", kind="findings", n=3, seed=1)
-    b = call(app, "findings_spotcheck", kind="findings", n=3, seed=1)
+    a = call(app, "findings_list", sample=3, seed=1)
+    b = call(app, "findings_list", sample=3, seed=1)
     ids = [i["finding"]["finding_id"] for i in a["items"]]
     assert ids == [i["finding"]["finding_id"] for i in b["items"]] and len(set(ids)) == 3
     item = a["items"][0]
     assert item["finding"]["claim"]["untrusted"] is True
     assert [e["evidence_id"] for e in item["evidence"]][1] == "village:goal:g3"
     assert item["evidence"][0]["content"]["content"].startswith("filler message")
-    seeds = {
-        tuple(
-            i["finding"]["finding_id"] for i in call(app, "findings_spotcheck", kind="findings", n=3, seed=s)["items"]
-        )
-        for s in range(6)
-    }
+    seeds = {tuple(i["finding"]["finding_id"] for i in call(app, "findings_list", sample=3, seed=s)["items"])
+             for s in range(6)}  # fmt: skip
     assert len(seeds) > 1
+    assert call(app, "findings_list", sample=3, status="rejected")["returned"] == 0
+    many = call(app, "findings_list", sample=50)
+    assert many["returned"] == 6 and many["notes"]
 
 
 # --------------------------------------------------------------------------- check_findings + CLI
@@ -262,7 +257,7 @@ def test_check_findings_ok_and_missing(store_path: Path, tmp_path: Path):
     assert res["ok"] is True and res["checked"] == 2 and res["problems"] == [] and res["parse_errors"] == []
 
     nostore = lib.check_findings(good, tmp_path / "nope.duckdb")
-    assert nostore["ok"] is False and nostore["store_missing"] is True and "swarm-mcp ingest" in nostore["message"]
+    assert nostore["ok"] is False and nostore["store_missing"] is True and "swarm-mcp add" in nostore["message"]
 
 
 def test_check_findings_corrupt(store_path: Path, tmp_path: Path):
@@ -289,32 +284,15 @@ def test_check_findings_corrupt(store_path: Path, tmp_path: Path):
     assert [e["line"] for e in res["parse_errors"]] == [3, 6]
 
 
-def test_cli_check_findings_exit_codes(store_path: Path, tmp_path: Path, capsys: pytest.CaptureFixture):
-    from swarm_mcp.cli import main
-
-    good = _write_findings(tmp_path / "good.jsonl", [_finding("f-1", GOOD_IDS)])
-    with pytest.raises(SystemExit) as e:
-        main(["check-findings", "--findings", str(good), "--db", str(store_path)])
-    assert e.value.code == 0
-    assert json.loads(capsys.readouterr().out)["ok"] is True
-
-    bad = _write_findings(tmp_path / "bad.jsonl", [_finding("f-2", ["village:msg:does-not-exist"])])
-    with pytest.raises(SystemExit) as e:
-        main(["check-findings", "--findings", str(bad), "--db", str(store_path)])
-    assert e.value.code == 1
-    assert "village:msg:does-not-exist" in json.loads(capsys.readouterr().out)["problems"][0]["bad_evidence"]
-
-
 # --------------------------------------------------------------------------- hooks
 
 
-def _hook_env(tmp_path: Path, store_path: Path, fdir: Path) -> dict[str, str]:
+def _hook_env(root: Path, store_path: Path, fdir: Path) -> dict[str, str]:
+    """A project at ``root`` whose swarm.toml points at the store and findings dir."""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "swarm.toml").write_text(f'[data]\ndb = "{store_path.as_posix()}"\nfindings = "{fdir.as_posix()}"\n')
     env = {k: v for k, v in os.environ.items() if not k.startswith(("SWARM", "CLAUDE_"))}
-    env.update(
-        SWARMSCOPE_DB=str(store_path),
-        SWARMSCOPE_FINDINGS_DIR=str(fdir),
-        CLAUDE_PROJECT_DIR=str(tmp_path),
-    )
+    env.update(CLAUDE_PROJECT_DIR=str(root))
     return env
 
 
@@ -376,7 +354,7 @@ def test_audit_log_hook(tmp_path: Path, store_path: Path):
     # an unwritable findings dir still exits 0 (diagnostic on stderr only)
     blocker = tmp_path / "blocker"
     blocker.write_text("a file, not a dir")
-    r = _run(AUDIT_HOOK, payload, {**env, "SWARMSCOPE_FINDINGS_DIR": str(blocker / "sub")})
+    r = _run(AUDIT_HOOK, payload, _hook_env(tmp_path / "blocked", store_path, blocker / "sub"))
     assert r.returncode == 0 and r.stdout == "" and "audit_log hook" in r.stderr
 
 
@@ -403,7 +381,8 @@ def test_require_evidence_hook(tmp_path: Path, store_path: Path):
     r = _run(STOP_HOOK, stop_again, env)  # loop guard
     assert r.returncode == 0 and "stop_hook_active" in r.stderr
 
-    r = _run(STOP_HOOK, stop, {**env, "SWARMSCOPE_DB": str(tmp_path / "no-store.duckdb")})
+    nostore = _hook_env(tmp_path / "nostore", tmp_path / "no-store.duckdb", fdir)
+    r = _run(STOP_HOOK, stop, nostore)
     assert r.returncode == 0 and "not found" in r.stderr
 
     r = _run(STOP_HOOK, "not json", env)  # unparsable stdin: still checks, still blocks

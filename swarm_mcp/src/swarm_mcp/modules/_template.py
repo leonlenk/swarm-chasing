@@ -2,17 +2,17 @@
 
 To add a module:
     cp _template.py mymodule.py   # then edit NAME/DESCRIPTION/register()
-Restart the server; core_list_modules will show it (or why it was skipped).
+Restart the server; core_info will show it (or why it was skipped).
 
 The contract (all at module top level):
     NAME          str   tool-name prefix; tools become "<NAME>_<function name>"
-    DESCRIPTION   str   one line, shown in core_list_modules and server instructions
+    DESCRIPTION   str   one line, shown in core_info and server instructions
     requires(ctx) optional -> list[str]; non-empty = reasons the module can't load
     register(mcp, ctx)    adds tools/resources/prompts; may raise (module is skipped)
 
 ``ctx`` (swarm_mcp.context.ModuleContext) gives you:
     ctx.config / ctx.data_dir     global config; SWARM_DATA_DIR resolved to a Path
-    ctx.setting("key", default)   per-module env var SWARM_<NAME>_<KEY>
+    ctx.setting("key", default)   per-module setting: [modules.<name>] key = ... in swarm.toml
     ctx.lazy("key", loader)       compute-once, thread-safe, shared cache
     ctx.log                       logger -> stderr (NEVER print to stdout in stdio mode)
     ctx.limit(limit)              (effective_limit, note) using default 20 / max 200

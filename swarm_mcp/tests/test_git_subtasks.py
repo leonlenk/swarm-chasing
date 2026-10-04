@@ -166,21 +166,21 @@ def test_subtasks_needs_a_store(raw_data_dir: Path):
 
 
 def test_git_records_use_generic_kinds(gapp):
-    src = {x["source"]: x for x in call(gapp, "scope_list_sources")["sources"]}["rpg"]
+    src = {x["source"]: x for x in call(gapp, "core_info")["sources"]}["rpg"]
     assert src["row_counts"]["periods"] == 5 and src["row_counts"]["artifacts"] == 5
     assert any("inferred from main" in n for n in src["ingest_meta"]["notes"])
-    pr = call(gapp, "scope_get_record", evidence_id="rpg:period:pr-1")
+    pr = call(gapp, "core_get", ids="rpg:period:pr-1")
     assert pr["kind"] == "pull_request" and pr["meta"]["state"] == "merged" and pr["meta"]["short"] == "PR #1"
     assert pr["meta"]["merged_by"] == "rpg:agent:gpt-5.2" and pr["label"]["content"] == "feat: Talent tree core"
-    states = {n: call(gapp, "scope_get_record", evidence_id=f"rpg:period:pr-{n}")["meta"]["state"] for n in range(1, 6)}
+    states = {n: call(gapp, "core_get", ids=f"rpg:period:pr-{n}")["meta"]["state"] for n in range(1, 6)}
     assert states == {1: "merged", 2: "merged", 3: "unmerged", 4: "unmerged", 5: "merged"}
-    commit = call(gapp, "scope_get_record", evidence_id=pr["records"][0])
+    commit = call(gapp, "core_get", ids=pr["records"][0])
     assert commit["kind"] == "commit" and commit["agent"] == "Claude Opus 4.5"
     assert commit["artifacts"] == [{"artifact_id": "rpg:artifact:src/talents.js", "op": "create"}]
-    art = call(gapp, "scope_get_record", evidence_id="rpg:artifact:src/talents.js")
+    art = call(gapp, "core_get", ids="rpg:artifact:src/talents.js")
     assert art["touches_by_op"] == {"create": 1, "modify": 1} and art["kind"] == "file"
-    assert call(gapp, "scope_get_record", evidence_id="rpg:artifact:tests/talents-test.mjs")["meta"] == {"role": "test"}
-    assert "does not resolve" in call_error(gapp, "scope_get_record", evidence_id="rpg:period:pr-99")
+    assert call(gapp, "core_get", ids="rpg:artifact:tests/talents-test.mjs")["meta"] == {"role": "test"}
+    assert "does not resolve" in call_error(gapp, "core_get", ids="rpg:period:pr-99")
 
 
 def test_handoffs_are_typed_and_attributed(gapp):
@@ -192,7 +192,7 @@ def test_handoffs_are_typed_and_attributed(gapp):
     assert h["artifacts"] == ["rpg:artifact:src/talents.js"]
     assert all(e.startswith("rpg:event:") for e in h["evidence"])
     for e in h["evidence"]:
-        call(gapp, "scope_get_record", evidence_id=e)  # every cited id resolves
+        call(gapp, "core_get", ids=e)  # every cited id resolves
     gem = call(gapp, "subtasks_trace_pair", corpus="rpg", actor_a="Opus 4.5", actor_b="Gemini 2.5")
     assert {h["type"] for h in gem["handoffs"]} == {"tests", "fixes"}
     assert gem["summary"]["finalised_the_others_unit"] == 1  # Opus merged Gemini's fix

@@ -1,8 +1,8 @@
 """End-to-end demo over the real MCP protocol: launch the server on stdio (as Claude Code does) and follow
 one lead from a chat search to a subtask, its handoffs, and the commits behind them.
 
-    uv run --directory swarm_mcp swarm-mcp ingest ai_village data/ai-village
-    uv run --directory swarm_mcp swarm-mcp ingest git data/ai-village/repos/rpg-game.git
+    uv run --directory swarm_mcp swarm-mcp add data/ai-village
+    uv run --directory swarm_mcp swarm-mcp add data/ai-village/repos/rpg-game.git
     uv run --directory swarm_mcp python examples/subtasks_demo.py [query]
 """
 
@@ -51,7 +51,7 @@ async def main() -> None:
         hit = hits["results"][0]
         show("search hit", hit)
 
-        rec = await call("scope_get_record", evidence_id=hit["evidence_id"], neighbors=1, max_chars=160)
+        rec = await call("core_get", ids=hit["evidence_id"], before=1, after=1, max_chars=160)
         around = rec["neighbors"]["before"] + [{"ts": rec["ts"], "author": rec["author"], "snippet": rec["content"]}]
         around += rec["neighbors"]["after"]
         show("context", [f"{r['ts']} {r['author']}: {r['snippet']['content'][:110]}" for r in around])
@@ -73,7 +73,7 @@ async def main() -> None:
         show("unresolved", got["unresolved"])
 
         ev = got["handoffs"][0]["evidence"][0]
-        commit = await call("scope_get_record", evidence_id=ev, neighbors=0, max_chars=400)
+        commit = await call("core_get", ids=ev, max_chars=400)
         show(
             "evidence commit",
             {"agent": commit["agent"], "content": commit["content"]["content"], "artifacts": commit.get("artifacts")},

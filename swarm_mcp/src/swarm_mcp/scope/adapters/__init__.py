@@ -13,6 +13,11 @@ ADAPTERS: dict[str, type] = {"ai_village": AiVillageAdapter, "git": GitRepoAdapt
 def get_adapter(name: str, source: str | None = None) -> Adapter:
     """An adapter instance. ``source`` overrides the evidence-id source prefix for adapters that take one
     (git and wiki default to the repo / folder name)."""
+    if name == "mapped":
+        raise ValueError(
+            "The mapped adapter needs a mapping file: swarm-mcp add <path> --mapping M "
+            "(library: scope.ingest.ingest_mapped(mapping, path, db))."
+        )
     try:
         cls = ADAPTERS[name]
     except KeyError:

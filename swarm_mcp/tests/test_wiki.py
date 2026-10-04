@@ -106,7 +106,7 @@ def wapp(tmp_path: Path):
 
 
 def test_ingest_and_blind_spots(wapp):
-    src = call(wapp, "scope_list_sources")["sources"][0]
+    src = call(wapp, "core_info")["sources"][0]
     assert src["source"] == "test-wiki" and src["adapter"] == "wiki"
     assert src["row_counts"]["messages"] == 5 and src["row_counts"]["artifacts"] == 3
     assert any("self-chosen" in n for n in src["ingest_meta"]["notes"])
@@ -114,22 +114,22 @@ def test_ingest_and_blind_spots(wapp):
 
 def test_search_matches_only_added_text(wapp):
     out = call(wapp, "scope_search", query="Hungary")
-    assert out["total_matches"] == 1  # later revisions repeat the body but did not add it
+    assert out["total"] == 1  # later revisions repeat the body but did not add it
     assert out["results"][0]["evidence_id"] == "test-wiki:msg:dse~OecdEvidence@1"
-    assert call(wapp, "scope_search", query="cashier")["total_matches"] == 1
+    assert call(wapp, "scope_search", query="cashier")["total"] == 1
 
 
 def test_records_and_artifacts(wapp):
-    rev = call(wapp, "scope_get_record", evidence_id="test-wiki:msg:dse~OecdEvidence@2", neighbors=1)
+    rev = call(wapp, "core_get", ids="test-wiki:msg:dse~OecdEvidence@2", before=1, after=1)
     assert rev["author"] == "OecdHelper" and rev["content"]["content"].startswith("Please share")
     assert rev["channel"] == "dse:OecdEvidence" and rev["reply_to"] == "test-wiki:msg:dse~OecdEvidence@1"
     assert rev["msg_type"] == "revision" and rev["meta"]["page_family"] == "oecd-equity"
     assert rev["artifacts"] == [{"artifact_id": "test-wiki:artifact:dse~OecdEvidence", "op": "modify"}]
-    watcher = call(wapp, "scope_get_record", evidence_id="test-wiki:msg:dse~OecdEvidence@3")
+    watcher = call(wapp, "core_get", ids="test-wiki:msg:dse~OecdEvidence@3")
     assert {"artifact_id": "test-wiki:artifact:dse~RelayBoard", "op": "mention"} in watcher["artifacts"]
-    page = call(wapp, "scope_get_record", evidence_id="test-wiki:artifact:dse~OecdEvidence")
+    page = call(wapp, "core_get", ids="test-wiki:artifact:dse~OecdEvidence")
     assert page["touches_by_op"] == {"create": 1, "modify": 2} and page["meta"]["category"] == "oecd-equity"
-    anon = call(wapp, "scope_get_record", evidence_id="test-wiki:agent:anon@50.5")
+    anon = call(wapp, "core_get", ids="test-wiki:agent:anon@50.5")
     assert anon["meta"]["kind"] == "blank_label"
 
 

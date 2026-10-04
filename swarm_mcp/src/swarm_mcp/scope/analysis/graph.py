@@ -173,7 +173,7 @@ NOTES = [
     "reply edge: in one channel ordered by (ts, evidence_id), message i+1 by a different author within "
     "reply_window_minutes of message i gives responder -> previous author. A temporal-adjacency heuristic, "
     "not an explicit reply link.",
-    "Each edge's evidence_id is the earliest message that produced it; resolve it with scope_get_record.",
+    "Each edge's evidence_id is the earliest message that produced it; resolve it with core_get.",
     "Node weights sum both edge types; betweenness uses distance = 1/weight (normalized). Edges below "
     "min_weight are dropped before the metrics are computed.",
 ]

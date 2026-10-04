@@ -20,9 +20,9 @@ def test_in_process_protocol_roundtrip(data_dir: Path):
     async def go():
         async with Client(app) as client:
             tools = {t.name: t for t in (await client.list_tools()).tools}
-            assert {"core_list_modules", "scope_search", "findings_record", "village_goals"} <= set(tools)
+            assert {"core_info", "core_get", "scope_search", "scope_periods", "findings_record"} <= set(tools)
             schema = tools["scope_search"].input_schema
-            assert schema["required"] == ["query"]
+            assert not schema.get("required")
             assert "description" in schema["properties"]["limit"]
             assert tools["scope_search"].annotations.read_only_hint is True
             assert not (tools["findings_record"].annotations and tools["findings_record"].annotations.read_only_hint)
@@ -30,9 +30,9 @@ def test_in_process_protocol_roundtrip(data_dir: Path):
             res = await client.call_tool("scope_search", {"query": "genuinely", "limit": 1})
             assert res.is_error is False
             out = res.structured_content
-            assert out["total_matches"] == 2 and out["returned"] == 1
+            assert out["total"] == 2 and out["returned"] == 1
             hit = out["results"][0]
-            assert hit["evidence_id"].startswith("village:msg:") and hit["snippet"]["untrusted"] is True
+            assert hit["evidence_id"].startswith("village:msg:") and hit["text"]["untrusted"] is True
 
             bad = await client.call_tool("scope_search", {"query": "x", "author": "nobody"})
             assert bad.is_error is True
@@ -73,19 +73,18 @@ def test_stdio_subprocess_keeps_stdout_clean(data_dir: Path):
         env={
             **os.environ,
             "SWARM_DATA_DIR": str(data_dir),
-            "SWARMSCOPE_FINDINGS_DIR": str(data_dir.parent / "findings"),
-            "SWARM_MCP_LOG_LEVEL": "WARNING",
         },
+        cwd=str(data_dir.parent),  # no swarm.toml there: defaults, findings/sweeps under the tmp dir
     )
 
     async def go():
         async with Client(params) as client:
-            res = await client.call_tool("core_list_modules", {})
-            loaded = [m["name"] for m in res.structured_content["loaded"]]
-            assert loaded == ["core", "findings", "scope", "subtasks", "village"]
+            res = await client.call_tool("core_info", {})
+            loaded = [m["name"] for m in res.structured_content["modules"]["loaded"]]
+            assert loaded == ["core", "findings", "investigate", "scope", "subtasks", "sweep", "village"]
             res = await client.call_tool("core_noisy", {})
             assert res.is_error is False and res.structured_content == {"ok": True}
-            res = await client.call_tool("village_goals", {})
+            res = await client.call_tool("scope_periods", {})
             assert res.structured_content["count"] == 3
 
     run(go())

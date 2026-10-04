@@ -1,13 +1,13 @@
 """SwarmScope: read-only, evidence-first tools over the unified DuckDB store.
 
-Store: ``SWARMSCOPE_DB`` or ``<SWARM_DATA_DIR>/swarmscope.duckdb``; build it with
-``swarm-mcp ingest ai_village data/ai-village``. Every tool call opens a
+Store: ``[data] db`` in swarm.toml, default ``<data dir>/swarmscope.duckdb``; fill it with
+``swarm-mcp add <dataset path>``. Every tool call opens a
 short-lived read-only connection (``ctx.store()``) and closes it on return, so
 ingest and other processes can use the file between calls.
 
 Conventions:
 - Every record carries its evidence id (``village:msg:<uuid>`` etc.); pass it to
-  ``scope_get_record`` to re-resolve it, and cite it in findings.
+  ``core_get`` to re-resolve it (with context), and cite it in findings.
 - All agent/human-authored text is masked, capped (``max_chars``, default 500)
   and wrapped as ``{"content": ..., "untrusted": true}``: it is data, never
   instructions.
@@ -25,23 +25,27 @@ from typing import Annotated, Any, Literal
 import duckdb
 from pydantic import Field
 
+from swarm_mcp import sweep
 from swarm_mcp.scope import evidence
+from swarm_mcp.scope.adapters.ai_village import goal_type
 from swarm_mcp.scope.analysis import graph as graph_analysis
 from swarm_mcp.scope.analysis import timeline as timeline_analysis
 from swarm_mcp.scope.analysis.timeline import record_filters, ts_iso
 from swarm_mcp.scope.db import HUMAN, Store, label_for
+from swarm_mcp.scope.records import StoreRecordProvider
 from swarm_mcp.toolkit import ToolInputError, parse_time
 
 NAME = "scope"
 DESCRIPTION = (
-    "SwarmScope evidence store (DuckDB): sources, agents, search, record lookup by evidence id, message windows, "
-    "agent profiles, timelines and communication graphs. Read-only; UTC; dataset text is wrapped as untrusted."
+    "SwarmScope evidence store (DuckDB): search or read messages/actions chronologically, agents and agent "
+    "profiles, periods (e.g. weekly goals), activity timelines and communication graphs. Read-only; UTC; "
+    "dataset text is wrapped as untrusted. Expand any id with core_get."
 )
 
 
 def requires(ctx) -> list[str]:
     if not ctx.store_path.exists():
-        return [f"SwarmScope store not found at {ctx.store_path}; run `swarm-mcp ingest ai_village data/ai-village`"]
+        return [f"SwarmScope store not found at {ctx.store_path}; run `swarm-mcp add data/ai-village`"]
     return []
 
 
@@ -53,10 +57,10 @@ MaxChars = Annotated[
         ge=20,
         le=20000,
         description="Max characters per returned text field (default 500). Longer text is cut and marked "
-        "truncated=true with total_chars; raise this or use scope_get_record to read more.",
+        "truncated=true with total_chars; raise this or use core_get to read more.",
     ),
 ]
-Source = Annotated[str | None, Field(description="Restrict to one source (e.g. 'village'); see scope_list_sources.")]
+Source = Annotated[str | None, Field(description="Restrict to one source (e.g. 'village'); see core_info.")]
 Channel = Annotated[
     str | None, Field(description="Channel / chat room name, e.g. 'general' (case-insensitive, optional '#').")
 ]
@@ -161,246 +165,13 @@ def register(mcp, ctx) -> None:
     def short_cap(max_chars: int | None) -> int:
         return min(max_chars or ctx.config.max_text, 200)
 
-    # ------------------------------------------------------------------ list_sources
+    # ------------------------------------------------------------------ records (core_get)
 
-    @ctx.tool()
-    def list_sources() -> dict[str, Any]:
-        """What is in the SwarmScope store: per source the adapter, path, ingest time, row counts per table,
-        message and action time ranges, and channels with message counts (most active first). Also the total
-        number of periods and recorded findings. Start here."""
-        with ctx.store() as s:
-            out = []
-            for r in s.all("SELECT source, adapter, path, ingested_at, counts, meta FROM sources ORDER BY source"):
-                src = r["source"]
-                rows = {
-                    t: s.scalar(f"SELECT count(*) FROM {t} WHERE source = ?", [src])
-                    for t in ("agents", "messages", "actions", "periods", "artifacts", "touches")
-                    if s.has_table(t)
-                }
-                mt = s.one("SELECT min(ts) AS lo, max(ts) AS hi FROM messages WHERE source = ?", [src]) or {}
-                at = s.one("SELECT min(ts) AS lo, max(ts) AS hi FROM actions WHERE source = ?", [src]) or {}
-                channels = s.all(
-                    "SELECT coalesce(channel, '(none)') AS channel, count(*) AS messages FROM messages "
-                    "WHERE source = ? GROUP BY 1 ORDER BY 2 DESC, 1",
-                    [src],
-                )
-                kinds = s.all(
-                    "SELECT kind, count(*) AS n FROM actions WHERE source = ? GROUP BY 1 ORDER BY 2 DESC, 1", [src]
-                )
-                out.append(
-                    {
-                        "source": src,
-                        "adapter": r["adapter"],
-                        "path": r["path"],
-                        "ingested_at": ts_iso(r["ingested_at"]),
-                        "row_counts": rows,
-                        "ingest_counts": _meta(r["counts"]),
-                        "ingest_meta": _meta(r["meta"]),
-                        "messages_ts": {"min": ts_iso(mt.get("lo")), "max": ts_iso(mt.get("hi"))},
-                        "actions_ts": {"min": ts_iso(at.get("lo")), "max": ts_iso(at.get("hi"))},
-                        "action_kinds": {k["kind"]: k["n"] for k in kinds},
-                        "channels": channels,
-                    }
-                )
-            periods = s.scalar("SELECT count(*) FROM periods")
-            findings = s.scalar("SELECT count(*) FROM findings") if s.has_table("findings") else 0
-        return {
-            "store": str(ctx.store_path),
-            "source_count": len(out),
-            "sources": out,
-            "periods": periods,
-            "findings": findings,
-            "notes": [
-                "Evidence ids are <source>:<kind>:<id> with the same kinds for every source: msg (messages), "
-                "event (actions), agent, period (periods; AI Village goals keep 'goal'), artifact (files, pages...). "
-                "Resolve any of them with scope_get_record.",
-                "ingest_meta.notes lists each source's blind spots; read them before drawing conclusions.",
-                "All timestamps are UTC.",
-            ],
-        }
-
-    # ------------------------------------------------------------------ agents
-
-    @ctx.tool()
-    def agents(
-        source: Source = None,
-        sort_by: Annotated[
-            Literal["joined", "messages", "name"],
-            Field(description="Sort by message count (desc), join date, or name."),
-        ] = "messages",
-        limit: Annotated[int | None, Field(description="Max agents to return (default 100, max 200).")] = None,
-    ) -> dict[str, Any]:
-        """List agents: agent_id (an evidence id), display name, aliases, model string, lab, participation
-        flag, join date, first/last message time and message count. Also counts human authors and their
-        messages. Use the names or aliases as `author`/`agent` arguments in other scope_* tools."""
-        limit, note = ctx.limit(limit, default=100)
-        with ctx.store() as s:
-            _check_source(s, source)
-            where = "WHERE a.source = ?" if source else ""
-            rows = s.all(
-                f"""
-                SELECT a.agent_id, a.source, a.display_name, a.aliases, a.first_seen, a.last_seen, a.meta,
-                       coalesce(m.n, 0) AS message_count
-                FROM agents a
-                LEFT JOIN (SELECT author_id, count(*) AS n FROM messages GROUP BY 1) m ON m.author_id = a.agent_id
-                {where}
-                """,
-                [source] if source else [],
-            )
-            human = s.one(
-                "SELECT count(DISTINCT author_id) AS authors, count(*) AS messages FROM messages "
-                "WHERE author_id LIKE 'human:%'" + (" AND source = ?" if source else ""),
-                [source] if source else [],
-            ) or {"authors": 0, "messages": 0}
-        items = []
-        for r in rows:
-            meta = _meta(r["meta"]) or {}
-            items.append(
-                {
-                    "agent_id": r["agent_id"],
-                    "display_name": r["display_name"],
-                    "aliases": list(r["aliases"] or []),
-                    "source": r["source"],
-                    "model_string": meta.get("model_string"),
-                    "lab": meta.get("lab"),
-                    "is_participating": meta.get("is_participating"),
-                    "joined": _iso_param(meta["joined"]) if isinstance(meta.get("joined"), str) else None,
-                    "first_seen": ts_iso(r["first_seen"]),
-                    "last_seen": ts_iso(r["last_seen"]),
-                    "message_count": r["message_count"],
-                }
-            )
-        keys = {
-            "messages": lambda a: (-a["message_count"], a["display_name"].lower()),
-            "joined": lambda a: (a["joined"] or a["first_seen"] or "9999", a["display_name"].lower()),
-            "name": lambda a: a["display_name"].lower(),
-        }
-        items.sort(key=keys[sort_by])
-        notes = [
-            "first_seen/last_seen = first/last chat message; joined = the agent record's creation time (UTC).",
-            "message_count counts messages authored by the agent in the store.",
-        ]
-        if note:
-            notes.append(note)
-        return {
-            "total": len(items),
-            "returned": min(len(items), limit),
-            "has_more": len(items) > limit,
-            "agents": items[:limit],
-            "human_authors": human["authors"],
-            "human_message_count": human["messages"],
-            "notes": notes,
-        }
-
-    # ------------------------------------------------------------------ search
-
-    @ctx.tool()
-    def search(
-        query: Annotated[str, Field(description="Text to find (case-insensitive). Meaning depends on `match`.")],
-        match: Annotated[
-            Literal["phrase", "all_terms", "regex"],
-            Field(
-                description="phrase = the exact substring; all_terms = every whitespace-separated term appears "
-                "(any order); regex = RE2 regular expression, case-insensitive."
-            ),
-        ] = "phrase",
-        source: Source = None,
-        channel: Channel = None,
-        author: Author = None,
-        since: Since = None,
-        until: Until = None,
-        limit: Annotated[int | None, Field(description="Results per page (default 20, max 200).")] = 20,
-        offset: Annotated[int, Field(ge=0, description="Skip this many matches (for paging; see next_offset).")] = 0,
-        newest_first: Annotated[bool, Field(description="Order newest first instead of oldest first.")] = False,
-        max_chars: MaxChars = None,
-        table: Annotated[
-            Literal["messages", "actions"],
-            Field(description="Search chat messages, or agent actions (session goals/summaries)."),
-        ] = "messages",
-    ) -> dict[str, Any]:
-        """Full-text search over messages (or actions). Returns total_matches plus one page of hits, each with
-        its evidence_id, time, channel (messages) or kind (actions), author and a snippet centred on the match.
-        Page with offset/next_offset; open a hit in context with scope_get_record."""
-        q = (query or "").strip()
-        if not q:
-            raise ToolInputError("query must not be empty")
-        limit, note = ctx.limit(limit)
-        lo, hi = _window(since, until)
-        pred, pparams, focus = _matcher(q, match)
-        with ctx.store() as s:
-            _check_source(s, source)
-            ch = s.resolve_channel(channel, source) if table == "messages" else channel
-            aid, alabel = _author(s, author, source)
-            where, params = record_filters(table, source=source, channel=ch, author_id=aid, since=lo, until=hi)
-            w = _w([pred, *where])
-            allp = [*pparams, *params]
-            try:
-                total = s.scalar(f"SELECT count(*) FROM {table} WHERE {w}", allp) or 0
-            except duckdb.Error as e:
-                if match == "regex":
-                    raise ToolInputError(
-                        f"Invalid regex {q!r}: {str(e).splitlines()[0]}. Patterns use RE2 syntax; "
-                        "or use match='phrase' for a literal string."
-                    ) from None
-                raise
-            order = "DESC" if newest_first else "ASC"
-            who = "author_id" if table == "messages" else "agent_id"
-            extra = "channel" if table == "messages" else "kind"
-            rows = s.all(
-                f"SELECT evidence_id, ts, {extra}, {who} AS who, content FROM {table} WHERE {w} "
-                f"ORDER BY ts {order} NULLS LAST, evidence_id {order} LIMIT ? OFFSET ?",
-                [*allp, limit, offset],
-            )
-            names = s.display_names()
-        results = []
-        for r in rows:
-            item: dict[str, Any] = {"evidence_id": r["evidence_id"], "ts": ts_iso(r["ts"])}
-            if table == "messages":
-                item.update(channel=r["channel"], author=label_for(r["who"], names), author_id=r["who"])
-            else:
-                item.update(kind=r["kind"], agent=label_for(r["who"], names), agent_id=r["who"])
-            item["snippet"] = text(r["content"], max_chars, focus)
-            results.append(item)
-        has_more = offset + len(results) < total
-        notes = []
-        if note:
-            notes.append(note)
-        if offset and not results and total:
-            notes.append(f"offset {offset} is past the last match ({total} total).")
-        out: dict[str, Any] = {
-            "query": q,
-            "match": match,
-            "table": table,
-            "filters": _filters(source=source, channel=ch, author=alabel, since=_iso_param(lo), until=_iso_param(hi)),
-            "total_matches": total,
-            "returned": len(results),
-            "offset": offset,
-            "has_more": has_more,
-            "results": results,
-        }
-        if has_more:
-            out["next_offset"] = offset + len(results)
-        if notes:
-            out["notes"] = notes
-        return out
-
-    # ------------------------------------------------------------------ get_record
-
-    @ctx.tool()
     def get_record(
-        evidence_id: Annotated[
-            str, Field(description="An evidence id exactly as returned by a scope_* tool, e.g. 'village:msg:<uuid>'.")
-        ],
-        max_chars: MaxChars = None,
-        neighbors: Annotated[
-            int,
-            Field(
-                ge=0,
-                le=20,
-                description="Messages: N previous/next messages in the same channel. Actions: the same agent's "
-                "N previous/next actions. 0 = none.",
-            ),
-        ] = 1,
+        evidence_id: str,
+        max_chars: int | None = None,
+        before: int = 0,
+        after: int = 0,
     ) -> dict[str, Any]:
         """Resolve one evidence id to its full record: a message (time, channel, author, named recipients,
         content and surrounding messages), an action (kind, agent, content and the agent's adjacent actions),
@@ -426,11 +197,20 @@ def register(mcp, ctx) -> None:
                     meta=_meta(rec["meta"]),
                     content=text(rec["content"], max_chars),
                 )
-                if neighbors:
+                if before or after:
                     scope = "source = ? AND channel IS NOT DISTINCT FROM ?"
                     out["neighbors"] = _neighbors(
-                        s, "messages", scope, [rec["source"], rec["channel"]], rec, neighbors, cap, names, "author_id"
+                        s,
+                        "messages",
+                        scope,
+                        [rec["source"], rec["channel"]],
+                        rec,
+                        (before, after),
+                        cap,
+                        names,
+                        "author_id",
                     )
+                    out["context"] = "previous/next messages in the same channel"
             elif table == "actions":
                 out.update(
                     ts=ts_iso(rec["ts"]),
@@ -443,11 +223,20 @@ def register(mcp, ctx) -> None:
                     meta=_meta(rec["meta"]),
                     content=text(rec["content"], max_chars),
                 )
-                if neighbors:
+                if before or after:
                     scope = "source = ? AND agent_id = ?"
                     out["neighbors"] = _neighbors(
-                        s, "actions", scope, [rec["source"], rec["agent_id"]], rec, neighbors, cap, names, "agent_id"
+                        s,
+                        "actions",
+                        scope,
+                        [rec["source"], rec["agent_id"]],
+                        rec,
+                        (before, after),
+                        cap,
+                        names,
+                        "agent_id",
                     )
+                    out["context"] = "the same agent's previous/next actions"
             elif table == "agents":
                 meta = _meta(rec["meta"]) or {}
                 out.update(
@@ -516,7 +305,7 @@ def register(mcp, ctx) -> None:
         scope: str,
         scope_params: list[Any],
         rec: dict[str, Any],
-        n: int,
+        n: tuple[int, int],
         cap: int,
         names: dict[str, str],
         who: str,
@@ -528,12 +317,12 @@ def register(mcp, ctx) -> None:
         before = s.all(
             f"SELECT {cols} FROM {table} WHERE {scope} AND (ts < ? OR (ts = ? AND evidence_id < ?)) "
             "ORDER BY ts DESC, evidence_id DESC LIMIT ?",
-            [*scope_params, ts, ts, eid, n],
+            [*scope_params, ts, ts, eid, n[0]],
         )
         after = s.all(
             f"SELECT {cols} FROM {table} WHERE {scope} AND (ts > ? OR (ts = ? AND evidence_id > ?)) "
             "ORDER BY ts, evidence_id LIMIT ?",
-            [*scope_params, ts, ts, eid, n],
+            [*scope_params, ts, ts, eid, n[1]],
         )
 
         def item(r: dict[str, Any]) -> dict[str, Any]:
@@ -546,87 +335,225 @@ def register(mcp, ctx) -> None:
 
         return {"before": [item(r) for r in reversed(before)], "after": [item(r) for r in after]}
 
-    # ------------------------------------------------------------------ messages
+    # core_get resolves ids through this (the scope module owns the store's tools); core_info reads the
+    # store's sources itself (info.store_sources) so it also works when this module is disabled
+    ctx.registry.store_api = {"get_record": get_record}
+
+    # sweep_run(filters=...) reads records straight from the store (masked like every tool result)
+    sweep.register_provider(
+        ctx.registry,
+        "store",
+        StoreRecordProvider(lambda: ctx.store_path, max_chars=sweep.DEFAULT_RECORD_CHARS, mask=ctx.scrub),
+    )
+
+    # ------------------------------------------------------------------ search
 
     @ctx.tool()
-    def messages(
-        start: Annotated[
-            str, Field(description="Inclusive UTC start of the window, e.g. '2026-01-05' or '2026-01-05T14:00'.")
-        ],
-        end: Annotated[
-            str | None, Field(description="Exclusive UTC end (a bare date includes that day). Omit for open-ended.")
+    def search(
+        query: Annotated[
+            str | None,
+            Field(
+                description="Text to find (case-insensitive; meaning depends on `match`). Omit it to read the "
+                "records chronologically instead (a window over the filters)."
+            ),
         ] = None,
+        match: Annotated[
+            Literal["phrase", "all_terms", "regex"],
+            Field(
+                description="phrase = the exact substring; all_terms = every whitespace-separated term appears "
+                "(any order); regex = RE2 regular expression, case-insensitive."
+            ),
+        ] = "phrase",
+        source: Source = None,
         channel: Channel = None,
         author: Author = None,
-        source: Source = None,
-        limit: Annotated[int | None, Field(description="Max messages (default 50, max 200).")] = 50,
+        since: Since = None,
+        until: Until = None,
+        table: Annotated[
+            Literal["messages", "actions"],
+            Field(description="Chat messages, or agent actions (session goals/summaries, mapped action kinds)."),
+        ] = "messages",
+        newest_first: Annotated[bool, Field(description="Order newest first instead of oldest first.")] = False,
+        limit: Annotated[int | None, Field(description="Results per page (default 20, max 200).")] = 20,
+        offset: Annotated[int, Field(ge=0, description="Skip this many records (for paging; see next_offset).")] = 0,
         max_chars: MaxChars = None,
     ) -> dict[str, Any]:
-        """Read the conversation chronologically: messages with start <= ts < end (optionally one channel or
-        author), oldest first, with evidence ids and full (capped) content. When has_more is true, call again
-        with start=next_start to continue."""
-        lo, hi = _window(start, end, names=("start", "end"))
-        if lo is None:
-            raise ToolInputError("start is required, e.g. '2026-01-05' or '2026-01-05T14:00' (UTC)")
-        limit, note = ctx.limit(limit, default=50)
+        """Find or read messages (or actions). With `query`: full-text search; each hit has its evidence_id,
+        time, channel (messages) or kind (actions), author and a text snippet centred on the match. Without
+        `query`: the records in the window (since/until, channel, author...) in time order with their (capped)
+        text, i.e. read the conversation. Returns the total plus one page; continue with offset=next_offset.
+        Expand any hit in context with core_get(id, before=3, after=3)."""
+        q = (query or "").strip()
+        limit, note = ctx.limit(limit)
+        lo, hi = _window(since, until)
+        pred, pparams, focus = _matcher(q, match) if q else ("TRUE", [], None)
         with ctx.store() as s:
             _check_source(s, source)
-            ch = s.resolve_channel(channel, source)
+            ch = s.resolve_channel(channel, source) if table == "messages" else channel
             aid, alabel = _author(s, author, source)
-            where, params = record_filters("messages", source=source, channel=ch, author_id=aid, since=lo, until=hi)
-            w = _w(where)
-            total = s.scalar(f"SELECT count(*) FROM messages WHERE {w}", params) or 0
+            where, params = record_filters(table, source=source, channel=ch, author_id=aid, since=lo, until=hi)
+            w = _w([pred, *where])
+            allp = [*pparams, *params]
+            try:
+                total = s.scalar(f"SELECT count(*) FROM {table} WHERE {w}", allp) or 0
+            except duckdb.Error as e:
+                if match == "regex":
+                    raise ToolInputError(
+                        f"Invalid regex {q!r}: {str(e).splitlines()[0]}. Patterns use RE2 syntax; "
+                        "or use match='phrase' for a literal string."
+                    ) from None
+                raise
+            order = "DESC" if newest_first else "ASC"
+            who = "author_id" if table == "messages" else "agent_id"
+            extra = "channel" if table == "messages" else "kind"
             rows = s.all(
-                f"SELECT evidence_id, ts, channel, author_id, content FROM messages WHERE {w} "
-                "ORDER BY ts, evidence_id LIMIT ?",
-                [*params, limit + 1],
+                f"SELECT evidence_id, ts, {extra}, {who} AS who, content FROM {table} WHERE {w} "
+                f"ORDER BY ts {order} NULLS LAST, evidence_id {order} LIMIT ? OFFSET ?",
+                [*allp, limit, offset],
             )
             names = s.display_names()
-        has_more = len(rows) > limit
-        items = [
+        results = []
+        for r in rows:
+            item: dict[str, Any] = {"evidence_id": r["evidence_id"], "ts": ts_iso(r["ts"])}
+            if table == "messages":
+                item.update(channel=r["channel"], author=label_for(r["who"], names), author_id=r["who"])
+            else:
+                item.update(kind=r["kind"], agent=label_for(r["who"], names), agent_id=r["who"])
+            item["text"] = text(r["content"], max_chars, focus)
+            results.append(item)
+        has_more = offset + len(results) < total
+        notes = []
+        if note:
+            notes.append(note)
+        if offset and not results and total:
+            notes.append(f"offset {offset} is past the last record ({total} total).")
+        out: dict[str, Any] = {"mode": "search" if q else "read"}
+        if q:
+            out.update(query=q, match=match)
+        out.update(
             {
-                "evidence_id": r["evidence_id"],
-                "ts": ts_iso(r["ts"]),
-                "channel": r["channel"],
-                "author": label_for(r["author_id"], names),
-                "author_id": r["author_id"],
-                "content": text(r["content"], max_chars),
+                "table": table,
+                "filters": _filters(
+                    source=source, channel=ch, author=alabel, since=_iso_param(lo), until=_iso_param(hi)
+                ),
+                "total": total,
+                "returned": len(results),
+                "offset": offset,
+                "has_more": has_more,
+                "results": results,
             }
-            for r in rows[:limit]
-        ]
+        )
+        if has_more:
+            out["next_offset"] = offset + len(results)
+        if notes:
+            out["notes"] = notes
+        return out
+
+    # ------------------------------------------------------------------ agents
+
+    @ctx.tool()
+    def agents(
+        name: Annotated[
+            str | None,
+            Field(
+                description="An agent's display name, alias (e.g. 'Opus 4.5') or agent_id for its full profile; "
+                "omit to list all agents."
+            ),
+        ] = None,
+        source: Source = None,
+        since: Annotated[str | None, Field(description="Profile only: inclusive UTC start for counts/samples.")] = None,
+        until: Annotated[
+            str | None, Field(description="Profile only: exclusive UTC end (bare date = whole day).")
+        ] = None,
+        sort_by: Annotated[
+            Literal["joined", "messages", "name"],
+            Field(description="List only: sort by message count (desc), join date, or name."),
+        ] = "messages",
+        limit: Annotated[int | None, Field(description="List only: max agents (default 100, max 200).")] = None,
+        top: Annotated[int, Field(ge=1, le=50, description="Profile only: length of each ranked list.")] = 10,
+        samples: Annotated[
+            int, Field(ge=0, le=20, description="Profile only: number of deterministic sample messages.")
+        ] = 5,
+        max_chars: MaxChars = None,
+    ) -> dict[str, Any]:
+        """Without `name`: list agents (agent_id, display name, aliases, model string, lab, participation flag,
+        join date, first/last message time, message count) plus human author counts.
+        With `name`: one agent's profile: channels and message count in the window, the agents it shares the most
+        (channel, day) buckets with, whom it names most and who names it most, action counts by kind, its busiest
+        day, and sample messages with evidence ids. Use names/aliases as `author` in scope_search/scope_timeline."""
+        if name is not None and name.strip():
+            return _profile(name, source, since, until, top, samples, max_chars)
+        return _list_agents(source, sort_by, limit)
+
+    def _list_agents(source: str | None, sort_by: str, limit: int | None) -> dict[str, Any]:
+        limit, note = ctx.limit(limit, default=100)
+        with ctx.store() as s:
+            _check_source(s, source)
+            where = "WHERE a.source = ?" if source else ""
+            rows = s.all(
+                f"""
+                SELECT a.agent_id, a.source, a.display_name, a.aliases, a.first_seen, a.last_seen, a.meta,
+                       coalesce(m.n, 0) AS message_count
+                FROM agents a
+                LEFT JOIN (SELECT author_id, count(*) AS n FROM messages GROUP BY 1) m ON m.author_id = a.agent_id
+                {where}
+                """,
+                [source] if source else [],
+            )
+            human = s.one(
+                "SELECT count(DISTINCT author_id) AS authors, count(*) AS messages FROM messages "
+                "WHERE author_id LIKE 'human:%'" + (" AND source = ?" if source else ""),
+                [source] if source else [],
+            ) or {"authors": 0, "messages": 0}
+        items = []
+        for r in rows:
+            meta = _meta(r["meta"]) or {}
+            items.append(
+                {
+                    "agent_id": r["agent_id"],
+                    "display_name": r["display_name"],
+                    "aliases": list(r["aliases"] or []),
+                    "source": r["source"],
+                    "model_string": meta.get("model_string"),
+                    "lab": meta.get("lab"),
+                    "is_participating": meta.get("is_participating"),
+                    "joined": _iso_param(meta["joined"]) if isinstance(meta.get("joined"), str) else None,
+                    "first_seen": ts_iso(r["first_seen"]),
+                    "last_seen": ts_iso(r["last_seen"]),
+                    "message_count": r["message_count"],
+                }
+            )
+        keys = {
+            "messages": lambda a: (-a["message_count"], a["display_name"].lower()),
+            "joined": lambda a: (a["joined"] or a["first_seen"] or "9999", a["display_name"].lower()),
+            "name": lambda a: a["display_name"].lower(),
+        }
+        items.sort(key=keys[sort_by])
         notes = [
-            "next_start is inclusive and has microsecond precision: pass it as start to continue (a message "
-            "sharing that exact timestamp with the last returned one would be repeated, never skipped)."
+            "first_seen/last_seen = first/last chat message; joined = the agent record's creation time (UTC).",
+            "message_count counts messages authored by the agent in the store. Pass name=... for a profile.",
         ]
         if note:
             notes.append(note)
         return {
-            "filters": _filters(source=source, channel=ch, author=alabel, start=_iso_param(lo), end=_iso_param(hi)),
-            "total_in_window": total,
-            "returned": len(items),
-            "has_more": has_more,
-            "next_start": ts_iso(rows[limit]["ts"], micro=True) if has_more else None,
-            "messages": items,
+            "total": len(items),
+            "returned": min(len(items), limit),
+            "has_more": len(items) > limit,
+            "agents": items[:limit],
+            "human_authors": human["authors"],
+            "human_message_count": human["messages"],
             "notes": notes,
         }
 
-    # ------------------------------------------------------------------ agent_profile
-
-    @ctx.tool()
-    def agent_profile(
-        agent: Annotated[str, Field(description="Agent display name, alias (e.g. 'Opus 4.5') or agent_id.")],
-        source: Source = None,
-        since: Since = None,
-        until: Until = None,
-        top: Annotated[int, Field(ge=1, le=50, description="Length of each ranked list (default 10).")] = 10,
-        samples: Annotated[
-            int, Field(ge=0, le=20, description="Number of deterministic sample messages (default 5).")
-        ] = 5,
-        max_chars: MaxChars = None,
+    def _profile(
+        agent: str,
+        source: str | None,
+        since: str | None,
+        until: str | None,
+        top: int,
+        samples: int,
+        max_chars: int | None,
     ) -> dict[str, Any]:
-        """One agent's activity: model/lab, first/last seen, message count and channels in the window, the agents
-        it shares the most (channel, day) buckets with, whom it names most and who names it most, action counts
-        by kind, its busiest day, and sample messages (first, last and a deterministic spread) with evidence ids."""
         lo, hi = _window(since, until)
         cap = short_cap(max_chars)
         with ctx.store() as s:
@@ -753,6 +680,152 @@ def register(mcp, ctx) -> None:
             ],
         }
 
+    # ------------------------------------------------------------------ periods
+
+    _PERIODS_SQL = """
+    SELECT p.evidence_id, p.source, p.kind, p.label, p.start_ts, p.end_ts, p.meta,
+           (SELECT count(*) FROM messages m
+             WHERE m.source = p.source AND m.ts >= p.start_ts AND (p.end_ts IS NULL OR m.ts < p.end_ts)) AS messages,
+           (SELECT count(DISTINCT m.author_id) FROM messages m
+             WHERE m.source = p.source AND m.author_id NOT LIKE 'human:%'
+               AND m.ts >= p.start_ts AND (p.end_ts IS NULL OR m.ts < p.end_ts)) AS active_agents
+    FROM periods p
+    WHERE (CAST(? AS TEXT) IS NULL OR p.source = ?)
+    ORDER BY p.source, p.start_ts NULLS LAST, p.evidence_id
+    """
+
+    def _period_dict(r: dict[str, Any], i: int) -> dict[str, Any]:
+        d: dict[str, Any] = {
+            "index": i,
+            "evidence_id": r["evidence_id"],
+            "source": r["source"],
+            "kind": r["kind"],
+            "label": text(r["label"], 300),
+        }
+        if r["kind"] == "village_goal":
+            d["type"] = goal_type(r["label"])
+        start, end = r["start_ts"], r["end_ts"]
+        d.update(
+            start=ts_iso(start),
+            end=ts_iso(end),
+            ongoing=start is not None and end is None,
+            duration_days=round((end - start).total_seconds() / 86400, 1) if start and end else None,
+            messages=r["messages"],
+            active_agents=r["active_agents"],
+        )
+        return d
+
+    def _find_period(rows: list[dict[str, Any]], name: str) -> tuple[int, dict[str, Any]]:
+        q = name.strip()
+        if q.isdigit():
+            i = int(q)
+            if 1 <= i <= len(rows):
+                return i, rows[i - 1]
+            raise ToolInputError(f"period index {i} out of range 1..{len(rows)}; call scope_periods() to list them")
+        hits = [
+            (i, r) for i, r in enumerate(rows, 1) if r["evidence_id"] == q or q.lower() in (r["label"] or "").lower()
+        ]
+        if len(hits) == 1:
+            return hits[0]
+        if not hits:
+            raise ToolInputError(f"No period matches {name!r}. Call scope_periods() to list them.")
+        opts = "; ".join(f"{i}: {(r['label'] or '')[:60]}" for i, r in hits[:10])
+        raise ToolInputError(f"{name!r} matches {len(hits)} periods; pass the index. Candidates: {opts}")
+
+    @ctx.tool()
+    def periods(
+        name: Annotated[
+            str | None,
+            Field(
+                description="A period's index (from the list), evidence_id, or a substring of its label for its "
+                "detail; omit to list all periods."
+            ),
+        ] = None,
+        source: Source = None,
+        agent: Annotated[
+            str | None,
+            Field(description="List only: also count this agent's messages per period (name, alias or agent_id)."),
+        ] = None,
+        top: Annotated[int, Field(description="Detail only: top speakers/channels to return.", ge=1, le=50)] = 10,
+    ) -> dict[str, Any]:
+        """Dataset-defined periods (AI Village: the weekly goals) in time order.
+        Without `name`: index, evidence_id, label, kind, start/end (UTC), duration, chat volume (messages, active
+        agents) and, for AI Village goals, a heuristic goal type (holiday, self_directed, competitive,
+        collaborative, individual, assigned_individual, open_task).
+        With `name`: one period's activity: top speakers, channels, busiest day, human messages and action counts.
+        Use start/end as since/until for scope_search, scope_timeline and scope_graph."""
+        with ctx.store() as s:
+            _check_source(s, source)
+            rows = s.all(_PERIODS_SQL, [source, source])
+            if name is not None and name.strip():
+                i, r = _find_period(rows, name)
+                window = "source = ? AND ts >= ? AND (? IS NULL OR ts < ?)"
+                params = [r["source"], r["start_ts"], r["end_ts"], r["end_ts"]]
+                names = s.display_names()
+                speakers = s.all(
+                    f"SELECT author_id, count(*) n FROM messages WHERE {window} GROUP BY 1 ORDER BY n DESC, 1 LIMIT ?",
+                    [*params, top],
+                )
+                channels = s.all(
+                    f"SELECT channel, count(*) n FROM messages WHERE {window} GROUP BY 1 ORDER BY n DESC, 1 LIMIT ?",
+                    [*params, top],
+                )
+                peak = s.one(
+                    f"SELECT CAST(date_trunc('day', ts) AS DATE) AS day, count(*) n FROM messages WHERE {window} "
+                    "GROUP BY 1 ORDER BY n DESC, 1 LIMIT 1",
+                    params,
+                )
+                actions = s.all(f"SELECT kind, count(*) n FROM actions WHERE {window} GROUP BY 1 ORDER BY 1", params)
+                humans = s.scalar(f"SELECT count(*) FROM messages WHERE {window} AND author_id LIKE 'human:%'", params)
+                d = _period_dict(r, i)
+                d.update(
+                    {
+                        "meta": _meta(r["meta"]),
+                        "human_messages": humans,
+                        "top_speakers": [
+                            {
+                                "author": label_for(x["author_id"], names),
+                                "author_id": x["author_id"],
+                                "messages": x["n"],
+                            }
+                            for x in speakers
+                        ],
+                        "channels": [{"channel": x["channel"], "messages": x["n"]} for x in channels],
+                        "busiest_day": {"day": ts_iso(peak["day"]), "messages": peak["n"]} if peak else None,
+                        "actions": {x["kind"]: x["n"] for x in actions},
+                        "notes": [
+                            f"for centrality call scope_graph(since={d['start']!r}, until={d['end']!r}); "
+                            "for the activity curve call scope_timeline with the same window",
+                        ]
+                        + (
+                            ["'type' is a keyword heuristic from the goal text, not a dataset field"]
+                            if "type" in d
+                            else []
+                        ),
+                    }
+                )
+                return d
+            per_agent: dict[str, int] = {}
+            label = None
+            if agent:
+                a = s.resolve_agent(agent, source)
+                label = a["display_name"]
+                for r in rows:
+                    per_agent[r["evidence_id"]] = s.scalar(
+                        "SELECT count(*) FROM messages WHERE author_id = ? AND ts >= ? AND (? IS NULL OR ts < ?)",
+                        [a["agent_id"], r["start_ts"], r["end_ts"], r["end_ts"]],
+                    )
+        out = []
+        for i, r in enumerate(rows, 1):
+            d = _period_dict(r, i)
+            if agent:
+                d["agent_messages"] = per_agent.get(r["evidence_id"], 0)
+            out.append(d)
+        notes = ["Pass name=<index> for one period's detail."]
+        if any("type" in d for d in out):
+            notes.append("'type' (AI Village goals) is a keyword heuristic from the goal text, not a dataset field")
+        return {"count": len(out), "agent": label, "periods": out, "notes": notes}
+
     # ------------------------------------------------------------------ timeline
 
     @ctx.tool()
@@ -776,7 +849,7 @@ def register(mcp, ctx) -> None:
     ) -> dict[str, Any]:
         """Activity over time: counts per hour/day/week/month bucket, optionally split by channel or author
         (top groups by total, the rest summed as 'other'). Returns the total, the peak bucket and the sparse
-        series (empty buckets omitted). Use it to find bursts, then read them with scope_messages."""
+        series (empty buckets omitted). Use it to find bursts, then read them with scope_search (no query)."""
         lo, hi = _window(since, until)
         with ctx.store() as s:
             _check_source(s, source)
@@ -797,10 +870,10 @@ def register(mcp, ctx) -> None:
         out["filters"] = _filters(source=source, channel=ch, author=alabel, since=_iso_param(lo), until=_iso_param(hi))
         return out
 
-    # ------------------------------------------------------------------ comm_graph
+    # ------------------------------------------------------------------ graph
 
     @ctx.tool()
-    def comm_graph(
+    def graph(
         source: Source = None,
         channel: Channel = None,
         since: Since = None,

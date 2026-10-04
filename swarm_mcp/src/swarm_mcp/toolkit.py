@@ -7,7 +7,7 @@ Module authors mostly need:
   caller: masked, capped (default 500 chars) and wrapped as
   ``{"content": ..., "untrusted": true}`` so it is never mistaken for instructions.
 - ``truncate`` / ``snippet``: cut long text (optionally around a match) and mark it.
-- ``Scrubber``: mask emails/phone numbers in returned text.
+- ``Scrubber``: mask emails, phone numbers and credentials in returned text (``redact.mask_text``).
 - ``parse_time``: accept dates/datetimes in the formats an LLM is likely to send.
 """
 
@@ -22,6 +22,7 @@ from typing import Any, Callable, Iterable
 
 import anyio.to_thread
 
+from swarm_mcp.redact import mask_text
 from swarm_mcp.sdk import ToolError
 
 
@@ -136,44 +137,21 @@ def untrusted(
 
 # --------------------------------------------------------------------------- privacy
 
-_EMAIL_RE = re.compile(r"(?<![\w.+%-])[A-Za-z0-9._%+-]+@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})(?![\w-])")
-# International numbers must start with "+"; national ones must look like the
-# North American 3-3-4 pattern with separators. Bare digit runs are left alone
-# (too many false positives: ids, counts, timestamps).
-_PHONE_RE = re.compile(
-    r"(?<![\w/.:#=@-])"
-    r"(?:"
-    r"\+\d{1,3}(?:[ .-]?\(?\d{1,4}\)?){2,5}"
-    r"|(?:\(\d{3}\)\s?|\d{3}[ .-])\d{3}[ .-]\d{4}"
-    r")"
-    r"(?![\w/-]|\.\d)"
-)
-
-
 class Scrubber:
-    """Masks emails (except allow-listed domains) as ``[email]`` and phone-like
-    strings as ``[phone]``. Disabled scrubbers pass text through unchanged."""
+    """Masks dataset text with the shared redaction engine (``redact.mask_text``, default rules):
+    emails (except allow-listed domains) -> ``[email]``, phone numbers -> ``[phone]``, credentials
+    (provider keys, JWTs, auth headers, key=secret pairs, private keys) -> ``[credential]`` and
+    ``user:pass@`` in URLs -> ``[url-credential]``. VCS remotes such as ``git@github.com:org/repo``
+    are kept. Disabled scrubbers pass text through unchanged."""
 
     def __init__(self, enabled: bool = True, email_allowlist: Iterable[str] = ("agentvillage.org",)):
         self.enabled = enabled
         self.allow = tuple(d.lower().lstrip("@.") for d in email_allowlist)
 
-    def _email(self, m: re.Match[str]) -> str:
-        domain = m.group(1).lower()
-        if any(domain == d or domain.endswith("." + d) for d in self.allow):
-            return m.group(0)
-        return "[email]"
-
-    @staticmethod
-    def _phone(m: re.Match[str]) -> str:
-        digits = sum(c.isdigit() for c in m.group(0))
-        return "[phone]" if 8 <= digits <= 15 else m.group(0)
-
     def __call__(self, text: str | None) -> str:
         if not text or not self.enabled:
             return text or ""
-        text = _EMAIL_RE.sub(self._email, text)
-        return _PHONE_RE.sub(self._phone, text)
+        return mask_text(text, self.allow)
 
 
 # --------------------------------------------------------------------------- time

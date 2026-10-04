@@ -1,0 +1,197 @@
+"""Tests for the trace v0 validator, helpers and CLI on a tiny synthetic (non-AI-Village) trace.
+
+Run from village_tools/:  uv run --no-project --with pytest --with jsonschema pytest swarmtrace/tests -q
+"""
+
+import copy
+import json
+from pathlib import Path
+
+import pytest
+
+from swarmtrace import cli
+from swarmtrace.format import (check, clip, dumps, fit_window, index_entry, iso, parse_iso, scrub, scrub_trace,
+                               validate, validate_index)
+
+SCHEMA = Path(__file__).resolve().parents[1] / "trace.schema.json"
+
+
+def tiny():
+    return {
+        "version": 0, "id": "toy-idea", "title": "Toy idea", "kind": "belief",
+        "statement": "Bots believe the printer is haunted.", "source": "Hand-written test fixture.",
+        "start": "2025-01-01T00:00:00Z", "end": "2025-01-10T00:00:00Z",
+        "agents": [{"name": "alpha", "lab": "LabA", "joined": "2025-01-01T00:00:00Z", "left": None},
+                   {"name": "beta", "lab": "LabB", "group": "newcomer", "joined": None, "left": None}],
+        "events": [{"id": "e1", "t": "2025-01-02T10:00:00Z", "agent": "alpha", "channel": "chat",
+                    "stance": "originates", "conf": 3, "room": "general", "snippet": "The printer is haunted."},
+                   {"id": "e2", "t": "2025-01-03T10:00:00Z", "agent": "beta", "channel": "memory",
+                    "stance": "endorses", "conf": None, "room": None, "snippet": "alpha says it is haunted"}],
+        "exposures": [{"t": "2025-01-02T10:00:00Z", "agent": "beta", "source": "alpha", "via": "room", "event": "e1"},
+                      {"t": "2025-01-02T12:00:00Z", "agent": "beta", "source": None, "via": "search", "event": None}],
+        "adoptions": [{"agent": "beta", "t": "2025-01-03T10:00:00Z", "event": "e2", "independent": False,
+                       "sources": ["alpha"]}],
+        "edges": [{"from": "alpha", "to": "beta", "t": "2025-01-03T10:00:00Z", "kind": "transmission",
+                   "evidence": "same room"}],
+        "persistence": [{"agent": "beta", "start": "2025-01-03T00:00:00Z", "end": "2025-01-05T23:59:59Z",
+                         "where": "memory"}],
+        "annotations": [{"t": "2025-01-01T00:00:00Z", "label": "Goal: fix the printer", "kind": "goal"}],
+        "quotes": [{"t": "2025-01-02T10:00:00Z", "agent": "alpha", "text": "The printer is haunted.", "note": None}],
+        "metrics": {"Adopters": 1, "Share adopting": "50%"},
+    }
+
+
+def test_tiny_trace_is_valid():
+    assert check(tiny()) == ([], [])
+
+
+def test_round_trip():
+    tr = tiny()
+    back = json.loads(dumps(tr))
+    assert back == tr
+    assert validate(back) == []
+    entry = index_entry(back, "toy-idea.json")
+    index = {"version": 0, "generated": "2025-02-01T00:00:00Z", "traces": [entry]}
+    assert validate_index(json.loads(json.dumps(index))) == []
+    assert (entry["n_agents"], entry["n_events"]) == (2, 2)
+
+
+@pytest.mark.parametrize("path,value,expect", [
+    (("events", 0, "agent"), "gamma", "events[0].agent: 'gamma' not in agents"),
+    (("edges", 0, "to"), "gamma", "edges[0].to: 'gamma' not in agents"),
+    (("adoptions", 0, "sources"), ["gamma"], "adoptions[0].sources[0]: 'gamma' not in agents"),
+    (("exposures", 0, "source"), "gamma", "exposures[0].source: 'gamma' not in agents"),
+    (("quotes", 0, "agent"), "gamma", "quotes[0].agent: 'gamma' not in agents"),
+    (("adoptions", 0, "event"), "e9", "adoptions[0].event: 'e9' not an event id"),
+])
+def test_bad_references(path, value, expect):
+    tr = tiny()
+    obj = tr
+    for k in path[:-1]:
+        obj = obj[k]
+    obj[path[-1]] = value
+    assert expect in validate(tr)
+
+
+@pytest.mark.parametrize("bad", ["2025-01-02 10:00:00", "2025-01-02T10:00:00", "2025-01-02T10:00:00+00:00",
+                                 "2025-13-02T10:00:00Z", "yesterday", None, 1735812000])
+def test_bad_timestamps(bad):
+    tr = tiny()
+    tr["events"][0]["t"] = bad
+    errs = validate(tr)
+    assert any(e.startswith("events[0].t:") for e in errs), errs
+
+
+def test_start_after_end():
+    tr = tiny()
+    tr["start"], tr["end"] = tr["end"], tr["start"]
+    assert "start: after end" in validate(tr)
+
+
+@pytest.mark.parametrize("path,value", [
+    (("kind",), "rumour"), (("events", 0, "channel"), "email"), (("events", 0, "stance"), "likes"),
+    (("events", 0, "conf"), 4), (("events", 0, "conf"), True), (("exposures", 0, "via"), "telepathy"),
+    (("edges", 0, "kind"), "gossip"), (("annotations", 0, "kind"), "party"), (("persistence", 0, "where"), "disk"),
+])
+def test_bad_enums(path, value):
+    tr = tiny()
+    obj = tr
+    for k in path[:-1]:
+        obj = obj[k]
+    obj[path[-1]] = value
+    prefix = ".".join(str(p) for p in path).replace(".0.", "[0].")
+    errs = validate(tr)
+    assert any(e.startswith(prefix + ":") for e in errs), errs
+
+
+def test_structure_and_limits():
+    tr = tiny()
+    tr["events"][1]["id"] = "e1"
+    tr["events"][0]["snippet"] = "x" * 221
+    tr["agents"].append(dict(tr["agents"][0]))
+    tr["metrics"] = {str(i): i for i in range(11)}
+    del tr["quotes"][0]["note"]
+    tr["extra"] = 1
+    errs = validate(tr)
+    for want in ("events[1].id: duplicate event id 'e1'", "events[0].snippet: 221 chars > 220",
+                 "agents[2].name: duplicate agent 'alpha'", "metrics: 11 entries > 10", "quotes[0].note: missing",
+                 "extra: unknown field"):
+        assert want in errs, (want, errs)
+    assert any("bytes serialized" in e for e in validate(tiny(), max_bytes=100))
+
+
+def test_window_warning_and_fit():
+    tr = tiny()
+    tr["events"][1]["t"] = "2025-02-01T00:00:00Z"
+    tr["adoptions"][0]["t"] = "2025-02-01T00:00:00Z"
+    errs, warns = check(tr)
+    assert errs == [] and len(warns) == 1 and "outside the window" in warns[0]
+    fit_window(tr)
+    assert tr["end"] == "2025-02-01T00:00:00Z" and check(tr) == ([], [])
+
+
+def test_helpers():
+    assert iso(parse_iso("2025-01-02T03:04:05Z")) == "2025-01-02T03:04:05Z"
+    assert iso("2025-01-02 03:04:05.123456") == "2025-01-02T03:04:05Z"
+    text = "lorem " * 100 + "KEY PHRASE" + " ipsum" * 100
+    i = text.index("KEY")
+    c = clip(text, i, i + 10, limit=80)
+    assert "KEY PHRASE" in c and len(c) <= 80 and c.startswith("…") and c.endswith("…")
+    assert clip("  short\n\n text  ") == "short text"
+
+
+@pytest.mark.parametrize("raw,allow,want", [
+    ("mail jane.doe+x@gmail.com now", (), "mail [email] now"),
+    ("bot is claude-3.7@agentvillage.org", ("agentvillage.org",), "bot is claude-3.7@agentvillage.org"),
+    ("bot is a@mail.agentvillage.org", ("agentvillage.org",), "bot is a@mail.agentvillage.org"),
+    ("bot is claude-3.7@agentvillage.org", (), "bot is [email]"),
+    ("call +1 (415) 555-0134 or 415-555-0134 or +44 20 7946 0958", (), "call [phone] or [phone] or [phone]"),
+    ("ping @Claude Opus 5 at 2026-07-24 18:53:59, v1.27.0, 75.126.1.1, #4,688,813,549, sha 7d5d7e8", (),
+     "ping @Claude Opus 5 at 2026-07-24 18:53:59, v1.27.0, 75.126.1.1, #4,688,813,549, sha 7d5d7e8"),
+])
+def test_scrub(raw, allow, want):
+    assert scrub(raw, allow) == want
+
+
+def test_pii_warning_and_scrub_trace():
+    tr = tiny()
+    tr["events"][0]["snippet"] = "ask jane.doe@gmail.com or bot@agentvillage.org"
+    tr["quotes"][0]["text"] = "ring 415-555-0134"
+    errs, warns = check(tr, allow_domains=("agentvillage.org",))
+    assert errs == [] and len(warns) == 1
+    assert "events[0].snippet (email)" in warns[0] and "quotes[0].text (phone)" in warns[0]
+    assert "jane.doe" not in warns[0] and "555" not in warns[0]          # warnings never echo the PII
+    scrub_trace(tr, ("agentvillage.org",))
+    assert tr["events"][0]["snippet"] == "ask [email] or bot@agentvillage.org"
+    assert tr["quotes"][0]["text"] == "ring [phone]"
+    assert check(tr, allow_domains=("agentvillage.org",)) == ([], [])
+    tr["events"][0]["snippet"] = "x" * 214 + " a@b.co"                    # 221 chars after [email] -> re-trimmed
+    scrub_trace(tr)
+    assert len(tr["events"][0]["snippet"]) <= 220 and validate(tr) == []
+
+
+def test_schema_agrees_on_shapes():
+    jsonschema = pytest.importorskip("jsonschema")
+    schema = json.loads(SCHEMA.read_text())
+    v = jsonschema.Draft202012Validator(schema)
+    assert list(v.iter_errors(tiny())) == []
+    bad = tiny()
+    bad["edges"][0]["kind"] = "gossip"
+    bad["events"][0]["t"] = "2025-01-02 10:00"
+    assert len(list(v.iter_errors(bad))) == 2
+
+
+def test_cli_validate(tmp_path, capsys):
+    good, bad = tmp_path / "toy-idea.json", tmp_path / "broken.json"
+    good.write_text(dumps(tiny()))
+    broken = copy.deepcopy(tiny())
+    broken["events"][0]["agent"] = "gamma"
+    bad.write_text(dumps(broken))
+    index = tmp_path / "index.json"
+    index.write_text(json.dumps({"version": 0, "generated": iso("2025-02-01T00:00:00"),
+                                 "traces": [index_entry(tiny(), "toy-idea.json"), index_entry(tiny(), "missing.json")]}))
+    assert cli.main(["validate", str(good)]) == 0
+    assert cli.main(["validate", str(good), str(bad)]) == 1
+    assert cli.main(["validate", str(index)]) == 1
+    out = capsys.readouterr().out
+    assert "not in agents" in out and "missing.json does not exist" in out

@@ -163,7 +163,7 @@ class ModuleContext:
 
     @property
     def store_path(self) -> Path:
-        """The SwarmScope DuckDB store (``SWARMSCOPE_DB``, default ``<data_dir>/swarmscope.duckdb``)."""
+        """The SwarmScope DuckDB store (``[data] db`` in swarm.toml, default ``<data_dir>/swarmscope.duckdb``)."""
         return self.config.store_path
 
     def store(self, read_only: bool = True):
@@ -174,7 +174,10 @@ class ModuleContext:
         return db.connect(self.store_path, read_only=read_only)
 
     def _full(self, suffix: str) -> str:
-        return suffix if suffix.startswith(f"{self.name}_") else f"{self.name}_{suffix}"
+        """``<module>_<suffix>``; a suffix equal to the module name (or already prefixed) is kept as is."""
+        if suffix == self.name or suffix.startswith(f"{self.name}_"):
+            return suffix
+        return f"{self.name}_{suffix}"
 
     def _app(self) -> sdk.App:
         if self.mcp is None:  # pragma: no cover - set by the server before register()

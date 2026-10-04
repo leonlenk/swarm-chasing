@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from swarm_mcp.scope import db, schema
-from swarm_mcp.scope.adapters import get_adapter
+from swarm_mcp.scope.adapters import Adapter, get_adapter
 
 log = logging.getLogger("swarm_mcp.scope.ingest")
 
@@ -43,7 +43,7 @@ def _columns_struct(table: str) -> str:
 
 
 def ingest(
-    adapter_name: str,
+    adapter_name: str | Adapter,
     path: Path,
     db_path: Path,
     *,
@@ -51,9 +51,10 @@ def ingest(
     source: str | None = None,
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
-    """Ingest ``path`` with adapter ``adapter_name`` into ``db_path``. Returns counts and timing."""
+    """Ingest ``path`` with adapter ``adapter_name`` (a name or an adapter instance) into ``db_path``.
+    Returns counts and timing."""
     say = progress or (lambda msg: log.info(msg))
-    adapter = get_adapter(adapter_name, source)
+    adapter = get_adapter(adapter_name, source) if isinstance(adapter_name, str) else adapter_name
     path = Path(path)
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -77,8 +78,25 @@ def ingest(
         say(f"read {', '.join(f'{v:,} {k}' for k, v in counts.items())} in {t_read - t0:.1f}s; loading into {db_path}")
 
         con = db.open_connection(db_path, read_only=False, timeout=30)
+        in_tx = False
         try:
+            not_tables = [
+                t
+                for (t, kind) in con.execute(
+                    "SELECT table_name, table_type FROM information_schema.tables WHERE table_name IN "
+                    f"({', '.join('?' * len(schema.RECORD_MODELS))})",
+                    list(schema.RECORD_MODELS),
+                ).fetchall()
+                if kind != "BASE TABLE"
+            ]
+            if not_tables:
+                what = "is not a table" if len(not_tables) == 1 else "are not tables"
+                raise ValueError(
+                    f"The store at {db_path} uses a different schema ({', '.join(sorted(not_tables))} {what}), "
+                    "so nothing was ingested. Use a separate store (--db) or move that file away."
+                )
             con.execute("BEGIN TRANSACTION")
+            in_tx = True
             for table in schema.RECORD_MODELS:
                 con.execute(f"DELETE FROM {table} WHERE source = ?", [adapter.source])
             for table in schema.RECORD_MODELS:
@@ -104,17 +122,20 @@ def ingest(
                             "include_events": include_events,
                             "schema_version": schema.SCHEMA_VERSION,
                             "notes": list(getattr(adapter, "notes", []) or []),
+                            **(getattr(adapter, "source_meta", None) or {}),
                         }
                     ),
                 ],
             )
             con.execute("COMMIT")
+            in_tx = False
             stored = {
                 t: con.execute(f"SELECT count(*) FROM {t} WHERE source = ?", [adapter.source]).fetchone()[0]
                 for t in schema.RECORD_MODELS
             }
         except Exception:
-            con.execute("ROLLBACK")
+            if in_tx:
+                con.execute("ROLLBACK")
             raise
         finally:
             con.close()
@@ -129,3 +150,23 @@ def ingest(
         "counts": stored,
         "seconds": round(time.perf_counter() - t0, 1),
     }
+
+
+def ingest_mapped(
+    mapping: str | Path,
+    path: str | Path | None,
+    db_path: Path,
+    *,
+    progress: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """Ingest the dataset at ``path`` (default: the mapping's ``root``) through the declarative
+    ``mapping`` JSON into ``db_path``. Idempotent: the mapping's source is replaced as a whole."""
+    from swarm_mcp.scope.adapters.mapped import MappedStoreAdapter
+
+    adapter = MappedStoreAdapter.from_file(mapping, path)
+    result = ingest(adapter, adapter.mapped.root, db_path, progress=progress)
+    result["mapping"] = str(mapping)
+    stats = {k: v for k, v in adapter.mapped.stats.items() if v}
+    if stats:
+        result["mapping_stats"] = stats
+    return result
