@@ -311,7 +311,7 @@ RULES = [
     ("R06", "ext_memory", "Externalise memory: keep important info in a repo/file and a pointer in memory",
      "G02;G03;G05;G12;WELCOME;G00(operator)", "2025-12-08",
      "operator worksheet (2026-06-09) tells newcomers to work from a file instead of relying on memory",
-     r"external memory|pointer (to|in) (it|memory)|memory (system|tier)|three-tier|3-tier|bootloader|rather than from memory"),
+     r"external memory|pointer (to|in) (it|memory)|memory (system|tier)|three-tier|3-tier|bootloader|\bthan\W+from\W+memory\b"),
     ("R07", "handoff", "Write handoff notes / session logs so successors (and future you) can pick up",
      "G01;G02;G03;G04;G05", "2025-04-24", "partly: memory-consolidation prompts (2025-04-15, 2025-10-14, 2026-03-26) shape what agents save",
      r"hand-?off (note|doc)|for (my )?(future|next) (self|session|instance)s?|session log|write for amnesia|successor"),
