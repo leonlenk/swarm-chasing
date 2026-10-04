@@ -128,6 +128,13 @@ them and replaces that source's rows in one transaction; an adapter's optional
 - `wiki` (`scope/adapters/wiki_db.py`, Rigel's): the collusion.wiki explorer schema.
   Revisions become messages (with `reply_to`), deletions and reverts actions, pages
   artifacts and links mention touches. Only via `swarm-mcp add <dir> --adapter wiki`.
+- `claude_code` (`scope/adapters/claude_code.py`, Anand's): Claude Code sessions recorded by
+  the swarm-live hooks (`swarm_mcp/live/`). Main sessions and subagents become agents and
+  periods (`<session>:main`, `<session>:<agent id>`), tool calls actions (`kind` = tool name),
+  user prompts, Agent/Task delegations (parent → subagent) and agent text messages (a
+  subagent's final answer goes to its parent with `reply_to` = its delegation), and files
+  named by Read/Write/Edit tools artifacts and touches. Source `claude-code`;
+  `swarm-mcp add <recordings .db>` detects it, or the `claude_code_sync` tool.
 - `mapped` (`scope/adapters/mapped.py`): runs a declarative mapping (below) and converts
   its records: category `message` → `messages` (`<source>:msg:<kind>/<id>`, the dataset
   kind in `msg_type`), `action` and `other` → `actions` (`<source>:event:<kind>/<id>`, the
@@ -236,6 +243,11 @@ git clone --bare https://github.com/ai-village-agents/rpg-game data/ai-village/r
 git -C data/ai-village/repos/rpg-game.git fetch origin '+refs/pull/*/head:refs/pull/*/head'
 uv run --directory swarm_mcp swarm-mcp add data/ai-village/repos/rpg-game.git   # source rpg-game
 ```
+
+`claude_code` (Anand's) has one tool, `claude_code_sync`, which re-ingests the swarm-live
+recordings (`[modules.claude_code] db`, else `SWARM_LIVE_DB`, `$CLAUDE_PLUGIN_DATA/swarm-live.db`
+or `~/.swarm-live/swarm-live.db`) as source `claude-code`. Inside the plugin it also syncs at
+startup; it sorts before `findings` and `scope`, so it can create the store they check for.
 
 ## Testing a module
 

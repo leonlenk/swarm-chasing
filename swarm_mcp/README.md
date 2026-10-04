@@ -70,6 +70,101 @@ claude mcp add swarm -- uv run --directory swarm_mcp swarm-mcp
 
 Start a session with `core_info`, or with the `investigate` prompt.
 
+## Use it as a Claude Code plugin (and record your own sessions)
+
+The repo root is also a Claude Code plugin. You don't open Claude Code in this repo to use it:
+run it from whatever project you're working in. It needs `uv` and Python on PATH.
+
+```bash
+cd ~/myproject
+claude --plugin-dir ~/swarm-chasing          # this session only
+```
+
+To install it permanently, run these inside Claude Code:
+
+```
+/plugin marketplace add leonlenk/swarm-chasing
+/plugin install swarm-chasing@swarm-chasing
+```
+
+### The MCP server
+
+You don't start it yourself. `.claude-plugin/plugin.json` declares the `swarm` server with
+absolute paths: `uv run --project ${CLAUDE_PLUGIN_ROOT}/swarm_mcp swarm-mcp`.
+- Claude Code starts it when a session starts and stops it when the session ends.
+- It appears in `/mcp` under the plugin's name.
+- Its venv is built in the plugin's data directory, so it survives plugin updates. The first
+  launch is slow while `uv` builds it; later starts are quick.
+- The plugin's `swarm` entry replaces the root `.mcp.json` one, which stays for working in this
+  repo.
+
+### Choosing the data folder
+
+The plugin passes its `data_dir` option to the server as `SWARM_DATA_DIR`. The default is `data`.
+
+- **Relative paths resolve against the folder you launched `claude` from**, because the server
+  runs with `uv run --project`, which (unlike `--directory`) keeps the working directory. Run from
+  `~/myproject`, the server uses `~/myproject/data/`, the store
+  `~/myproject/data/swarmscope.duckdb` and findings in `~/myproject/findings/`.
+- **For an absolute path** that every project shares, e.g. `C:/datasets/swarm`, set `data_dir` in
+  `/config` (each plugin option is a row there) or under `pluginConfigs` in `settings.json`.
+- **A `swarm.toml` in your project root** still applies for the other settings (see
+  [Configuration](#configuration)). The plugin's `data_dir` overrides its `[data] dir`.
+
+Datasets other than your recorded sessions still need adding once, from your project folder.
+Then restart the server with `/mcp`. `core_info` shows which data folder and store it uses.
+
+```bash
+cd ~/myproject
+uv run --project ~/swarm-chasing/swarm_mcp swarm-mcp add data/ai-village
+```
+
+Don't launch it from inside this repo with the plugin enabled: you would get two `swarm` servers,
+the repo's `.mcp.json` one and the plugin's. Run it from another folder, or disable one in `/mcp`.
+
+### Recording and investigating your sessions
+
+- **Recording.** `hooks/hooks.json` makes every session on the machine record itself:
+  - The `SessionStart` hook (`swarm_mcp/src/swarm_mcp/live/launch.py`, stdlib only) starts the
+    collector `swarm-live serve --exit-when-idle` on `127.0.0.1:47831`.
+  - Every other hook POSTs its payload there, and the collector writes it to a SQLite file in
+    the plugin's data directory.
+  - There is one collector per machine. It exits about a minute after the last Claude Code
+    process ends.
+  - If it's down, the hooks fail silently and never block the agent.
+- **Investigating the recordings.** They become the store source `claude-code`, through the
+  `claude_code` adapter (automatically when the server starts inside the plugin, or with
+  `claude_code_sync` mid-session). Then the usual tools apply:
+  - `scope_search`, `core_get` and `scope_agents` (main agents and subagents);
+  - `scope_periods` (one per session or subagent run);
+  - `scope_graph` (delegation and reporting edges);
+  - findings and sweeps.
+
+```bash
+uv run --directory swarm_mcp swarm-live import ~/.claude/projects/<project-dir>   # load past sessions
+uv run --directory swarm_mcp swarm-mcp add ~/.swarm-live/swarm-live.db             # into the store
+uv run --directory swarm_mcp swarm-live serve                                      # a permanent collector
+```
+
+**Why the recordings go to a separate SQLite file rather than straight into the DuckDB store:**
+- **One writer.** DuckDB allows one writing process at a time, and that writer locks out every
+  other process, even readers. The collector writes several times per tool call. Meanwhile each
+  session's MCP server, `swarm-mcp add` and the Stop hook all open the store. SQLite in WAL mode
+  allows one writer alongside any number of readers.
+- **One collector, many stores.** One collector serves the whole machine, but each project has
+  its own store. Each project's server pulls the recordings into its own store.
+- **Rows change after they're written.** A tool call is completed when its result arrives, a
+  subagent's parent is known only when it starts, and imports re-link subagents later. Store rows
+  are fixed evidence, replaced a whole source at a time.
+- **The raw record is kept**, so the store can be rebuilt if the adapter's mapping changes.
+- **Recording needs only the standard library**, so it works before the `uv` environment exists.
+
+The cost is freshness: the store is as current as the last sync. Call `claude_code_sync` while
+watching sessions that are still running.
+
+The repo's own hooks in `.claude/settings.json` (below) are separate: they audit the
+investigator's `mcp__swarm__*` calls in this repo and are not part of the plugin.
+
 ## Commands
 
 | command | what it does |

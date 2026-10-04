@@ -9,6 +9,7 @@
 ``add --adapter auto`` (the default) picks the adapter from the path: ``--mapping``
 given -> mapped; the AI Village file set -> ai_village; a bare git repository
 (a directory with HEAD, objects/ and refs/ that git takes for a repository root) -> git;
+a swarm-live recordings database (``swarm_mcp.live``) -> claude_code;
 anything else is mapped with ``mappings/<source>.json`` when it exists (re-runs
 keep hand edits; delete it to redraft), else profiled and mapped by a draft
 from ``--agent``, checked (it stops with the report on failure) and then
@@ -35,7 +36,7 @@ from swarm_mcp.config import Config, ConfigError, find_project_root, resolve_dat
 
 SUBCOMMANDS = ("info", "add", "render", "export")
 AGENT_MODES = ("none", "api", "claude-code")
-ADD_ADAPTERS = ("auto", "village", "git", "wiki", "mapped")
+ADD_ADAPTERS = ("auto", "village", "git", "wiki", "claude-code", "mapped")
 
 
 class CommandError(ValueError):
@@ -132,6 +133,18 @@ def git_repo_dir(path: Path) -> Path | None:
     return path if git_root(path) == path else None
 
 
+def claude_code_db(path: Path) -> Path | None:
+    """``path`` if it is a swarm-live recordings database (Claude Code sessions recorded by the hooks)."""
+    if not path.is_file():
+        return None
+    try:
+        from swarm_mcp.live.store import is_recordings_db
+
+        return path if is_recordings_db(path) else None
+    except Exception:  # noqa: BLE001 - not SQLite, unreadable...: just not ours
+        return None
+
+
 def default_name(path: Path) -> str:
     return _slugify(path.name.split(".")[0] if path.is_file() else path.name)
 
@@ -185,6 +198,8 @@ def cmd_add(args: argparse.Namespace, config: Config) -> int:
         if not any(f.is_file() for f in dbs):
             raise CommandError(f"no wiki database in {path} (pass a .db file or the folder that holds it)")
         return _add_builtin(args, "wiki", path, db, detected=False)
+    if adapter == "claude-code" or (adapter == "auto" and not args.mapping and claude_code_db(path)):
+        return _add_builtin(args, "claude_code", path, db, detected=adapter == "auto")
     return _add_mapped(args, config, path, db)
 
 
@@ -233,7 +248,11 @@ def _replaced_note(res: dict[str, Any]) -> str:
     return "(a new source; other sources and findings are kept)"
 
 
-_BUILTIN_LABEL = {"git": "a bare git repository", "wiki": "a wiki database"}
+_BUILTIN_LABEL = {
+    "git": "a bare git repository",
+    "wiki": "a wiki database",
+    "claude_code": "a swarm-live recordings database",
+}
 
 
 def _inspect_counts(info: dict[str, Any]) -> list[str]:
@@ -531,6 +550,7 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument(
         "--adapter", choices=ADD_ADAPTERS, default="auto",
         help="auto = --mapping given -> mapped, the AI Village file set -> village, a bare git repo -> git, "
+        "a swarm-live recordings db -> claude-code, "
         "else mapped with a drafted mapping; wiki (a collusion.wiki explorer SQLite db) is used only when given",
     )  # fmt: skip
     a.add_argument(
