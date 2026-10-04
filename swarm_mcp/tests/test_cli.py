@@ -4,6 +4,7 @@ synthetic."""
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -434,3 +435,70 @@ def test_export_type_filter(project: Path, capsys):
     assert res["ok"] is True and res["records"]["by_source_kind"] == {"village": {"event": 2}}
     rows = [json.loads(x) for x in (project / "data" / "e1" / "events.jsonl").read_text().splitlines()]
     assert [r["action_kind"] for r in rows] == ["session_goal"] * 2
+
+
+DOCS = Path(__file__).resolve().parents[1]
+
+
+def _subparsers(parser):
+    import argparse
+
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            yield from action.choices.items()
+
+
+def test_readme_documents_every_cli_flag():
+    """Regression: the README's command table drifted from the CLI (render subtasks lacked --llm-*, export
+    --type, info --db). Every visible flag of every subcommand must appear in its row."""
+    import argparse
+
+    from swarm_mcp.cli import build_parser
+
+    readme = (DOCS / "README.md").read_text(encoding="utf-8")
+    rows = {}
+    for line in readme.splitlines():
+        m = re.match(r"\| `swarm-mcp (\w+(?: \w+)?)", line)
+        if m:
+            rows[m.group(1)] = line
+    commands = []
+    for name, sub in _subparsers(build_parser()):
+        views = list(_subparsers(sub))
+        commands += [(f"{name} {v}", p) for v, p in views] if views else [(name, sub)]
+    missing = []
+    for cmd, parser in commands:
+        row = rows.get(cmd, "")
+        flags = [
+            o
+            for a in parser._actions
+            if a.help != argparse.SUPPRESS
+            for o in a.option_strings
+            if o.startswith("--") and o != "--help"
+        ]
+        missing += [f"{cmd} {f}" for f in flags if not re.search(re.escape(f) + r"(?![\w-])", row)]
+    assert not missing
+
+
+def test_docs_list_every_tool(project: Path, capsys):
+    """Regression: README and ADDING_MODULES listed 5 subtasks_* tools after subtasks_graph and subtasks_name
+    were added."""
+    from conftest import config_for
+
+    from swarm_mcp.server import build_server
+
+    make_village(project / "data")
+    assert cli("add", "data/ai-village") == 0
+    app = build_server(config_for(project / "data"))
+    tools = {t for r in app.swarm_registry.records.values() for t in r.tools}
+    assert {"subtasks_graph", "subtasks_name", "scope_recap", "core_get"} <= tools
+    readme = (DOCS / "README.md").read_text(encoding="utf-8")
+    adding = (DOCS / "ADDING_MODULES.md").read_text(encoding="utf-8")
+    assert not sorted(t for t in tools if f"`{t}" not in readme)
+    assert not sorted(t for t in tools if t.startswith("subtasks_") and f"`{t}`" not in adding)
+
+
+def test_swarm_setup_uses_mapped_id_form():
+    """Regression: /swarm-setup told the agent to resolve `<source>:<kind>:<id>`; mapped ids carry the dataset
+    kind in the local id (`<source>:msg:<kind>/<id>`)."""
+    text = (DOCS.parent / ".claude" / "commands" / "swarm-setup.md").read_text(encoding="utf-8")
+    assert "<source>:<kind>:<id>" not in text and "`<source>:msg:<kind>/<id>`" in text

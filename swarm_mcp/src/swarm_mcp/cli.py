@@ -465,6 +465,9 @@ RENDER_VIEWS: dict[str, RenderView] = {
 }
 
 
+RENDER_OUT = {"subtasks": "swarmscope-subtasks-<corpus>.html, or swarmscope-subtasks.html when the corpus is inferred"}
+
+
 def cmd_render(args: argparse.Namespace, config: Config) -> int:
     result = RENDER_VIEWS[args.view][2](args, config)
     print(json.dumps(result, indent=2, default=str))
@@ -578,8 +581,9 @@ def build_parser() -> argparse.ArgumentParser:
     views = r.add_subparsers(dest="view", required=True)
     for name, (help_text, add_args, _run) in RENDER_VIEWS.items():
         v = views.add_parser(name, help=help_text)
-        v.add_argument("--out", help=f"output HTML file (default: <data dir>/swarmscope-{name}.html, gitignored)")
-        v.add_argument("--source", help="only this source (e.g. village)")
+        out = RENDER_OUT.get(name, f"swarmscope-{name}.html")
+        v.add_argument("--out", help=f"output HTML file (default: <data dir>/{out}, gitignored)")
+        v.add_argument("--source", help="same as --corpus" if name == "subtasks" else "only this source (e.g. village)")
         v.add_argument("--db", help="store path")
         add_args(v)
     r.set_defaults(fn=cmd_render)
@@ -592,7 +596,8 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--kind", action="append", default=[], help="only these id kinds, e.g. msg, event (repeatable)")
     e.add_argument(
         "--type", action="append", default=[],
-        help="only these dataset types, e.g. commit, revision, chat (messages.msg_type / actions.kind; repeatable)",
+        help="only these dataset types, e.g. commit, revision, session_goal (messages.msg_type / actions.kind; "
+        "repeatable)",
     )  # fmt: skip
     e.add_argument("--channel", help="only messages in this channel")
     e.add_argument("--author", help="only this author: agent name/alias/id, 'human' or 'human:<id>'")
