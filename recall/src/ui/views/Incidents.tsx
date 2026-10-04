@@ -7,6 +7,8 @@ import { Record, UnavailableRecord } from '../Record';
 import { findingAgents, findingLabel, groupFindings, plain, STATE_ORDER, subjectLabel } from '../labels';
 import { eventTone } from '../format';
 import { bucketOf, remediationFor, triage } from '../../engine/triage';
+import { subjectIncidents, subjectOfFinding } from '../../engine/subjects';
+import { SubjectCard } from '../SubjectCard';
 import { IAlert, IChevronR, IExternal, ISearch, IShield, ITasks, IUsers } from '../icons';
 
 const hm = (iso: string) => new Date(iso).toISOString().slice(11, 16);
@@ -43,16 +45,50 @@ export function Incidents() {
     .filter((f) => !q || `${f.title} ${f.summary} ${ws.claims.get(f.claimId)?.text ?? ''}`.toLowerCase().includes(q.toLowerCase()))
     .sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state] || b.detectedAt - a.detectedAt), [findings, tab, monitor, q, ws]);
   const current = selected ?? list[0];
-  const groups = useMemo(() => groupFindings(list, (f) => ws.claims.get(f.claimId)?.subject?.artifact ?? ''), [list, ws]);
-  // Needs evidence: collapsible by agent, then grouped by subject (+N similar).
-  const agentSections = useMemo(() => {
+  // One card per SubjectIncident (owner ruling): findings on a claimed subject live inside their subject's card.
+  const incidents = useMemo(() => new Map(subjectIncidents(ws, findings).map((i) => [i.subject, i])), [ws, findings]);
+  const build = (fs: Finding[]) => {
+    const bySubject = new Map<string, Finding[]>();
+    const loose: Finding[] = [];
+    for (const f of fs) { const k = subjectOfFinding(f, ws); if (k && incidents.has(k)) bySubject.set(k, [...(bySubject.get(k) ?? []), f]); else loose.push(f); }
+    const cards = [...bySubject.entries()].map(([k, members]) => ({ inc: incidents.get(k)!, members }))
+      .sort((a, b) => b.members.length - a.members.length || Math.max(...b.members.map((f) => f.detectedAt)) - Math.max(...a.members.map((f) => f.detectedAt)));
+    return { cards, groups: groupFindings(loose, (f) => f.monitor) };
+  };
+  // Needs evidence: collapsible by agent, then by subject.
+  const sections = useMemo(() => {
+    if (tab !== 'needs') return [{ agent: '', ...build(list) }];
     const by = new Map<string, Finding[]>();
     for (const f of list) by.set(f.agentId, [...(by.get(f.agentId) ?? []), f]);
-    return [...by.entries()].sort((a, b) => b[1].length - a[1].length)
-      .map(([agent, fs]) => ({ agent, groups: groupFindings(fs, (f) => ws.claims.get(f.claimId)?.subject?.artifact ?? '') }));
-  }, [list, ws]);
+    return [...by.entries()].sort((a, b) => b[1].length - a[1].length).map(([agent, fs]) => ({ agent, ...build(fs) }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [list, ws, tab, incidents]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const toggle = (k: string) => setExpanded((prev) => { const n = new Set(prev); if (n.has(k)) n.delete(k); else n.add(k); return n; });
+
+  const row = (f: Finding, sub = false, more = 0, isOpen = false, onMore?: () => void) => {
+    const ag = findingAgents(f, ws);
+    const at = ws.byId.get(f.detectedEventId);
+    const subject = ws.claims.get(f.claimId)?.subject?.artifact;
+    return (
+      <button key={f.id} className={`inc-row ${sub ? 'inc-sub' : ''} ${current?.id === f.id ? 'sel' : ''} ${f.state}`} onClick={() => navigate('incidents', f.id)}>
+        <IAlert className={`inc-ico ${f.state}`} size={sub ? 18 : 24} />
+        <span className="inc-main">
+          <b>{findingLabel(f)}</b>
+          <span>{subject ? subjectLabel(subject) : plain(f.title, 60)} · {ag.length} agent{ag.length === 1 ? '' : 's'} · {at ? hm(at.timestamp) : ''} · #{f.detectedAt}{reviewed.has(f.id) ? ' · reviewed' : ''}</span>
+        </span>
+        {more > 0 && onMore && (
+          <span className="inc-group-more" role="button" tabIndex={0}
+            onClick={(e) => { e.stopPropagation(); onMore(); }}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); onMore(); } }}>
+            {isOpen ? 'Hide' : `+${more} similar`}
+          </span>
+        )}
+        <span className="avatar-stack">{ag.slice(0, 4).map((a) => <Avatar key={a} name={name(a)} color={agents.get(a)?.color} size="sm" />)}</span>
+        <IChevronR />
+      </button>
+    );
+  };
 
   const affected = new Set(findings.flatMap((f) => findingAgents(f, ws)));
   const reach = new Set(findings.flatMap((f) => f.reach));
@@ -100,47 +136,26 @@ export function Incidents() {
               {findings.length ? 'Try another tab.' : 'Scrub forward, or switch to a source with detected incidents.'}
             </div>
           )}
-          {(tab === 'needs' ? agentSections : [{ agent: '', groups }]).map((sec) => (
+          {sections.map((sec) => (
           <div key={sec.agent || 'all'}>
             {sec.agent && (
               <button className="agent-section" onClick={() => toggleAgent(sec.agent)} aria-expanded={!collapsed.has(sec.agent)}>
                 <IChevronR className={collapsed.has(sec.agent) ? '' : 'rot'} size={16} />
                 <Avatar name={name(sec.agent)} color={agents.get(sec.agent)?.color} size="sm" />
-                <b>{name(sec.agent)}</b><span className="muted small">{sec.groups.reduce((n, g) => n + 1 + g.rest.length, 0)} unchecked</span>
+                <b>{name(sec.agent)}</b><span className="muted small">{sec.cards.reduce((n, c) => n + c.members.length, 0) + sec.groups.reduce((n, g) => n + 1 + g.rest.length, 0)} unchecked · {sec.cards.length} subject{sec.cards.length === 1 ? '' : 's'}</span>
               </button>
             )}
-          {!collapsed.has(sec.agent) && sec.groups.map((g) => {
-            const open = expanded.has(g.key);
-            const row = (f: Finding, sub = false) => {
-              const ag = findingAgents(f, ws);
-              const at = ws.byId.get(f.detectedEventId);
-              const subject = ws.claims.get(f.claimId)?.subject?.artifact;
-              return (
-                <button key={f.id} className={`inc-row ${sub ? 'inc-sub' : ''} ${current?.id === f.id ? 'sel' : ''} ${f.state}`} onClick={() => navigate('incidents', f.id)}>
-                  <IAlert className={`inc-ico ${f.state}`} size={sub ? 18 : 24} />
-                  <span className="inc-main">
-                    <b>{sub ? `Earlier: ${plain(ws.claims.get(f.claimId)?.text ?? f.title, 70)}` : findingLabel(f)}</b>
-                    <span>{subject ? subjectLabel(subject) : f.claimId} · {ag.length} agent{ag.length === 1 ? '' : 's'} · {at ? hm(at.timestamp) : ''} · #{f.detectedAt}{reviewed.has(f.id) ? ' · reviewed' : ''}</span>
-                  </span>
-                  {!sub && g.rest.length > 0 && (
-                    <span className="inc-group-more" role="button" tabIndex={0}
-                      onClick={(e) => { e.stopPropagation(); toggle(g.key); }}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); toggle(g.key); } }}>
-                      {open ? 'Hide' : `+${g.rest.length} similar`}
-                    </span>
-                  )}
-                  <span className="avatar-stack">{ag.slice(0, 4).map((a) => <Avatar key={a} name={name(a)} color={agents.get(a)?.color} size="sm" />)}</span>
-                  <IChevronR />
-                </button>
-              );
-            };
-            return (
-              <div key={g.key}>
-                {row(g.head)}
-                {open && g.rest.map((f) => row(f, true))}
-              </div>
-            );
-          })}
+            {!collapsed.has(sec.agent) && (
+              <>
+                {sec.cards.map((c) => <SubjectCard key={c.inc.subject} inc={c.inc} members={c.members} selectedId={current?.id} renderRow={(f) => row(f, true)} />)}
+                {sec.groups.map((g) => (
+                  <div key={g.key}>
+                    {row(g.head, false, g.rest.length, expanded.has(g.key), () => toggle(g.key))}
+                    {expanded.has(g.key) && g.rest.map((f) => row(f, true))}
+                  </div>
+                ))}
+              </>
+            )}
           </div>
           ))}
         </section>

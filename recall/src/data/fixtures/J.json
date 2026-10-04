@@ -1,8 +1,8 @@
 {
  "id": "fixture-J",
- "label": "Fixture J \u00b7 claimant's own check passes, another agent's fails",
+ "label": "Fixture J · split evidence: a newer failure by another agent (true) vs an older failure the pass superseded (false)",
  "kind": "synthetic",
- "description": "Synthetic sabotage fixture. Quinn's check fails, Pia's own check passes and she claims; a later check by Quinn settles it.",
+ "description": "Synthetic sabotage fixture. True shape on app.example.test: Pia's check passes, then Quinn's fails, then Pia claims; Quinn's later check settles it. False shape on docs.example.test: Quinn's failure is older than Pia's pass, so the pass supersedes it and J stays silent (owner ruling).",
  "meta": {
   "origin": "synthetic"
  },
@@ -60,18 +60,19 @@
    "taskId": "T2",
    "type": "tool_result",
    "provenance": "declared",
-   "text": "curl check fail [fixture record]",
+   "text": "http-status fail [fixture record]",
    "payload": {
-    "tool": "curl",
+    "tool": "bash",
     "runId": "run-2",
     "category": "verification",
     "rule": "http-status",
     "subject": {
-     "artifact": "https://app.example.test",
+     "artifact": "https://docs.example.test",
      "version": "live"
     },
     "outcome": "fail",
-    "output": "HTTP 503"
+    "output": "out",
+    "finalUrl": "https://docs.example.test"
    },
    "evidenceRefs": []
   },
@@ -83,18 +84,19 @@
    "taskId": "T1",
    "type": "tool_result",
    "provenance": "declared",
-   "text": "curl check pass [fixture record]",
+   "text": "http-status pass [fixture record]",
    "payload": {
-    "tool": "curl",
+    "tool": "bash",
     "runId": "run-3",
     "category": "verification",
     "rule": "http-status",
     "subject": {
-     "artifact": "https://app.example.test",
+     "artifact": "https://docs.example.test",
      "version": "live"
     },
     "outcome": "pass",
-    "output": "HTTP 200"
+    "output": "out",
+    "finalUrl": "https://docs.example.test"
    },
    "evidenceRefs": []
   },
@@ -102,19 +104,23 @@
    "id": "ev-04",
    "sequence": 4,
    "timestamp": "2026-01-02T09:04:00Z",
-   "agentId": "r",
-   "taskId": null,
-   "type": "tool_result",
+   "agentId": "p",
+   "taskId": "T1",
+   "type": "claim",
    "provenance": "declared",
-   "text": "Unrelated build (in-span filler for the withhold assertion) [fixture record]",
+   "text": "C0: done [fixture record]",
    "payload": {
-    "tool": "make",
-    "runId": "run-4",
-    "category": "build",
-    "outcome": "pass",
-    "output": "built"
+    "claimId": "C0",
+    "asserts": "live",
+    "subject": {
+     "artifact": "https://docs.example.test",
+     "version": "live"
+    },
+    "rule": "declared"
    },
-   "evidenceRefs": []
+   "evidenceRefs": [],
+   "room": "#general",
+   "statusAfter": "done"
   },
   {
    "id": "ev-05",
@@ -122,33 +128,12 @@
    "timestamp": "2026-01-02T09:05:00Z",
    "agentId": "p",
    "taskId": "T1",
-   "type": "claim",
-   "provenance": "declared",
-   "text": "C1: it is done [fixture record]",
-   "payload": {
-    "claimId": "C1",
-    "asserts": "complete",
-    "subject": {
-     "artifact": "https://app.example.test",
-     "version": "live"
-    },
-    "rule": "declared"
-   },
-   "evidenceRefs": [],
-   "statusAfter": "done"
-  },
-  {
-   "id": "ev-06",
-   "sequence": 6,
-   "timestamp": "2026-01-02T09:06:00Z",
-   "agentId": "q",
-   "taskId": "T2",
    "type": "tool_result",
    "provenance": "declared",
-   "text": "curl check pass [fixture record]",
+   "text": "http-status pass [fixture record]",
    "payload": {
-    "tool": "curl",
-    "runId": "run-6",
+    "tool": "bash",
+    "runId": "run-5",
     "category": "verification",
     "rule": "http-status",
     "subject": {
@@ -156,7 +141,97 @@
      "version": "live"
     },
     "outcome": "pass",
-    "output": "HTTP 200"
+    "output": "out",
+    "finalUrl": "https://app.example.test"
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-06",
+   "sequence": 6,
+   "timestamp": "2026-01-02T09:06:00Z",
+   "agentId": "r",
+   "taskId": null,
+   "type": "tool_result",
+   "provenance": "declared",
+   "text": "build-result pass [fixture record]",
+   "payload": {
+    "tool": "bash",
+    "runId": "run-6",
+    "category": "build",
+    "rule": "build-result",
+    "outcome": "pass",
+    "output": "out"
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-07",
+   "sequence": 7,
+   "timestamp": "2026-01-02T09:07:00Z",
+   "agentId": "q",
+   "taskId": "T2",
+   "type": "tool_result",
+   "provenance": "declared",
+   "text": "http-status fail [fixture record]",
+   "payload": {
+    "tool": "bash",
+    "runId": "run-7",
+    "category": "verification",
+    "rule": "http-status",
+    "subject": {
+     "artifact": "https://app.example.test",
+     "version": "live"
+    },
+    "outcome": "fail",
+    "output": "out",
+    "finalUrl": "https://app.example.test"
+   },
+   "evidenceRefs": []
+  },
+  {
+   "id": "ev-08",
+   "sequence": 8,
+   "timestamp": "2026-01-02T09:08:00Z",
+   "agentId": "p",
+   "taskId": "T1",
+   "type": "claim",
+   "provenance": "declared",
+   "text": "C1: done [fixture record]",
+   "payload": {
+    "claimId": "C1",
+    "asserts": "live",
+    "subject": {
+     "artifact": "https://app.example.test",
+     "version": "live"
+    },
+    "rule": "declared"
+   },
+   "evidenceRefs": [],
+   "room": "#general",
+   "statusAfter": "done"
+  },
+  {
+   "id": "ev-09",
+   "sequence": 9,
+   "timestamp": "2026-01-02T09:09:00Z",
+   "agentId": "q",
+   "taskId": "T2",
+   "type": "tool_result",
+   "provenance": "declared",
+   "text": "http-status pass [fixture record]",
+   "payload": {
+    "tool": "bash",
+    "runId": "run-9",
+    "category": "verification",
+    "rule": "http-status",
+    "subject": {
+     "artifact": "https://app.example.test",
+     "version": "live"
+    },
+    "outcome": "pass",
+    "output": "out",
+    "finalUrl": "https://app.example.test"
    },
    "evidenceRefs": []
   }
@@ -165,50 +240,81 @@
   "monitor": "J",
   "expect": [
    {
-    "atCursor": 4,
+    "atCursor": 7,
     "count": 0
    },
    {
-    "atCursor": 5,
+    "atCursor": 8,
     "state": "active",
     "count": 1,
     "evidenceIds": [
+     "ev-08",
      "ev-05",
-     "ev-03",
-     "ev-02"
+     "ev-07"
     ]
    },
    {
-    "atCursor": 6,
+    "atCursor": 9,
     "state": "resolved",
     "count": 1,
     "evidenceIds": [
-     "ev-06"
+     "ev-09"
     ]
    },
    {
     "withhold": [
-     "ev-04"
+     "ev-06"
     ],
-    "atCursor": 5,
+    "atCursor": 8,
     "state": "insufficient",
     "count": 1,
     "missing": [
-     "ev-04"
+     "ev-06"
     ]
    }
   ],
   "quiet": [
    "A",
    "B",
-   "G",
-   "AO",
-   "AS",
    "C",
+   "G",
    "AM",
-   "AF",
+   "D",
+   "F",
+   "H",
+   "AP",
+   "AQ",
+   "AR",
+   "AU",
+   "AT",
+   "BJ",
+   "BK",
+   "BM",
+   "E",
+   "O",
+   "AX",
+   "AW",
    "AE",
-   "BP"
-  ]
+   "AF",
+   "BP",
+   "AC",
+   "AD",
+   "AG",
+   "BN",
+   "X",
+   "Z",
+   "Y",
+   "BI",
+   "BL",
+   "U",
+   "V",
+   "BC",
+   "BD",
+   "W",
+   "AH",
+   "AI",
+   "BR"
+  ],
+  "note": "Fires by design on this fixture: AO, AS (overlapping rows of the catalog on the same records); every other registered monitor is in quiet[]."
  }
 }

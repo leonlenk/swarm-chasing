@@ -17,6 +17,7 @@ const NAV: { group: string; items: { view: View; label: string; icon: ReactNode 
   ] },
   { group: 'Investigate', items: [
     { view: 'incidents', label: 'Incidents', icon: <IShield /> },
+    { view: 'swarm', label: 'Swarm', icon: <IUsers /> },
     { view: 'monitors', label: 'Monitors', icon: <IPulse /> },
     { view: 'evidence', label: 'Evidence', icon: <IDoc /> },
   ] },

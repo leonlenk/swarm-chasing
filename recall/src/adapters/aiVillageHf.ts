@@ -95,6 +95,19 @@ const CONVENTION_RE = /(?:^|\s)(#[A-Za-z][\w-]{2,30})\b|(\[[A-Z][A-Z0-9 _-]{1,15
 const STOPWORDS = new Set('the and for with that this from your you are was were have has will can could would should please into onto about just also then than them they their there here what when where which while been being make sure take over care look'.split(' '));
 const contentTokens = (s: string) => [...new Set(s.toLowerCase().replace(/https?:\/\/\S+/g, ' ').replace(/@\S+/g, ' ').split(/[^a-z0-9]+/).filter((w) => w.length >= 4 && !STOPWORDS.has(w)))].slice(0, 30);
 const conventionsIn = (s: string) => [...new Set([...s.matchAll(CONVENTION_RE)].map((m) => m[1] ?? m[2]).filter(Boolean))].slice(0, 10);
+/**
+ * Failure-report subject (rules 'correction-other' / 'human-negative', owner ruling): the URL and a failure word must be
+ * in the SAME sentence, and that sentence must not be hedged or future ("it can take a couple minutes to stop 404'ing").
+ */
+function failureSubjectOf(content: string, pageUrls: string[]): string | undefined {
+  for (const sn of sentencesOf(content)) {
+    if (!NEGATIVE_RE.test(sn) || HEDGE_RE.test(sn) || FUTURE_RE.test(sn) || /\bcan take\b/i.test(sn)) continue;
+    const u = urlsIn(sn).find((x) => pageUrls.includes(x));
+    if (u) return u;
+  }
+  return undefined;
+}
+
 /** Typed flags for a chat message (rules 'names-url', 'negative-lexicon', 'external-blame', 'own-error', 'convention-token'). */
 function chatFlags(content: string): { names?: string[]; negative?: true; blame?: true; ownError?: true; conventions?: string[] } {
   const names0 = urlsIn(content).filter((u) => !NOT_A_PAGE.test(u)).slice(0, 10);
@@ -454,12 +467,18 @@ function newVerdict(cmd: string, out: string, text: string): Verdict | null {
     for (const l of lines) {
       const t = l.trim();
       if (/^✓ (?:Merged|Squashed and merged|Rebased and merged) pull request/.test(t)) { state = 'MERGED'; break; }
-      if (/is not mergeable|failed to merge|Pull request .{0,80} is not mergeable/i.test(t)) { state = 'MERGE_ERROR'; break; }
+      if (/is not mergeable|failed to merge/i.test(t)) { state = 'MERGE_ERROR'; break; }
       const m = /^state:\s*(MERGED|CLOSED|OPEN)\b/i.exec(t) ?? /"state"\s*:\s*"(MERGED|CLOSED|OPEN)"/.exec(t);
       if (m) { state = m[1].toUpperCase(); break; }
     }
     if (state === 'MERGED') return { rule: 'pr-state', category: 'verification', outcome: 'pass', subject, summary: `PR #${num} merged` };
-    if (state === 'CLOSED' || state === 'MERGE_ERROR') return { rule: 'pr-state', category: 'verification', outcome: 'fail', subject, summary: state === 'CLOSED' ? `PR #${num} closed unmerged` : `PR #${num} merge failed` };
+    if (state === 'CLOSED') return { rule: 'pr-state', category: 'verification', outcome: 'fail', subject, summary: `PR #${num} closed unmerged` };
+    // Owner ruling: a failed merge attempt is not evidence the PR is unmerged (it may already be merged). It is a
+    // fail only when the output names a conflict or a closed PR; otherwise inconclusive.
+    if (state === 'MERGE_ERROR') {
+      const decisive = lines.some((l) => /\bconflict|\bclosed\b/i.test(l));
+      return { rule: 'pr-state', category: 'verification', outcome: decisive ? 'fail' : 'inconclusive', subject, summary: decisive ? `PR #${num} merge failed (conflict or closed)` : `PR #${num} merge attempt failed (merged state not shown)` };
+    }
     return null;
   }
 
@@ -799,10 +818,11 @@ export function adaptAiVillageWindow(input: HfWindowInput): DataSource {
       const human = { id: `chat/${c.id}`, timestamp: c.at, agentId: HUMAN_ID, taskId: null, provenance: 'observed' as const, evidenceRefs: [],
         text: clip(content, 1200), room: c.room_id ?? undefined, refs: refsIn(content) };
       const isQuestion = content.trimEnd().endsWith('?');
-      // Rule 'human-negative': a human naming a page with a failure word is a failure report (quote).
-      if (pageUrls.length >= 1 && NEGATIVE_RE.test(content)) {
+      // Rule 'human-negative': a human naming a page with a failure word in the same, unhedged sentence is a failure report (quote).
+      const hq = failureSubjectOf(content, pageUrls);
+      if (hq) {
         quoteCount++;
-        push(c.at, 5, { ...human, type: 'quote', provenance: 'inferred', payload: { rule: 'human-negative', subject: { artifact: pageUrls[0], version: 'live' }, isHuman: true, isQuestion } });
+        push(c.at, 5, { ...human, type: 'quote', provenance: 'inferred', payload: { rule: 'human-negative', subject: { artifact: hq, version: 'live' }, isHuman: true, isQuestion } });
         continue;
       }
       push(c.at, 5, { ...human, type: 'message', payload: { isHuman: true, isQuestion, ...chatFlags(content) } });
@@ -866,11 +886,12 @@ export function adaptAiVillageWindow(input: HfWindowInput): DataSource {
       continue;
     }
     // Rule 'correction-other': an agent naming a page with a failure word reports a failure (quote), not a correction.
-    if (pageUrls.length >= 1 && pageUrls.length <= 2 && NEGATIVE_RE.test(content)) {
+    const fq = pageUrls.length <= 2 ? failureSubjectOf(content, pageUrls) : undefined;
+    if (fq) {
       quoteCount++;
-      const backing = lastResult(speaker, c.at, (p) => p.subject?.artifact === pageUrls[0] && p.outcome === 'fail');
+      const backing = lastResult(speaker, c.at, (p) => p.subject?.artifact === fq && p.outcome === 'fail');
       push(c.at, 5, { ...base, id: `chat/${c.id}`, type: 'quote', provenance: 'inferred', evidenceRefs: backing ? [backing.ev.id] : [],
-        payload: { rule: 'correction-other', subject: { artifact: pageUrls[0], version: 'live' }, isQuestion, ...(backing ? { quotesEventId: backing.ev.id } : {}) } });
+        payload: { rule: 'correction-other', subject: { artifact: fq, version: 'live' }, isQuestion, ...(backing ? { quotesEventId: backing.ev.id } : {}) } });
       continue;
     }
     // Claim rules without a URL. One claim per message; never future/conditional or a failure report.

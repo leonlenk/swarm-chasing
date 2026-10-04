@@ -11,6 +11,8 @@ function run(ws: WorldState): Finding[] {
     const pass = [...checks].reverse().find((k) => isPass(k) && k.agentId === c.agentId);
     const fail = [...checks].reverse().find((k) => isFail(k) && k.agentId !== c.agentId);
     if (!pass || !fail) continue;
+    // Owner ruling: a failure older than the claimant's pass is superseded by it; J needs the failure to be the newer record.
+    if (fail.sequence < pass.sequence) continue;
     const pivot = Math.max(pass.sequence, fail.sequence);
     const later = checks.find((k) => k.sequence > pivot && (k.agentId === pass.agentId || k.agentId === fail.agentId));
     const who = ws.agentName(c.agentId);
@@ -38,6 +40,7 @@ function run(ws: WorldState): Finding[] {
 
 export const J: MonitorDef = {
   id: 'J', title: 'Split evidence', family: 'claim-evidence', needs: ['claim', 'tool_result', 'subject'], fixture: 'src/data/fixtures/J.json',
+  ruling: 'Fires only when the other agent\'s failing check is newer than the claimant\'s pass; an older failure is superseded by the pass.',
   rule: 'Active when: Claim S has a passing check by the claimant and a failing check by another agent, both before the cursor, no later check\n' +
     'Resolves when: A later check of S by either',
   run,

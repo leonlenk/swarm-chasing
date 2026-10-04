@@ -125,7 +125,24 @@ scripts/                    data:download · data:build (fetch-ai-village.ts) ·
   - **Patterns** holds every other unresolved finding. **Resolved** is unchanged.
   - Count-grade C (repo pushed, file exists, fixed without a subject, process running) appears only as counts in the Monitors view and the Agents cards, and every count opens its claims.
   - Every finding carries a rule-template remediation (owner, steps, "resolves when"), never model-written.
-- **Live alerts:** while the cursor moves forward (replay or scrubbing), each newly fired contradicted finding raises an alert with its first remediation step. New unchecked claims roll up into one counter alert. Moving back re-baselines silently.
+- **Subject incidents:** `src/engine/subjects.ts` builds one story per claimed subject: first claim, repeats, checks, failure reports and corrections.
+  - Roles: announcer, repeater, verifier, corrector, adopted without check.
+  - The Incidents view shows one card per subject: a mini timeline, the roles, and the member findings inside it.
+  - Derived counts: cascade size (distinct repeaters), records before the first check, and records before a correction. Each count opens its records.
+  - A read-only "who should recheck what" panel. RECALL never posts anything; it stays an observer.
+- **Swarm view:** rates as count pairs, never bare percentages:
+  - repeats without an own check (n of N), consensus without any check, cascades without a check, correction reach (n of N), directive uptake (n of N) and duplicate goals;
+  - checking spread as a sorted bar of counts;
+  - single points of failure (sole verifier for ≥ 3 subjects);
+  - agent roles across subjects, where every count opens its subjects.
+
+  Sparklines come from `public/data/series/<part>.json`, which `npm run data:build` writes via `scripts/build-series.ts`.
+- **Precision rules (owner rulings):**
+  - A failure report needs the URL and the failure word in the same, unhedged sentence.
+  - A failed `gh pr merge` is inconclusive unless the output names a conflict or a closed PR.
+  - J fires only when the other agent's failure is newer than the claimant's pass.
+  - Y needs the blame message in the same session, within 30 minutes.
+- **Live alerts:** while the cursor moves forward (replay or scrubbing), each newly fired contradicted finding raises an alert with its first remediation step. New unchecked claims roll up into one counter alert. A subject reaching ≥ 3 repeaters with zero checks raises a cascade alert, triggered by counts rather than rates. Moving back re-baselines silently.
 - **Monitor liveness:** `npm run check` writes `public/data/check.json`; the Monitors view tags each monitor "fixture live", "vacuous" or "fixture failing".
 - **Withheld records:** a withheld record inside a finding's evidence span turns that finding `insufficient` only if its event type is one the monitor reads. Unrelated withheld chat does not blanket every finding.
 - **Window parts:** a 4-hour window over the 1,200-record cap is split into parts. Each part holds 1,200 in-range records plus every claim, check, correction, acknowledgement, quote and session boundary from **earlier** in the window, marked *carried*. Carried records keep their original sequence numbers and pass through the same `sequence ≤ cursor` filter, so a part never sees a later record. The context header reads "1,200 in-range · N carried".

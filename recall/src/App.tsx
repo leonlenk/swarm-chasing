@@ -9,6 +9,7 @@ const TasksView = lazy(() => import('./ui/views/TasksView').then((m) => ({ defau
 const Agents = lazy(() => import('./ui/views/Agents').then((m) => ({ default: m.Agents })));
 const Incidents = lazy(() => import('./ui/views/Incidents').then((m) => ({ default: m.Incidents })));
 const Monitors = lazy(() => import('./ui/views/Monitors').then((m) => ({ default: m.Monitors })));
+const Swarm = lazy(() => import('./ui/views/Swarm').then((m) => ({ default: m.Swarm })));
 const Evidence = lazy(() => import('./ui/views/Evidence').then((m) => ({ default: m.Evidence })));
 import { Logo } from './ui/icons';
 
@@ -75,6 +76,7 @@ function Screen() {
           {view === 'incidents' && <Incidents />}
           {view === 'monitors' && <Monitors />}
           {view === 'evidence' && <Evidence />}
+          {view === 'swarm' && <Swarm />}
           </Suspense>
         </main>
       </div>

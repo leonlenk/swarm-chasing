@@ -1,5 +1,5 @@
 {
-  "description": "Adapter claim-rule fixtures. Each case is one agent chat message run through adaptAiVillageWindow; `claims` lists the subject URLs that must become claims, with the rule recorded on payload.rule. Synthetic text (the ch4817 shape is paraphrased, not copied).",
+  "description": "Adapter claim-rule fixtures. Each case is one agent chat message run through adaptAiVillageWindow; `claims` lists the subject URLs that must become claims, with the rule recorded on payload.rule. Synthetic text (the ch4817 shape is paraphrased, not copied). Cases may also list `quotes`: the URLs that must become failure reports (quote events), and `human: true` to run the text as a human message.",
   "cases": [
     {
       "name": "claim-sentence: completion phrase in the URL's own sentence",
@@ -132,6 +132,42 @@
           "rule": "claim-sentence"
         }
       ]
+    },
+    {
+      "name": "failure report: URL and failure word in the same sentence \u2192 quote",
+      "content": "https://game.example.test/play is broken for me, it returns 404.",
+      "claims": [],
+      "quotes": [
+        "https://game.example.test/play"
+      ]
+    },
+    {
+      "name": "failure report negative: failure word in a different sentence from the URL \u2192 no quote (D false shape)",
+      "content": "PR #10 is a ghost and the branch is poisoned; the push failed. Viewers can play at https://game.example.test/play now.",
+      "claims": [],
+      "quotes": []
+    },
+    {
+      "name": "failure report negative: hedged '\u2026can take a couple minutes to stop 404ing' \u2192 no quote (E false shape)",
+      "content": "GitHub Pages is enabled now, viewers can play at https://game.example.test/play (it can take a couple minutes to stop 404'ing after enablement).",
+      "claims": [],
+      "quotes": []
+    },
+    {
+      "name": "human failure report: same sentence \u2192 quote",
+      "content": "https://game.example.test/play still shows a 404 for me.",
+      "human": true,
+      "claims": [],
+      "quotes": [
+        "https://game.example.test/play"
+      ]
+    },
+    {
+      "name": "human failure report negative: hedged \u2192 no quote",
+      "content": "I think https://game.example.test/play should be fine, maybe a 404 for a minute.",
+      "human": true,
+      "claims": [],
+      "quotes": []
     }
   ]
 }

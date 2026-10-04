@@ -3,8 +3,8 @@ import type { Agent, DataSource } from '../model/types';
 import type { AnalysisInput, WorldState } from '../engine/reconstruct';
 import type { Finding } from '../engine/monitors';
 
-export type View = 'overview' | 'propagation' | 'tasks' | 'agents' | 'incidents' | 'monitors' | 'evidence';
-export const VIEWS: View[] = ['overview', 'propagation', 'tasks', 'agents', 'incidents', 'monitors', 'evidence'];
+export type View = 'overview' | 'propagation' | 'tasks' | 'agents' | 'incidents' | 'monitors' | 'evidence' | 'swarm';
+export const VIEWS: View[] = ['overview', 'propagation', 'tasks', 'agents', 'incidents', 'monitors', 'evidence', 'swarm'];
 
 export interface SourceEntry {
   id: string;

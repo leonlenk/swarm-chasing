@@ -13,8 +13,9 @@ import { reconstruct } from '../src/engine/reconstruct';
 import { assertFinding, findingProblems, register, registry, runMonitors, type Finding, type MonitorDef } from '../src/engine/monitors';
 import type { FixtureBlock, FixtureExpect } from '../src/data/fixtures';
 import { goalChurn, longSessionNoVerdict } from '../src/engine/meta';
-import { adaptAiVillageWindow } from '../src/adapters/aiVillageHf';
+import { adaptAiVillageWindow, classifyTurn } from '../src/adapters/aiVillageHf';
 import { bucketOf, remediationFor } from '../src/engine/triage';
+import { recheckSuggestions, subjectIncidents, swarmRates } from '../src/engine/subjects';
 const ws0 = (w: ReturnType<typeof reconstruct>, claimId: string) => w.claims.get(claimId)?.subject?.artifact ?? '';
 import type { DataSource } from '../src/model/types';
 
@@ -174,17 +175,31 @@ for (const id of [...onDisk].sort()) if (!registry.some((m) => m.id === id) && r
 
 // ---------------------------------------------------------------- 2c. adapter claim rules
 {
-  const cr = JSON.parse(readFileSync(join(ROOT, 'src/data/claim-rules.json'), 'utf8')) as { cases: { name: string; content: string; claims: { url: string; rule: string }[] }[] };
+  const cr = JSON.parse(readFileSync(join(ROOT, 'src/data/claim-rules.json'), 'utf8')) as { cases: { name: string; content: string; human?: boolean; claims: { url: string; rule: string }[]; quotes?: string[] }[] };
   for (const c of cr.cases) {
     const doc = adaptAiVillageWindow({
       id: 'claim-rules', label: 'claim rules', window: { from: '2026-01-02T09:00:00Z', to: '2026-01-02T13:00:00Z' },
       agents: [{ id: 'a1', name: 'Agent One' }], sessions: [], boundaries: [], turns: [], generatedAt: '2026-01-02T00:00:00Z',
-      chats: [{ id: 'c0000000-0000', speaker_type: 'agent', agent_speaker_id: 'a1', content: c.content, created_at: '2026-01-02 10:00:00' }],
+      chats: [{ id: 'c0000000-0000', speaker_type: c.human ? 'user' : 'agent', agent_speaker_id: c.human ? null : 'a1', content: c.content, created_at: '2026-01-02 10:00:00' }],
     });
     const got = doc.events.flatMap((e) => (e.type === 'claim' && e.payload.subject ? [{ url: e.payload.subject.artifact, rule: e.payload.rule ?? '' }] : []));
-    const ok = got.length === c.claims.length && c.claims.every((x) => got.some((g) => g.url === x.url && g.rule === x.rule));
-    record('claim rules', c.name, ok, ok ? undefined : `got ${JSON.stringify(got)}`);
+    const quotes = doc.events.flatMap((e) => (e.type === 'quote' ? [e.payload.subject.artifact] : []));
+    const ok = got.length === c.claims.length && c.claims.every((x) => got.some((g) => g.url === x.url && g.rule === x.rule))
+      && (!c.quotes || (quotes.length === c.quotes.length && c.quotes.every((u) => quotes.includes(u))));
+    record('claim rules', c.name, ok, ok ? undefined : `got claims ${JSON.stringify(got)} quotes ${JSON.stringify(quotes)}`);
   }
+}
+
+// ---------------------------------------------------------------- 2c'. verdict rules (classifier fixture pairs)
+{
+  const v = (command: string, output: string, error = '') => classifyTurn({ agent_action: { command }, output, error });
+  const cases: [string, ReturnType<typeof v>, string | null][] = [
+    ['pr-state: a bare "not mergeable" merge failure is inconclusive (the PR may already be merged)', v('gh pr merge 57 --squash', '', 'GraphQL: Pull Request is not mergeable (mergePullRequest)'), 'inconclusive'],
+    ['pr-state: a merge failure naming a conflict stays a fail', v('gh pr merge 21 --merge', '', 'X Pull request o/r#21 is not mergeable: the merge commit cannot be cleanly created.\nRun the following to resolve the merge conflicts locally:'), 'fail'],
+    ['pr-state: state CLOSED is a fail', v('gh pr view 7 -R o/r', 'state:\tCLOSED'), 'fail'],
+    ['pr-state: a completed merge is a pass', v('gh pr merge 8 -R o/r', '✓ Squashed and merged pull request #8 (x)'), 'pass'],
+  ];
+  for (const [name, got, want] of cases) record('verdict rules', name, (got?.outcome ?? null) === want, `got ${got?.outcome ?? 'no verdict'}`);
 }
 
 // ---------------------------------------------------------------- 2d. push keying (owner ruling)
@@ -255,6 +270,23 @@ for (const id of [...onDisk].sort()) if (!registry.some((m) => m.id === id) && r
   const w = reconstruct({ events: doc.events, withheld: new Set(), agents: doc.agents }, last);
   const t = runMonitors(w, ['A']).find((f) => ws0(w, f.claimId).startsWith('tests:'));
   record('mutation', 'a tests-pass claim after a failing pytest line is an Open A finding', !!t && t.state === 'active' && bucketOf(t, w) === 'open', t ? `${t.id}[${t.state}]` : 'no A finding on the tests subject');
+}
+
+// ---------------------------------------------------------------- 2g. SubjectIncident and swarm rates
+{
+  const bp = parseRecallDocument(load('src/data/fixtures/BP.json'));
+  const at = (c: number) => { const w = world(bp, c); const f = runMonitors(w); const inc = subjectIncidents(w, f); return { w, f, inc, rates: swarmRates(w, f, inc) }; };
+  const a = at(5);
+  const s = a.inc.find((i) => i.subject === 'https://app.example.test@live');
+  const roleOf = (agent: string) => s?.participants.filter((p) => p.agent === agent).map((p) => p.role).sort().join('+');
+  record('subjects', 'one SubjectIncident per claimed subject, with its repeats and member findings', !!s && s.repeats.length === 2 && s.findings.some((f) => f.monitor === 'BP'), s ? `${s.repeats.length} repeats, ${s.findings.map((f) => f.monitor)}` : 'missing');
+  record('subjects', 'roles: announcer, and repeaters who adopted without a check', roleOf('p') === 'announcer' && roleOf('q') === 'adopter-without-check+repeater', `p=${roleOf('p')} q=${roleOf('q')}`);
+  record('subjects', 'cascade = distinct repeaters (count of linked records)', s?.cascade.n === 2 && s.cascade.records.length === 2 && !s.toFirstCheck.reached && s.standing === 'unchecked');
+  record('subjects', 'swarm rates are count pairs: repeats without own check 2 of 2, consensus without any check 1', a.rates.repeatsWithoutCheck.n === 2 && a.rates.repeatsWithoutCheck.of === 2 && a.rates.consensusWithoutCheck.n === 1,
+    `${a.rates.repeatsWithoutCheck.n} of ${a.rates.repeatsWithoutCheck.of}, consensus ${a.rates.consensusWithoutCheck.n}`);
+  const b = at(6).inc.find((i) => i.subject === 'https://app.example.test@live');
+  record('subjects', 'a later check makes the checker a verifier and the subject passing; events to first check = linked records before it', !!b && b.standing === 'passing' && b.toFirstCheck.reached && b.toFirstCheck.n === 2 && b.participants.some((p) => p.agent === 'v' && p.role === 'verifier'));
+  record('subjects', 'recheck suggestions are read-only data (agent, action, why, records)', recheckSuggestions(s!, a.w).every((r) => r.agent && r.action && Array.isArray(r.records)));
 }
 
 // ---------------------------------------------------------------- 3. integration

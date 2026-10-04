@@ -50,7 +50,7 @@ export function initials(name: string) {
 
 
 export const VIEW_LABEL: Record<View, string> = {
-  overview: 'Overview', propagation: 'Propagation', tasks: 'Tasks', agents: 'Agents', incidents: 'Incidents', monitors: 'Monitors', evidence: 'Evidence',
+  overview: 'Overview', propagation: 'Propagation', tasks: 'Tasks', agents: 'Agents', incidents: 'Incidents', monitors: 'Monitors', evidence: 'Evidence', swarm: 'Swarm',
 };
 
 

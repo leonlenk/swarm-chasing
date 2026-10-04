@@ -12,7 +12,8 @@
     "typecheck": "tsc -b",
     "fetch:ai-village": "tsx scripts/fetch-ai-village.ts",
     "data:download": "bash scripts/download-turns.sh",
-    "data:build": "tsx scripts/fetch-ai-village.ts",
+    "data:build": "tsx scripts/fetch-ai-village.ts && tsx scripts/build-series.ts",
+    "data:series": "tsx scripts/build-series.ts",
     "data:scan": "python3 scripts/scan_ai_village.py > .hf/candidates.json"
   },
   "dependencies": {
