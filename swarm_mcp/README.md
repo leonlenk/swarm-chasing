@@ -93,6 +93,8 @@ Developer-only: `python -m swarm_mcp.bench generate|reference|score` (see ADDING
 | `scope_periods(name=None, source, agent, kind, top, limit, offset)` | dataset periods, paged (AI Village: weekly goals, with a heuristic goal type); with a name, one period's activity |
 | `scope_timeline(bin, group_by, table, ...)` | activity counts per hour/day/week/month, optionally by channel or author |
 | `scope_graph(...)` | who talks to whom: mention and reply edges, top nodes by degree and betweenness, example ids |
+| `scope_recap(period=None, since, until, source, channel, top, max_chars)` | what happened during a period or window: active agents (messages, actions; humans and external actors counted apart), top who-names-whom pairs, terms that rose against the previous window of equal length (log-odds candidates) and the busiest threads with ids and snippets; Village days when the source has village goals |
+| `scope_moments(since, until, source, kinds, limit, offset, max_chars)` | where to look: ranked bursts, silences, partner shifts and first uses of spreading terms, each with its numbers (z-score, baseline, counts), Village day and evidence ids; paged |
 | `findings_record(claim, evidence_ids, confidence)` | record a claim; rejected unless every id resolves |
 | `findings_list(status, limit, sample=None, seed=0)` | recorded findings, newest first; with `sample`, a seeded random sample with the cited evidence, for spot checks |
 | `sweep_run(rubric, ids=None, filters=None, dry_run=True, cap=50)` | apply a yes/no rubric to many records with an LLM; the default dry run returns the cost estimate |

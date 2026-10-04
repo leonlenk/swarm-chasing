@@ -134,3 +134,23 @@ def test_real_package_registers_the_prompt(tmp_path: Path):
     app = build_server(config_for(tmp_path / "empty"))
     rec = {r.name: r for r in app.swarm_registry.records.values()}["investigate"]
     assert rec.status == "loaded" and rec.prompts == ["investigate"]
+
+
+def test_render_points_at_recap_and_moments_when_loaded(make_app, fake_modules):
+    _, add = fake_modules
+    add(
+        "scope",
+        FAKE_SCOPE
+        + """
+    @ctx.tool()
+    def recap(period: str | None = None) -> dict:
+        return {}
+    @ctx.tool()
+    def moments() -> dict:
+        return {}
+""",
+    )
+    app = make_app(sweep=True)
+    text = run(_render(app, "investigate", {"question": "sequence"}))
+    assert "start with scope_recap" in text and "'what happened during X'" in text
+    assert "use scope_moments" in text and "'where should I look'" in text

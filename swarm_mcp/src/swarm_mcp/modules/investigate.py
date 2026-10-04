@@ -26,7 +26,15 @@ DESCRIPTION = (
 )
 
 # The SwarmScope tools are named when loaded, but nothing here requires them.
-SCOPE_TOOLS = ("scope_search", "scope_agents", "scope_periods", "scope_timeline", "scope_graph")
+SCOPE_TOOLS = (
+    "scope_search",
+    "scope_agents",
+    "scope_periods",
+    "scope_timeline",
+    "scope_graph",
+    "scope_recap",
+    "scope_moments",
+)
 MAX_LISTED_TOOLS = 40
 
 Source = Annotated[str | None, Field(description="Limit to one source (see core_info), e.g. 'village'.")]
@@ -204,6 +212,20 @@ def render(ctx, key: str, *, custom=None, source=None, since=None, until=None, p
             f"2. Find candidate evidence with the SwarmScope tools ({', '.join(scope_now)}) and any dataset tools. "
             "Start broad (timeline, profiles), then search for specifics."
         )
+        broad = []
+        if "scope_recap" in have:
+            broad.append(
+                "for 'what happened during X' (a goal, period or window), start with scope_recap: who was active, "
+                "who addressed whom, rising terms and the busiest threads"
+            )
+        if "scope_moments" in have:
+            broad.append(
+                "for 'where should I look', use scope_moments: bursts, silences, partner shifts and first uses, "
+                "each with its numbers and evidence ids"
+            )
+        if broad:
+            hint = "; ".join(broad)
+            lines.append("   " + hint[0].upper() + hint[1:] + ". Both point at evidence to read, not conclusions.")
     else:
         lines.append(
             "2. Find candidate evidence with the search, profile and timeline tools that are loaded. If SwarmScope "
