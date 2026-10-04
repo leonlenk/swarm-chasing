@@ -1,4 +1,7 @@
-"""Findings: record/list/spotcheck tools, check_findings, the CLI, and the two Claude Code hooks.
+"""Findings: the findings_record/findings_list tools (incl. sampled spot-checks), check_findings (the findings
+health that `swarm-mcp info` and the Stop hook report), and the two Claude Code hooks: the PostToolUse audit log,
+and the Stop hook, which blocks only via Claude Code's JSON decision ({"decision": "block", "reason": ...} on
+stdout, exit 0, never exit 2), only on this session's bad findings, and never on broken infrastructure.
 
 All data is synthetic (conftest). Hooks run as subprocesses with sample hook JSON on stdin.
 """

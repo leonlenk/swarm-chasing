@@ -13,12 +13,15 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+
+import duckdb
 
 from swarm_mcp.scope import db, schema
 from swarm_mcp.scope.adapters import Adapter, get_adapter
@@ -88,6 +91,44 @@ def _owner_of(row: Any) -> Owner | None:
         meta = {}
     mapping = meta.get("mapping") if isinstance(meta, dict) else None
     return str(row[0]), _resolved(row[1]), _resolved(mapping) if mapping else None
+
+
+def _read_spool(table: str, spool: Path) -> str:
+    file = _sql_str(str(spool / f"{table}.ndjson"))
+    return (
+        f"read_json({file}, format='newline_delimited', columns={_columns_struct(table)}, "
+        "maximum_object_size=67108864)"
+    )
+
+
+def _duplicate_error(
+    con: duckdb.DuckDBPyConnection, table: str, spool: Path, adapter: Adapter, path: Path, err: Exception
+) -> ToolInputError:
+    """A readable error for a primary-key collision at INSERT (e.g. two mapped records with one local_id).
+
+    Called after ROLLBACK; names up to three duplicate ids from the spooled rows (or, when the clash is
+    with another source's rows, the key DuckDB reported)."""
+    pk = schema.PRIMARY_KEYS[table]
+    dupes: list[tuple[Any, int]] = []
+    try:
+        dupes = con.execute(
+            f"SELECT {pk}, count(*) AS n FROM {_read_spool(table, spool)} GROUP BY 1 HAVING count(*) > 1 "
+            "ORDER BY n DESC, 1 LIMIT 3"
+        ).fetchall()
+    except duckdb.Error:
+        pass
+    if dupes:
+        ids = ", ".join(f"{k!r} ({n}x)" for k, n in dupes)
+    else:
+        m = re.search(r'duplicate key "([^"]*)"', str(err))
+        ids = repr(m.group(1)) if m else "(unknown)"
+    mapping = (getattr(adapter, "source_meta", None) or {}).get("mapping")
+    check = f"swarm-mcp add {path}" + (f" --mapping {mapping}" if mapping else "") + " --dry-run"
+    return ToolInputError(
+        f"source {adapter.source!r}: duplicate {pk} in {table}: {ids}. Nothing was ingested (the store is "
+        "unchanged). Each record's id must be unique; for a mapping, make each entry's local_id unique "
+        f"within its kind (e.g. a primary key, not a foreign key). `{check}` runs the mapping check."
+    )
 
 
 def ingest(
@@ -172,11 +213,14 @@ def ingest(
                 if not counts[table]:
                     continue
                 cols = ", ".join(schema.COLUMNS[table])
-                file = _sql_str(str(spool / f"{table}.ndjson"))
-                con.execute(
-                    f"INSERT INTO {table} SELECT {cols} FROM read_json({file}, format='newline_delimited', "
-                    f"columns={_columns_struct(table)}, maximum_object_size=67108864) ORDER BY {_ORDER[table]}"
-                )
+                try:
+                    con.execute(
+                        f"INSERT INTO {table} SELECT {cols} FROM {_read_spool(table, spool)} ORDER BY {_ORDER[table]}"
+                    )
+                except duckdb.ConstraintException as e:
+                    con.execute("ROLLBACK")
+                    in_tx = False
+                    raise _duplicate_error(con, table, spool, adapter, path, e) from None
             con.execute("DELETE FROM sources WHERE source = ?", [adapter.source])
             con.execute(
                 "INSERT INTO sources VALUES (?, ?, ?, ?, ?, ?)",

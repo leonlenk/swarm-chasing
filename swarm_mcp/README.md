@@ -202,7 +202,7 @@ email_allowlist = ["agentvillage.org"]
 
 [server]
 # modules = ["core", "scope", "findings"]   # core is always loaded
-# disable = ["wiki"]
+# disable = ["subtasks"]
 max_text = 500
 ```
 

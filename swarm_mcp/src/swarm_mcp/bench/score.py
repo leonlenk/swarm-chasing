@@ -190,8 +190,13 @@ def score_diffusion(truth: dict[str, Any], output: Any) -> dict[str, Any]:
                 pi.add(("first", term, p_first))
             first_ok += int(p_first == t_first)
             for ad in pred.get("adopters") or []:
+                if not isinstance(ad, dict):  # malformed entry: ignored rather than crashing the scorer
+                    continue
                 actor = actors(ad.get("actor"))
-                pi.add(("adopter", term, actor, _label(ad.get("label"))))
+                item = ("adopter", term, actor, _label(ad.get("label")))
+                if item in pi:  # a repeated adopter counts once (its first entry)
+                    continue
+                pi.add(item)
                 truth_ad = t_ad.get(actor)
                 if truth_ad and _label(ad.get("label")) == truth_ad["label"]:
                     matched += 1

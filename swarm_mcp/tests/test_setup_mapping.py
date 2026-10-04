@@ -285,3 +285,43 @@ def test_spec_content_is_never_evaluated(tmp_path, monkeypatch):
     recs = list(MappedAdapter(spec, root).records())
     assert recs and all(r.location == payload for r in recs)  # used as a plain default string
     assert not marker.exists()
+
+
+_BOARD_MULTI_FROM = {
+    "source": "board",
+    "agents": {"from": "board.sqlite#members", "id": "member_key", "display_name": "screen_name"},
+    "lookups": {"thread_of": {"from": "board.sqlite#posts", "key": "post_key", "value": "thread_ref"}},
+    "records": [
+        {"from": "board.sqlite#posts", "kind": "post", "local_id": "post_key", "text": "body_md",
+         "time": {"field": "posted_unix", "format": "epoch_s"}, "actor": {"field": "author_ref", "match": "id"}},
+        {"from": "board.sqlite#threads", "kind": "open", "category": "action", "local_id": "thread_key",
+         "time": {"field": "opened_ts", "format": "epoch_s"}, "text": "title"},
+    ],
+}  # fmt: skip
+
+
+def test_discover_runs_once_for_all_froms(tmp_path, monkeypatch):
+    """Three distinct 'from' patterns share one walk of the dataset root."""
+    from swarm_mcp.setup import readers
+
+    root = make_sqlite_board(tmp_path / "board")
+    calls = []
+    real = readers.discover
+    monkeypatch.setattr(readers, "discover", lambda r: calls.append(r) or real(r))
+    a = MappedAdapter(_BOARD_MULTI_FROM, root)
+    items = list(a.load())
+    assert len(calls) == 1 and sum(isinstance(i, StandardRecord) for i in items) == 240 + 12
+    t1, t2 = a.tables("board.sqlite#posts")[0], a.tables("board.sqlite#threads")[0]
+    assert t1.key != t2.key and a.tables("board.sqlite#posts")[0] is t1  # per-pattern cache kept
+
+
+def test_lookup_truncation_is_reported_in_stats(tmp_path, monkeypatch):
+    from swarm_mcp.setup import mapping
+
+    root = make_sqlite_board(tmp_path / "board")
+    a = MappedAdapter(_BOARD_MULTI_FROM, root)
+    assert len(a._load_lookups()["thread_of"]) == 240 and not a.stats  # under the cap: nothing reported
+    monkeypatch.setattr(mapping, "LOOKUP_MAX_ROWS", 50)
+    a = MappedAdapter(_BOARD_MULTI_FROM, root)
+    assert len(a._load_lookups()["thread_of"]) == 50
+    assert a.stats == {"lookup_thread_of_truncated_at_50_rows": 1}

@@ -150,6 +150,15 @@ def server_info(config: Config, registry: Any) -> dict[str, Any]:
     }
 
 
+def _span(src: dict[str, Any]) -> str:
+    """A source's date span over its messages and actions, "? .. ?" when it has neither. ``ts_iso`` strings
+    share one format, so they compare as times."""
+    spans = [src.get(k) or {} for k in ("messages_ts", "actions_ts")]
+    lo = [t for t in (sp.get("min") for sp in spans) if t]
+    hi = [t for t in (sp.get("max") for sp in spans) if t]
+    return f"{min(lo) if lo else '?'} .. {max(hi) if hi else '?'}"
+
+
 def format_info(info: dict[str, Any]) -> str:
     """Human-readable ``swarm-mcp info``."""
     srv, cfg = info["server"], info["config"]
@@ -183,7 +192,7 @@ def format_info(info: dict[str, Any]) -> str:
         lines.append("  (none)")
     for s in info["sources"]:
         rc = s.get("row_counts") or {}
-        span = f"{(s.get('messages_ts') or {}).get('min') or '?'} .. {(s.get('messages_ts') or {}).get('max') or '?'}"
+        span = _span(s)
         counts = ", ".join(
             f"{rc[t]:,} {t}" for t in ("messages", "actions", "agents", "periods", "artifacts") if t in rc
         )

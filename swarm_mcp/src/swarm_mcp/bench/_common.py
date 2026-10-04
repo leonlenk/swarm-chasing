@@ -7,7 +7,7 @@ import io
 import json
 import re
 import unicodedata
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
@@ -58,15 +58,19 @@ def fmt_ts(ts: datetime) -> str:
 
 
 def parse_ts(value: Any) -> datetime | None:
-    """Parse dataset or ISO timestamps (``T``/space, optional ``Z``); returns naive UTC."""
+    """Parse dataset or ISO timestamps (``T``/space, optional ``Z`` or offset); returns naive UTC.
+
+    An aware value is converted to UTC first; a naive one is taken to be UTC already."""
     if value is None or value == "":
         return None
     if isinstance(value, datetime):
-        return value.replace(tzinfo=None)
-    try:
-        return datetime.fromisoformat(str(value).strip().replace("Z", "+00:00")).replace(tzinfo=None)
-    except ValueError:
-        return None
+        dt = value
+    else:
+        try:
+            dt = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return dt.astimezone(timezone.utc).replace(tzinfo=None) if dt.tzinfo else dt
 
 
 def write_jsonl_gz(path: Path, rows: Iterable[dict[str, Any]]) -> int:
