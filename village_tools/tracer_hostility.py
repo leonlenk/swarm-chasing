@@ -249,8 +249,11 @@ def build():
 
 
 def write_csv(path, rows, fields=None):
-    fields = fields or list(rows[0].keys())
+    """Rows as CSV; with no rows and no `fields` the file is left empty (no header to take from a first row)."""
+    fields = fields or (list(rows[0].keys()) if rows else [])
     with open(path, "w", newline="") as f:
+        if not fields:
+            return
         w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         w.writeheader()
         for r in rows:
@@ -443,13 +446,34 @@ def days(td):
     return round(td.total_seconds() / 86400, 1)
 
 
+def need(path, how):
+    """Exit with a clear message (status 1) when a stage's input is missing."""
+    if not path.exists():
+        raise SystemExit(f"error: {path} is missing. {how}")
+
+
+def labels_or_exit():
+    """The LLM labels, or exit naming what produces them (labelling is not a command of this script)."""
+    lab = load_labels()
+    if not lab:
+        raise SystemExit(
+            f"error: no LLM labels found ({BATCH}/labels_*.json). analyze needs them; they are written outside this "
+            "script. Run `python tracer_hostility.py sample` (and optionally `sample2`), then label each "
+            f"{BATCH.name}/batch_<k>.json with an LLM following village_tools/prompts/hostility_stance_rubric.md, "
+            f"writing {BATCH.name}/labels_<k>.json as a JSON list of {{\"id\", \"label\" (one of {', '.join(LABELS)}), "
+            "\"confidence\" (1-3), \"reason\"}; then rerun `python tracer_hostility.py analyze`.")
+    return lab
+
+
 def analyze():
     from bisect import bisect_left, bisect_right
     from common import agent_presence
+    need(OUT / "candidates.csv", "Run `python tracer_hostility.py build` first.")
+    need(OUT / "sample.csv", "Run `python tracer_hostility.py sample` first.")
+    lab = labels_or_exit()                    # checked before the dataset is loaded
     agents = load_agents()
     msgs = load_chat(agents, split_deepseek=True)
     cands = {r["cid"]: r for r in read_csv(OUT / "candidates.csv")}
-    lab = load_labels()
     sample = read_csv(OUT / "sample.csv")
     if (OUT / "sample2.csv").exists():
         sample += read_csv(OUT / "sample2.csv")
