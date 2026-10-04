@@ -38,6 +38,8 @@ writes the same entry into `.mcp.json`, which already exists.
 | `SWARM_<MODULE>_<KEY>` | | per-module settings via `ctx.setting("key")`, e.g. `SWARM_VILLAGE_DIR` |
 | `SWARM_GIT_DIR` | `<data>/*/repos/` | folder of bare git clones for the `git` and `subtasks` modules |
 | `SWARM_WIKI_DB` | `<data>/*/*.db` | a wiki database (collusion.wiki explorer schema) for the `wiki` and `subtasks` modules |
+| `SWARM_LIVE_DB` | `$CLAUDE_PLUGIN_DATA/swarm-live.db`, else `~/.swarm-live/swarm-live.db` | the recorded-sessions database for the `live` module |
+| `SWARM_LIVE_PORT` | 47831 | port of the `swarm-live` hook collector (the plugin's `hooks/hooks.json` hardcodes 47831) |
 
 ### Modules in this repo
 
@@ -47,6 +49,7 @@ writes the same entry into `.mcp.json`, which already exists.
 | `village` | `<data>/ai-village/*.jsonl.gz` | agents, goals, chat search and windows, per-agent activity |
 | `git` | bare clones in `<data>/<dataset>/repos/*.git` | repos and PR listings; PRs and commits as event ids |
 | `wiki` | `<data>/<name>/*.db` in the collusion.wiki explorer schema | corpus description with blind spots, search over what each revision added, pages, editor labels; revisions, pages and edit sessions as event ids |
+| `live` | `SWARM_LIVE_DB`, written by the plugin's hooks or `swarm-live import` | recorded Claude Code sessions: sessions, main-agent/subagent tree, timeline of prompts, tool calls and messages; all as `live:<kind>:<id>` event ids |
 | `subtasks` | any *corpus* with an adapter in `subtasks/sources.py`: git repos (+ village chat if present) and wikis | work units (PRs...) grouped into subtasks by several methods, typed handoffs between actors, pair tracing |
 
 A repo for `git` is a bare clone with every PR head fetched, so closed and squash-merged PRs keep their commits:
@@ -63,6 +66,31 @@ For collusion.wiki, save Simon Willison's SQLite build of the published export a
 Subtask inference over its ~5,800 edit sessions takes about 10 s on first use.
 `examples/subtasks_demo.py` and `examples/wiki_demo.py` run the tools end to end over stdio;
 `examples/wiki_eval.py` scores the inferred subtasks against the publishers' page_family labels.
+
+## The Claude Code plugin and the `live` module
+
+The repo root is also a Claude Code plugin (`.claude-plugin/`, `hooks/hooks.json`). Install it with
+`/plugin marketplace add leonlenk/swarm-chasing` then `/plugin install swarm-chasing@swarm-chasing`, or try it for
+one session with `claude --plugin-dir <path to this repo>`. It needs `uv` and Python on PATH. It provides:
+
+- **This MCP server**, launched per session as `uv run --project ${CLAUDE_PLUGIN_ROOT}/swarm_mcp swarm-mcp`. `--project`
+  (unlike `--directory`) keeps the working directory, so a relative `SWARM_DATA_DIR` resolves against the user's own
+  project. The plugin asks for that folder (`data_dir`, default `data`) and builds the venv in the plugin's data
+  directory so it survives plugin updates. Claude Code starts and stops this stdio server with the session. The
+  plugin's `swarm` entry replaces the root `.mcp.json` one, which stays for working in this repo.
+- **Session recording.** The `SessionStart` hook runs `modules/live/launch.py` (stdlib only), which starts the
+  collector `swarm-live serve --exit-when-idle` on `127.0.0.1:47831` if it isn't running. Every other hook POSTs its
+  payload there, and the collector writes it to SQLite (`modules/live/store.py`). The collector is a separate
+  long-lived process shared by all sessions on the machine. It exits about a minute after the last Claude Code
+  process it served has gone. If it's down, the HTTP hooks fail silently, so the agent is never blocked.
+- **The `live` module** reads that database and makes it queryable like any other source: `live_sessions`,
+  `live_agents`, `live_timeline`, plus `core_get_event` on `live:agent|action|message|prompt:<id>` ids. Analysis
+  modules (claims vs actions, helping graphs...) should read the same store and cite these ids.
+
+```bash
+uv run --directory swarm_mcp swarm-live serve                  # run a collector permanently instead
+uv run --directory swarm_mcp swarm-live import ~/.claude/projects/<project-dir>   # load past sessions
+```
 
 ## A module in five lines
 

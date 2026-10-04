@@ -12,6 +12,7 @@ dependencies = [
 
 [project.scripts]
 swarm-mcp = "swarm_mcp.server:main"
+swarm-live = "swarm_mcp.modules.live.cli:main"
 
 [build-system]
 requires = ["hatchling"]

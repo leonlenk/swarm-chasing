@@ -1,0 +1,12 @@
+{
+  "name": "swarm-chasing",
+  "owner": { "name": "swarm-chasing contributors" },
+  "description": "swarm-chasing: tools for investigating AI agent swarms",
+  "plugins": [
+    {
+      "name": "swarm-chasing",
+      "source": "./",
+      "description": "Swarm investigation MCP server plus live recording of Claude Code sessions and subagents."
+    }
+  ]
+}

@@ -152,7 +152,8 @@ def data_dir(tmp_path: Path) -> Path:
 
 
 def config_for(data_dir: Path, **env: str) -> Config:
-    return Config.from_env({"SWARM_DATA_DIR": str(data_dir), **env})
+    # SWARM_LIVE_DB points at a file that doesn't exist, so a real ~/.swarm-live database can't leak into tests
+    return Config.from_env({"SWARM_DATA_DIR": str(data_dir), "SWARM_LIVE_DB": str(data_dir / "no-live.db"), **env})
 
 
 @pytest.fixture
