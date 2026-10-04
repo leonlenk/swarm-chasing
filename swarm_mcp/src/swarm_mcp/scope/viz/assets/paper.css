@@ -1,0 +1,242 @@
+/* paper.css: the shared style for every SwarmScope / village_tools HTML figure page.
+ *
+ * Pages should look like a figure lifted from a NeurIPS paper: white paper, a Times-like
+ * serif, thin dark axes, numbered captions under figures, booktabs tables and quiet
+ * controls. Inlined verbatim by swarm_mcp.scope.viz.timeline_html and by the
+ * village_tools page builders, so pages stay self-contained (no web fonts, no CDN).
+ *
+ * The colour tokens below are the single source of truth for the static figures too:
+ * village_tools/paperfig.py parses the --oi-*, --c*, --lab-*, --st-* and --seq-* values
+ * from this file. Rules of use:
+ *   - one categorical colour role per figure (channels OR labs OR stance), always paired
+ *     with a second channel (marker shape, fill, line style or a direct label) so figures
+ *     survive black-and-white print and colour-vision deficiency;
+ *   - categorical slots are assigned in fixed order and follow the entity, never its rank;
+ *   - magnitude uses the one-hue sequential ramp (monotone lightness); signed differences
+ *     use the blue/vermillion diverging pair through a light grey midpoint.
+ */
+:root {
+  color-scheme: light;
+
+  /* paper and ink */
+  --paper: #ffffff;
+  --ink: #111111;      /* text, data ink, axes */
+  --ink-2: #3d3d3d;    /* secondary text */
+  --ink-3: #666666;    /* ticks, notes, captions' second voice (5.7:1 on white) */
+  --rule: #1a1a1a;     /* axis lines and booktabs rules */
+  --hair: #d4d4d4;     /* the rare gridline, separators */
+  --wash: #f3f3f3;     /* bands (goal periods), hover rows */
+  --wash-2: #e4e4e4;
+  --focus: #0072b2;
+
+  /* Okabe & Ito (2008) colour-blind-safe set */
+  --oi-black: #000000;
+  --oi-orange: #e69f00;
+  --oi-sky: #56b4e9;
+  --oi-green: #009e73;
+  --oi-yellow: #f0e442;
+  --oi-blue: #0072b2;
+  --oi-vermillion: #d55e00;
+  --oi-purple: #cc79a7;
+  --oi-grey: #8c8c8c;
+
+  /* categorical slots in fixed order (channels, generic series); yellow is left out:
+     it is unreadable as a mark on white paper. Slot 8+ folds into --c-other. */
+  --c1: #0072b2;
+  --c2: #d55e00;
+  --c3: #009e73;
+  --c4: #e69f00;
+  --c5: #cc79a7;
+  --c6: #56b4e9;
+  --c7: #000000;
+  --c-other: #a6a6a6;
+
+  /* fixed entity roles (paired markers in paperfig.LAB_MARKER / the JS pages) */
+  --lab-anthropic: #d55e00;  /* circle */
+  --lab-openai: #0072b2;     /* square */
+  --lab-google: #009e73;     /* triangle */
+  --lab-other: #555555;      /* diamond; dark grey keeps it apart from green under deuteranopia */
+  --lab-human: #111111;      /* hollow circle */
+  --st-for: #d55e00;         /* filled */
+  --st-neutral: #9a9a9a;     /* filled, light */
+  --st-against: #0072b2;     /* hollow (outline only) */
+
+  /* sequential: one hue, light to dark (also monotone in greyscale) */
+  --seq-0: #f4f8fb;
+  --seq-1: #d6e6f2;
+  --seq-2: #a9cbe4;
+  --seq-3: #6ea9d3;
+  --seq-4: #2f84bf;
+  --seq-5: #0b5f99;
+  --seq-6: #073c63;
+
+  /* diverging: blue (below) / vermillion (above), grey midpoint */
+  --div-lo: #0072b2;
+  --div-mid: #efefef;
+  --div-hi: #d55e00;
+
+  /* type */
+  --serif: "Times New Roman", Times, "Nimbus Roman", "TeX Gyre Termes", "Liberation Serif", serif;
+  --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", "DejaVu Sans Mono", monospace;
+  --fs-body: 16px;
+  --fs-caption: 14.5px;
+  --fs-ctl: 13.5px;
+  --fs-fig: 12.5px;   /* labels inside figures */
+  --fs-tick: 11.5px;  /* ticks, legends: never below 11px on screen (7pt in print) */
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font: 400 var(--fs-body)/1.45 var(--serif);
+  font-kerning: normal;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+main.paper { max-width: 1120px; margin: 0 auto; padding: 28px 16px 56px; }
+main.paper > * + * { margin-top: 0; }
+a { color: inherit; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; text-decoration-color: var(--ink-3); }
+a:hover { text-decoration-color: var(--ink); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+code, kbd, .mono { font-family: var(--mono); font-size: 0.86em; }
+p { margin: 0 0 0.6em; }
+
+/* headings: a paper's title block and numbered sections */
+.eyebrow { font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 6px; }
+h1 { font-size: 26px; line-height: 1.2; font-weight: 700; margin: 0 0 8px; letter-spacing: -0.005em; text-wrap: balance; }
+h2 { font-size: 19px; line-height: 1.3; font-weight: 700; margin: 36px 0 10px; text-wrap: balance; }
+h2 .secnum { display: inline-block; min-width: 1.6em; }
+h3 { font-size: 16px; line-height: 1.35; font-weight: 700; margin: 22px 0 6px; }
+.abstract { max-width: 72ch; color: var(--ink); }
+.abstract p { margin: 0 0 0.5em; }
+.prose { max-width: 72ch; }
+.byline { color: var(--ink-3); font-size: 14px; margin: 0 0 14px; }
+.muted { color: var(--ink-3); }
+.small { font-size: 13px; }
+hr.rule { border: 0; border-top: 1px solid var(--hair); margin: 24px 0; }
+
+/* figures: no cards, no shadows; whitespace separates them */
+figure.fig { margin: 22px 0 30px; min-width: 0; }
+figure.fig > .fig-body { position: relative; min-width: 0; }
+figure.fig figcaption, .caption {
+  font-size: var(--fs-caption);
+  line-height: 1.42;
+  color: var(--ink);
+  margin-top: 8px;
+  max-width: 96ch;
+}
+.fig-label { font-weight: 400; }
+.caption-note { color: var(--ink-3); }
+
+/* figure toolbar (export, table) sits on the figure's top right, quiet until hovered */
+.fig-tools { display: flex; gap: 6px; justify-content: flex-end; align-items: center; margin: 0 0 4px; font-size: 12.5px; color: var(--ink-3); }
+.fig-tools .btn { font-size: 12.5px; padding: 1px 7px; color: var(--ink-2); }
+
+/* controls: restrained, thin borders, serif */
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin: 10px 0 8px; font-size: var(--fs-ctl); color: var(--ink-2); }
+.ctl { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ctl-label { color: var(--ink-3); font-style: italic; }
+.btn, .sel {
+  font: 400 var(--fs-ctl)/1.25 var(--serif);
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid #9a9a9a;
+  border-radius: 2px;
+  padding: 2px 9px;
+  cursor: pointer;
+  min-height: 26px;
+}
+.btn:hover, .sel:hover { border-color: var(--ink); }
+.btn[aria-pressed="true"] { border-color: var(--ink); background: var(--wash-2); font-weight: 700; }
+.btn:disabled { opacity: 0.45; cursor: default; border-color: #c4c4c4; }
+.seg { display: inline-flex; }
+.seg .btn { border-radius: 0; }
+.seg .btn + .btn { margin-left: -1px; }
+.seg .btn:first-child { border-radius: 2px 0 0 2px; }
+.seg .btn:last-child { border-radius: 0 2px 2px 0; }
+.seg .btn[aria-pressed="true"] { position: relative; z-index: 1; }
+.chk { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.chk input { accent-color: var(--ink); margin: 0; }
+.status { color: var(--ink-2); font-size: 13px; min-height: 1.2em; }
+
+/* keys (legends): inline, frameless, mark beside text; text never wears the data colour */
+.keys { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; font-size: 13px; color: var(--ink-2); margin: 4px 0 6px; }
+.key { display: inline-flex; align-items: center; gap: 6px; }
+.key svg { flex: none; display: block; overflow: visible; }
+.key .n { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+button.key { font: inherit; color: inherit; background: none; border: 0; padding: 1px 2px; cursor: pointer; border-radius: 2px; }
+button.key:hover { background: var(--wash); }
+button.key.off { opacity: 0.4; text-decoration: line-through; }
+.keys .key-title { color: var(--ink-3); font-style: italic; }
+
+/* SVG figure text */
+svg.viz { display: block; overflow: visible; }
+svg.viz text { font-family: var(--serif); fill: var(--ink); }
+svg.viz .tick { font-size: var(--fs-tick); fill: var(--ink-2); font-variant-numeric: tabular-nums; }
+svg.viz .lbl { font-size: var(--fs-fig); fill: var(--ink); }
+svg.viz .lbl-2 { font-size: var(--fs-fig); fill: var(--ink-2); }
+svg.viz .axis-title { font-size: var(--fs-fig); fill: var(--ink); }
+svg.viz .panel-title { font-size: var(--fs-fig); font-weight: 700; fill: var(--ink); }
+svg.viz .val { font-size: var(--fs-tick); fill: var(--ink); font-variant-numeric: tabular-nums; }
+svg.viz .ann { font-size: var(--fs-tick); fill: var(--ink-2); font-style: italic; }
+svg.viz .mono { font-family: var(--mono); font-size: 11.5px; }
+svg.viz .halo { paint-order: stroke; stroke: var(--paper); stroke-width: 3px; stroke-linejoin: round; }
+svg.viz .axis-line { stroke: var(--rule); stroke-width: 0.8px; shape-rendering: crispEdges; }
+svg.viz .tick-line { stroke: var(--rule); stroke-width: 0.8px; shape-rendering: crispEdges; }
+svg.viz .grid { stroke: var(--hair); stroke-width: 0.6px; shape-rendering: crispEdges; }
+svg.viz .hit { fill: transparent; outline: none; }
+svg.viz .hit:focus-visible { stroke: var(--focus); stroke-width: 1.5px; }
+
+/* booktabs tables: title above, no vertical rules, top/mid/bottom rules only */
+.tablewrap { overflow: auto; max-width: 100%; }
+.tablewrap.scroll { max-height: 440px; }
+table.booktabs { border-collapse: collapse; font-size: 13.5px; line-height: 1.35; margin: 4px 0 8px; min-width: 50%; }
+table.booktabs caption { caption-side: top; text-align: left; font-size: var(--fs-caption); padding: 0 0 6px; color: var(--ink); }
+table.booktabs th, table.booktabs td { padding: 3px 10px; text-align: left; vertical-align: top; border: 0; }
+table.booktabs th:first-child, table.booktabs td:first-child { padding-left: 2px; }
+table.booktabs thead th { font-weight: 700; border-top: 1.5px solid var(--rule); border-bottom: 0.75px solid var(--rule); white-space: nowrap; background: var(--paper); position: sticky; top: 0; z-index: 1; }
+table.booktabs tbody tr:last-child td { border-bottom: 1.5px solid var(--rule); }
+table.booktabs td.num, table.booktabs th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.booktabs td.code { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+table.booktabs td.wrap { min-width: 220px; }
+
+/* tooltip: a small white card with a thin dark rule */
+.tip {
+  position: fixed; left: 0; top: 0; z-index: 50; pointer-events: none;
+  max-width: min(380px, calc(100vw - 16px));
+  background: var(--paper); color: var(--ink);
+  border: 1px solid var(--rule); border-radius: 0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14);
+  padding: 7px 9px; font: 13px/1.38 var(--serif);
+}
+.tip[hidden] { display: none; }
+.tip .tt-title { font-weight: 700; }
+.tip .tt-sub { color: var(--ink-2); }
+.tip .tt-row { display: flex; align-items: center; gap: 7px; margin-top: 3px; }
+.tip .tt-row strong { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tip .tt-note { color: var(--ink-3); margin-top: 4px; font-size: 12.5px; }
+.tip .tt-id { font-family: var(--mono); font-size: 11px; color: var(--ink-2); word-break: break-all; }
+.tip .tt-quote { margin-top: 5px; padding-left: 7px; border-left: 2px solid var(--hair); white-space: pre-wrap; word-break: break-word; }
+
+/* offscreen host used by PaperKit to re-lay out a figure for export at 5.5 in (528 px):
+   12.5 px figure text prints at 9.4 pt and 11.5 px ticks at 8.6 pt. */
+.paper-offscreen { position: absolute; left: -100000px; top: 0; visibility: hidden; pointer-events: none; background: var(--paper); }
+.preset-paper { --fs-fig: 12.5px; --fs-tick: 11.5px; }
+
+footer.paper-foot { margin-top: 36px; padding-top: 10px; border-top: 1px solid var(--hair); font-size: 13px; color: var(--ink-3); }
+.nojs { padding: 10px 0; color: var(--ink-2); font-style: italic; }
+
+@media (max-width: 560px) {
+  :root { --fs-body: 15.5px; --fs-caption: 14px; --fs-fig: 12px; --fs-tick: 11px; }
+  main.paper { padding: 18px 16px 40px; }
+  h1 { font-size: 22px; }
+  h2 { font-size: 17.5px; margin-top: 28px; }
+  figure.fig { margin: 16px 0 24px; }
+  .controls { gap: 6px 10px; }
+}
+@media print {
+  .controls, .fig-tools, .tip { display: none !important; }
+  main.paper { max-width: none; padding: 0; }
+}
