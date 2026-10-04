@@ -1,4 +1,10 @@
-"""Activity over time: message/action counts per UTC time bucket, optionally grouped.
+"""Activity over time: message/action counts per time bucket, optionally grouped.
+
+Buckets are UTC, except when every counted record comes from one source with Village days
+(``viz.pagekit.village_days``: an AI Village store): then buckets follow the Village's time zone
+(a day bucket is one Village day, Pacific midnight to midnight), are still labelled by their UTC
+start, and hour/day buckets carry their ``village_day`` number, as scope_recap and scope_moments
+count days.
 
 Pure functions of a ``Store`` plus already-resolved filters (a resolved channel
 name, an exact author id or ``db.HUMAN`` for all humans, and ``parse_time``
@@ -15,6 +21,7 @@ from datetime import date, datetime
 from typing import Any
 
 from swarm_mcp.scope.db import HUMAN, Store, date_filters, label_for
+from swarm_mcp.scope.viz.pagekit import day_number, village_days
 from swarm_mcp.toolkit import ToolInputError
 
 BINS = ("hour", "day", "week", "month")
@@ -85,8 +92,11 @@ def timeline(
     until: str | None = None,
     top_groups: int = 10,
     max_buckets: int = MAX_BUCKETS,
+    days: bool = True,
 ) -> dict[str, Any]:
-    """Counts per ``date_trunc(bin, ts)`` bucket (UTC), empty buckets omitted.
+    """Counts per ``date_trunc(bin, ts)`` bucket, empty buckets omitted. Buckets are UTC, or in
+    the Village time zone (hour/day buckets with a ``village_day``) when ``days`` and every counted record
+    is from one source with Village days.
 
     Returns ``{table, bin, group_by, total, bins_returned, peak, first_bucket,
     last_bucket, series | groups + other, notes}``. With grouping, ``groups``
@@ -102,7 +112,24 @@ def timeline(
         raise ToolInputError("group_by='channel' only applies to table='messages'; use group_by='author' for actions")
     where, params = record_filters(table, source=source, channel=channel, author_id=author_id, since=since, until=until)
     w = " AND ".join(["ts IS NOT NULL", *where])
+    spec = None
+    if days:
+        srcs = (
+            [source]
+            if source
+            else [r["s"] for r in store.all(f"SELECT DISTINCT source AS s FROM {table} WHERE {w}", params)]
+        )
+        spec = village_days(store, source=srcs[0]) if len(srcs) == 1 else None
     bucket = f"date_trunc('{bin}', ts)"  # bin is whitelisted above
+    if spec:  # truncate in the Village time zone, label by the UTC start (tz validated by day_spec)
+        tz = spec["tz"].replace("'", "")
+        bucket = f"timezone('UTC', timezone('{tz}', date_trunc('{bin}', timezone('{tz}', ts AT TIME ZONE 'UTC'))))"
+
+    def item(b: Any, n: int, key: str = "count") -> dict[str, Any]:
+        d = {"bucket": ts_iso(b), key: n}
+        if spec and bin in ("hour", "day"):
+            d["village_day"] = day_number(b, spec)
+        return d
 
     overall = store.all(
         f"SELECT {bucket} AS bucket, count(*) AS n FROM {table} WHERE {w} GROUP BY 1 ORDER BY 1", params
@@ -122,19 +149,29 @@ def timeline(
         "group_by": group_by,
         "total": total,
         "bins_returned": len(overall),
-        "peak": {"bucket": ts_iso(peak["bucket"]), "count": peak["n"]} if peak else None,
+        "peak": item(peak["bucket"], peak["n"]) if peak else None,
         "first_bucket": ts_iso(overall[0]["bucket"]) if overall else None,
         "last_bucket": ts_iso(overall[-1]["bucket"]) if overall else None,
     }
     notes = [
-        "Buckets are UTC and labelled by their start; empty buckets are omitted (a missing bucket means 0).",
+        "Buckets are labelled by their UTC start; empty buckets are omitted (a missing bucket means 0).",
         "Rows without a timestamp are excluded.",
     ]
+    if spec:
+        out["village_days"] = {"tz": spec["tz"], "day_one": spec["day_one"]}
+        notes.append(
+            f"Buckets follow Village days ({spec['tz']} midnight to midnight; Day 1 = {spec['day_one']}); "
+            "hour and day buckets carry village_day, the Village day they fall on."
+        )
+    else:
+        notes.append("Buckets are UTC.")
+        if days and len(srcs) > 1 and village_days(store):
+            notes.append("Records come from several sources, so there are no Village days; pass source= for them.")
     if bin == "week":
         notes.append("Week buckets start on Monday (ISO weeks).")
 
     if group_by == "none":
-        out["series"] = [{"bucket": ts_iso(r["bucket"]), "count": r["n"]} for r in overall]
+        out["series"] = [item(r["bucket"], r["n"]) for r in overall]
         out["notes"] = notes
         return out
 
@@ -153,7 +190,7 @@ def timeline(
             [*params, keys],
         )
         for r in rows:
-            series[r["g"]].append({"bucket": ts_iso(r["bucket"]), "count": r["n"]})
+            series[r["g"]].append(item(r["bucket"], r["n"]))
     names = store.display_names() if group_by == "author" else {}
     out["groups"] = [
         {
