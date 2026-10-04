@@ -307,6 +307,9 @@
   }
   function effectiveMode(v0, v1, pw) {
     if (S.mode !== 'auto') return S.mode;
+    // A sampled page keeps complete binned counts until one bin is wider than the eye needs;
+    // only then does it switch to (sampled) single messages. Unsampled pages switch on density.
+    if (META.sampled) return BIN * pw / (v1 - v0) > 120 ? 'msgs' : 'bins';
     return visibleTrueCount(v0, v1) / (lanes.length * pw) < 0.22 ? 'msgs' : 'bins';
   }
   function lowerBound(a, lo, hi, x) { while (lo < hi) { var m = (lo + hi) >> 1; if (a[m] < x) lo = m + 1; else hi = m; } return lo; }
