@@ -160,7 +160,7 @@ def test_add_a_git_repo(project: Path, capsys):
 
     (project / "data" / "notarepo").mkdir()
     assert cli("add", "data/notarepo", "--adapter", "git") == 2
-    assert "not readable as a bare git repository" in capsys.readouterr().err
+    assert "not a git repository root" in capsys.readouterr().err
     assert cli("add", "data/repos/rpg.git", "--name", "Bad Name") == 2
     assert cli("add", "data/repos/rpg.git", "--adapter", "git", "--mapping", "x.json") == 2
     assert cli("add", "data/repos/rpg.git", "--adapter", "village") == 2
@@ -291,3 +291,42 @@ def test_add_keeps_a_hand_edited_mapping(project: Path, capsys):
     mapping.unlink()  # deleting it redrafts
     assert cli("add", "data/crew", "--dry-run") == 0
     assert "drafting a mapping" in capsys.readouterr().out and mapping.exists()
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_add_git_needs_a_repository_root(project: Path, capsys):
+    """Regression: `add <dir> --adapter git` on a folder inside a working tree (and auto-detect on any folder
+    named *.git) ran `git -C <dir>`, which walks up and ingested the enclosing repository."""
+    from swarm_mcp.cli import git_repo_dir, git_root
+
+    bare = make_repo(project / "data" / "repos")  # also leaves the working tree data/work-repo (with commits)
+    tree = project / "data" / "work-repo"
+    store = project / "data" / "swarmscope.duckdb"
+    fake = tree / "fake.git"  # a folder named *.git inside a working tree
+    fake.mkdir()
+    (fake / "notes.txt").write_text("not a repository\n")
+    lookalike = project / "data" / "lookalike.git"  # HEAD, objects/ and refs/, but not a repository
+    for d in ("objects", "refs"):
+        (lookalike / d).mkdir(parents=True)
+    (lookalike / "HEAD").write_text("not a ref\n")
+
+    for sub in (tree / "src", fake, lookalike):
+        assert git_repo_dir(sub) is None and git_root(sub) is None
+        assert cli("add", str(sub), "--adapter", "git") == 2
+        assert "not a git repository root" in capsys.readouterr().err
+        assert cli("add", str(sub), "--adapter", "git", "--dry-run") == 2
+        capsys.readouterr()
+    cli("add", str(fake), "--dry-run")  # auto: not taken for a git repo (it goes on to draft a mapping)
+    assert "git adapter" not in capsys.readouterr().out
+    assert not store.exists()
+
+    assert git_repo_dir(bare) == bare and git_root(bare) == bare  # a bare repo
+    assert git_repo_dir(tree) is None and git_root(tree) == tree / ".git"  # a working tree: only when asked
+    assert cli("add", "data/work-repo", "--adapter", "git", "--dry-run") == 0
+    out = capsys.readouterr().out
+    assert f"in {tree / '.git'}" in out and "dry run: source 'work-repo'" in out
+    assert cli("add", "data/work-repo", "--adapter", "git") == 0
+    assert "ingested source 'work-repo' (git adapter)" in capsys.readouterr().out
+    assert table_count(store, "periods", "work-repo") == 0 and table_count(store, "agents", "work-repo") > 0
+    assert cli("add", "data/repos/rpg.git", "--adapter", "git", "--dry-run") == 0
+    assert "dry run: source 'rpg'" in capsys.readouterr().out

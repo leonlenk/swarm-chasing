@@ -8,7 +8,7 @@
 
 ``add --adapter auto`` (the default) picks the adapter from the path: ``--mapping``
 given -> mapped; the AI Village file set -> ai_village; a bare git repository
-(a directory with HEAD, objects/ and refs/, or a ``*.git`` directory) -> git;
+(a directory with HEAD, objects/ and refs/ that git takes for a repository root) -> git;
 anything else is mapped with ``mappings/<source>.json`` when it exists (re-runs
 keep hand edits; delete it to redraft), else profiled and mapped by a draft
 from ``--agent``, checked (it stops with the report on failure) and then
@@ -102,14 +102,34 @@ def village_dir(path: Path) -> Path | None:
     return None
 
 
-def git_repo_dir(path: Path) -> Path | None:
-    """``path`` if it is a bare git repository: a directory holding HEAD, objects/ and refs/, or a
-    directory named ``*.git`` (e.g. ``data/ai-village/repos/rpg-game.git``)."""
+def git_root(path: Path) -> Path | None:
+    """The git directory when ``path`` is the root of a repository: ``path`` for a bare repository, ``path/.git``
+    for a working tree. None otherwise, in particular for a folder inside another repository (``git -C`` would
+    walk up to that one)."""
+    import subprocess
+
     if not path.is_dir():
         return None
-    if (path / "HEAD").is_file() and (path / "objects").is_dir() and (path / "refs").is_dir():
+    try:
+        res = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--absolute-git-dir"], capture_output=True, text=True, timeout=30
+        )
+    except (OSError, subprocess.SubprocessError):  # git not installed, or hung
+        return None
+    if res.returncode != 0 or not res.stdout.strip():
+        return None
+    git_dir, real = Path(res.stdout.strip()).resolve(), path.resolve()
+    if git_dir == real:
         return path
-    return path if path.name.endswith(".git") else None
+    return path / ".git" if git_dir == real / ".git" else None
+
+
+def git_repo_dir(path: Path) -> Path | None:
+    """``path`` if it is a bare git repository (auto-detect): HEAD, objects/ and refs/, and git agrees it is a
+    repository root (e.g. ``data/ai-village/repos/rpg-game.git``)."""
+    if not ((path / "HEAD").is_file() and (path / "objects").is_dir() and (path / "refs").is_dir()):
+        return None
+    return path if git_root(path) == path else None
 
 
 def default_name(path: Path) -> str:
@@ -148,10 +168,14 @@ def cmd_add(args: argparse.Namespace, config: Config) -> int:
         if village is None:
             raise CommandError(f"no AI Village file set in {path} (or {path / 'ai-village'})")
         return _add_village(args, village, db, detected=adapter == "auto")
-    if adapter == "git" or (adapter == "auto" and not args.mapping and git_repo_dir(path)):
-        if not path.is_dir():
-            raise CommandError(f"--adapter git needs a git repository directory, got {path}")
-        return _add_builtin(args, "git", path, db, detected=adapter == "auto")
+    repo = git_repo_dir(path) if adapter == "auto" and not args.mapping else None
+    if adapter == "git" or repo:
+        repo = repo or git_root(path)
+        if repo is None:
+            raise CommandError(
+                f"not a git repository root: {path} (pass a bare repository or the top folder of a working tree)"
+            )
+        return _add_builtin(args, "git", repo, db, detected=adapter == "auto")
     if adapter == "wiki":
         return _add_builtin(args, "wiki", path, db, detected=False)
     return _add_mapped(args, config, path, db)

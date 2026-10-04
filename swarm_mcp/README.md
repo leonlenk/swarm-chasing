@@ -36,7 +36,8 @@ uv run --directory swarm_mcp swarm-mcp info                    # what is loaded,
 
 Put datasets under `data/` at the repo root (gitignored; a symlink is fine).
 `add` detects the AI Village export and bare git repos and uses the built-in
-adapters (`--adapter village|git` forces one; `--name` sets a git source's name).
+adapters (`--adapter village|git` forces one; `--adapter git` also takes the top folder of a
+working tree, but never a folder inside a repository; `--name` sets a git source's name).
 Wiki databases are only ingested on request: `swarm-mcp add data/collusion-wiki --adapter wiki`.
 For any other dataset it profiles the files, drafts a mapping to `mappings/<source>.json`
 (`--agent none` heuristics, `api` an LLM, or `claude-code` a task for the
