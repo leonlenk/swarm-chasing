@@ -320,7 +320,9 @@ def _add_mapped(args: argparse.Namespace, config: Config, path: Path, db: Path) 
         )
         return 1
     if args.dry_run:
-        print(f"\ndry run: the mapping passes; nothing ingested. Ingest with:\n  swarm-mcp add {path} --mapping {mapping_path}")
+        print(
+            f"\ndry run: the mapping passes; nothing ingested. Ingest with:\n  swarm-mcp add {path} --mapping {mapping_path}"
+        )
         return 0
     from swarm_mcp.scope.ingest import ingest_mapped
 
@@ -370,6 +372,12 @@ def _timeline_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--top", type=int, default=12, help="number of agents (by message count) to show")
     p.add_argument("--channel", help="only this channel (e.g. general)")
     p.add_argument("--snippet-chars", type=int, default=160, help="hover snippet length (masked)")
+    p.add_argument(
+        "--no-explore",
+        action="store_true",
+        help="skip the linked panels (goal recaps, notable moments, agent arcs, metrics over time): a smaller, "
+        "faster page with the timeline, mention matrix and thread reader only",
+    )
 
 
 def _timeline_run(args: argparse.Namespace, config: Config) -> Any:
@@ -387,11 +395,17 @@ def _timeline_run(args: argparse.Namespace, config: Config) -> Any:
         source=args.source,
         scrub=Scrubber(config.scrub, config.email_allowlist),
         snippet_chars=args.snippet_chars,
+        explore=not args.no_explore,
     )
 
 
 RENDER_VIEWS: dict[str, RenderView] = {
-    "timeline": ("HTML swimlane: one row per agent, one mark per message", _timeline_args, _timeline_run),
+    "timeline": (
+        "HTML explorer: activity per agent over time (Village days when the store has village goals), who names "
+        "whom, a thread reader, and linked recap / moments / agent / metric panels",
+        _timeline_args,
+        _timeline_run,
+    ),
 }
 
 

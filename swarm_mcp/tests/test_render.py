@@ -210,7 +210,21 @@ def test_cli_render(store_path: Path, tmp_path: Path, monkeypatch: pytest.Monkey
     assert out.exists()
     printed = json.loads(capsys.readouterr().out)
     assert printed["out"] == str(out) and printed["marks"] == 259
-    assert "bob.smith@gmail.com" not in out.read_text(encoding="utf-8")
+    assert printed["day_one"] == "2026-01-05" and printed["periods"] == 3  # Village days derived from the goals
+    page = out.read_text(encoding="utf-8")
+    assert "bob.smith@gmail.com" not in page
+    p = _Page()
+    p.feed(page)
+    assert p.payload["x"]["moments"] is not None and p.payload["x"]["arcs"]  # the linked panels are on by default
+
+    lean = tmp_path / "lean.html"
+    with pytest.raises(SystemExit) as exc:
+        main(["render", "timeline", "--db", str(store_path), "--out", str(lean), "--no-explore"])
+    assert exc.value.code == 0
+    capsys.readouterr()
+    p = _Page()
+    p.feed(lean.read_text(encoding="utf-8"))
+    assert p.payload["x"] == {} and lean.stat().st_size < out.stat().st_size
 
 
 def test_village_days_periods_and_annotations(store_path: Path, tmp_path: Path):
