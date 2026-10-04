@@ -35,17 +35,20 @@ uv run --directory swarm_mcp swarm-mcp info                    # what is loaded,
 ```
 
 Put datasets under `data/` at the repo root (gitignored; a symlink is fine).
-`add` detects the AI Village export and bare git repos and uses the built-in
-adapters (`--adapter village|git` forces one; `--adapter git` also takes the top folder of a
-working tree, but never a folder inside a repository; `--name` sets a git source's name).
+`add` detects the AI Village export, bare git repos and the top folder of a git
+working tree, and uses the built-in adapters (`--adapter village|git` forces one; a
+folder inside a repository is never taken as git: point at the repository's top folder;
+`--name` sets a git source's name).
 Wiki databases are only ingested on request: `swarm-mcp add data/collusion-wiki --adapter wiki`
 (a `.db` file, or a folder that directly holds one).
 For any other dataset it profiles the files, drafts a mapping to `mappings/<source>.json`
 (`--agent none` heuristics, `api` an LLM, or `claude-code` a task for the
 `/swarm-setup` command), checks it, and stops with the report if the check
-fails. When the check passes, it ingests. If `mappings/<source>.json` already
-exists, `add` uses it instead of drafting, so your edits survive a re-run
-(delete the file to redraft); `--mapping M` uses a mapping from elsewhere.
+fails. When the check passes, it ingests. A draft that finds no table of
+timestamped records is not kept. If `mappings/<source>.json` already
+exists and was drafted for the same dataset folder, `add` uses it instead of drafting,
+so your edits survive a re-run (delete the file to redraft); `add` refuses a mapping
+drafted for another folder. `--mapping M` uses a mapping from elsewhere.
 `--dry-run` ingests nothing: it writes the draft mapping (when there is none
 yet) and stops after the check.
 Re-running `add` on the same dataset replaces that source and keeps other sources
