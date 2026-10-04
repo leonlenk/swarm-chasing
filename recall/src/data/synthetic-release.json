@@ -140,5 +140,19 @@
       "payload": { "action": "publish announcement for 2.4.1", "referencesClaims": ["C3"], "simulated": true },
       "evidenceRefs": ["ev-14", "ev-15"], "statusAfter": "done"
     }
-  ]
+  ],
+  "fixture": {
+    "monitor": "A",
+    "expect": [
+      { "atCursor": 5, "count": 0 },
+      { "atCursor": 6, "state": "active", "count": 1, "evidenceIds": ["ev-05", "ev-06"] },
+      { "atCursor": 9, "state": "active", "count": 1 },
+      { "atCursor": 10, "state": "resolved", "count": 1, "evidenceIds": ["ev-10"] },
+      { "withhold": ["ev-05"], "atCursor": 6, "state": "insufficient", "count": 1, "missing": ["ev-05"] },
+      { "monitor": "B", "atCursor": 11, "count": 0 },
+      { "monitor": "B", "atCursor": 12, "state": "active", "count": 1, "evidenceIds": ["ev-06", "ev-10", "ev-11", "ev-12"] },
+      { "monitor": "B", "atCursor": 15, "state": "resolved", "count": 1, "evidenceIds": ["ev-15"] },
+      { "monitor": "B", "withhold": ["ev-06"], "atCursor": 12, "state": "insufficient", "count": 1, "missing": ["ev-06"] }
+    ]
+  }
 }

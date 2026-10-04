@@ -26,3 +26,4 @@ dist-ssr
 # AI Village extracts: research-use terms, do not commit
 public/data/
 .hf/
+dist-preview

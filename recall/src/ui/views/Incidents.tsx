@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useRecall } from '../context';
-import type { Finding, MonitorId } from '../../engine/monitors';
-import { MONITOR_LABEL } from '../../engine/monitors';
+import type { Finding } from '../../engine/monitors';
+import { MONITOR_LABEL, registry } from '../../engine/monitors';
 import { Avatar, EvidencePill, StatePill, StatusPill } from '../Pills';
 import { Record, UnavailableRecord } from '../Record';
 import { findingAgents, findingLabel, groupFindings, plain, STATE_ORDER, subjectLabel } from '../labels';
@@ -29,7 +29,7 @@ export function Incidents() {
   const selected = findings.find((f) => f.id === param);
   const [tab, setTab] = useState<Tab>(selected?.state ?? (counts.active ? 'active' : counts.insufficient ? 'insufficient' : 'resolved'));
   const [q, setQ] = useState('');
-  const [monitor, setMonitor] = useState<'all' | MonitorId>('all');
+  const [monitor, setMonitor] = useState<string>('all');
 
   const list = useMemo(() => findings
     .filter((f) => f.state === tab)
@@ -75,10 +75,9 @@ export function Incidents() {
         <section className="card" aria-label="Incident list">
           <div className="inc-toolbar">
             <label className="input"><ISearch size={18} /><input placeholder="Search incidents…" value={q} onChange={(e) => setQ(e.target.value)} /></label>
-            <select className="select" value={monitor} onChange={(e) => setMonitor(e.target.value as 'all' | MonitorId)} aria-label="Monitor">
+            <select className="select" value={monitor} onChange={(e) => setMonitor(e.target.value)} aria-label="Monitor">
               <option value="all">All monitors</option>
-              <option value="unsupported_completion">{MONITOR_LABEL.unsupported_completion}</option>
-              <option value="superseded_claim_reused">{MONITOR_LABEL.superseded_claim_reused}</option>
+              {registry.map((m) => <option key={m.id} value={m.id}>{m.id} · {m.title}</option>)}
             </select>
           </div>
           {list.length === 0 && (

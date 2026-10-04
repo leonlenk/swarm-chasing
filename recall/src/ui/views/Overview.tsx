@@ -16,14 +16,14 @@ import { IAlert, IArrowR, IChat, IChevron, IClock, IDoc, IFork, IPie, IPlay, IUs
 const hms = (iso: string) => new Date(iso).toISOString().slice(11, 19);
 
 function useSeries() {
-  const { source, input, cursor, minSeq, name } = useRecall();
+  const { source, input, cursor, minSeq } = useRecall();
   return useMemo(() => {
     if (!source) return null;
     const n = Math.min(24, Math.max(2, cursor - minSeq + 1));
     const pts = Array.from({ length: n }, (_, i) => Math.round(minSeq + ((cursor - minSeq) * i) / (n - 1)));
     const rows = pts.map((seq) => {
       const w = reconstruct(input, seq);
-      const f = runMonitors(w, name);
+      const f = runMonitors(w);
       const progressed = [...w.tasks.values()].filter((t) => t.reportedStatus !== 'todo');
       return {
         agents: new Set(w.visible.map((e) => e.agentId)).size,
@@ -33,7 +33,7 @@ function useSeries() {
       };
     });
     return { rows, last: rows[rows.length - 1] };
-  }, [source, input, cursor, minSeq, name]);
+  }, [source, input, cursor, minSeq]);
 }
 
 function NeedsAttention() {

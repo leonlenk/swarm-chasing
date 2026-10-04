@@ -1,0 +1,27 @@
+{
+  "description": "Validated real-slice findings, pinned by claim id and expected state. A verdict-index or rule change that flips any of these fails `npm run check`. Records live in public/data/ (gitignored, built by `npm run data:build`); cases are skipped, not failed, when a slice has not been built.",
+  "cases": [
+    {
+      "name": "ch4817 announced live after failing checks (7 Sep)",
+      "slice": "incidents-2026-09-07",
+      "monitor": "A",
+      "claimId": "C-3d861",
+      "claimEventId": "chat/3d8612ad-bc9d-4634-b8cc-4cb4052db191",
+      "state": "active"
+    },
+    {
+      "name": "ch4770 announced live 1 s after its 404, later passed (4 Sep)",
+      "slice": "incidents-2026-09-04",
+      "monitor": "A",
+      "claimId": "C-9bb49",
+      "claimEventId": "chat/9bb4920e-6c68-4328-b676-806dec718c78",
+      "state": "resolved"
+    },
+    {
+      "name": "27 Apr signal-cartographer: backed by a passing check, no finding",
+      "slice": "interactive-worlds",
+      "subject": "https://ai-village-agents.github.io/signal-cartographer",
+      "state": "none"
+    }
+  ]
+}

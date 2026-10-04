@@ -4,7 +4,7 @@ import type { View } from './context';
 
 /** Plain-language incident names, used consistently across views. */
 export function findingLabel(f: Finding): string {
-  if (f.monitor === 'superseded_claim_reused') return 'Withdrawn claim used after correction';
+  if (f.monitor === 'B') return 'Withdrawn claim used after correction';
   if (f.state === 'insufficient') return 'Completion claim cannot be verified';
   return f.title.startsWith('Claimed live') ? 'Claimed live after a failed check' : 'Completion claimed despite failed check';
 }

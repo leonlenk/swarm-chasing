@@ -165,13 +165,14 @@ export function RecallProvider({ children }: { children: ReactNode }) {
   const input: AnalysisInput = useMemo(() => ({
     events,
     withheld: experimentActive ? new Set(source!.experiment!.withhold) : NO_WITHHELD,
+    agents: source?.agents ?? [],
   }), [events, experimentActive, source]);
 
   const agents = useMemo(() => new Map((source?.agents ?? []).map((a) => [a.id, a])), [source]);
   const name = useCallback((id: string) => agents.get(id)?.name ?? id, [agents]);
   const ws = useMemo(() => (source ? reconstruct(input, cursor) : EMPTY_WS), [source, input, cursor]);
-  const findings = useMemo(() => runMonitors(ws, name), [ws, name]);
-  const allFindings = useMemo(() => (source ? runMonitors(reconstruct(input, maxSeq), name) : []), [source, input, maxSeq, name]);
+  const findings = useMemo(() => runMonitors(ws), [ws]);
+  const allFindings = useMemo(() => (source ? runMonitors(reconstruct(input, maxSeq)) : []), [source, input, maxSeq]);
 
   const selectSource = useCallback((id: string) => {
     const e = sources.find((s) => s.id === id);

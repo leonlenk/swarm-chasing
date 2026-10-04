@@ -32,7 +32,7 @@ interface Props {
 
 const STANDING_TO_EVIDENCE = { supported: 'supported', unknown: 'unknown', contradicted: 'contradicted', superseded: 'contradicted' } as const;
 const STATE_LABEL = { active: 'Active', resolved: 'Resolved', insufficient: 'Insufficient evidence' } as const;
-const monLetter = (f: Finding) => (f.monitor === 'unsupported_completion' ? 'A' : 'B');
+const monLetter = (f: Finding) => f.monitor;
 
 function ClaimCard({ c, ws, agents, onSelect }: { c: ClaimState; ws: WorldState; agents: Map<string, Agent>; onSelect?: (id: string) => void }) {
   const agent = agents.get(c.agentId);

@@ -108,9 +108,17 @@ scripts/                    data:download · data:build (fetch-ai-village.ts) ·
 
 ```bash
 npm run typecheck && npm run lint && npm run build
-npm run check                 # synthetic: state + findings at every cursor position
-npm run check -- --withhold   # same, with the experiment on
+npm run check                          # monitor test runner (exit 1 on failure)
+npm run check -- --trace [--withhold]  # also print the synthetic state + findings at every cursor
 ```
+
+`npm run check` runs, in order:
+1. **Registry:** every monitor in `src/engine/monitors/` has a fixture `src/data/fixtures/<id>.json` that targets it. Negative tests confirm the registry *refuses* a monitor without one, and that `assertFinding()` rejects rule-breaking findings (active with withheld evidence, future leakage, no evidence, and so on).
+2. **Fixtures:** each fixture's `expect` block asserts that the monitor **fires** (exact state, count and evidence ids at a cursor), that the monitors in `quiet` stay **quiet** at every cursor, and that **withholding** a decisive record degrades the finding to `insufficient` and names it in `missing[]`.
+3. **Integration:** `synthetic-release.json` is checked against its own `expect` block.
+4. **Regression:** validated real findings pinned in `src/data/regression.json` (ch4817 active, ch4770 resolved, and the 27 Apr signal-cartographer non-finding). These are skipped, not failed, when `public/data` hasn't been built.
+
+**Adding a monitor:** create `src/engine/monitors/<ID>.ts` exporting a `MonitorDef`, write `src/data/fixtures/<ID>.json` with an `expect` block, register both (`monitors/index.ts`, `fixtures/index.ts`), and run `npm run check`. The Monitors and Incidents views pick it up from the registry.
 
 ## Known limitations
 

@@ -1,21 +1,14 @@
 import { useMemo } from 'react';
 import { useRecall } from '../context';
-import { MONITOR_LABEL, type MonitorId } from '../../engine/monitors';
+import { isInvariantFailure, needsMet, registry } from '../../engine/monitors';
 import { TYPE_LABEL } from '../format';
 import type { EventType } from '../../model/types';
 
-const RULES: Record<MonitorId, string> = {
-  unsupported_completion:
-    'claim.asserts ∈ {verification_passed, complete} AND claim.subject = (artifact, version)\n' +
-    'AND ∃ verification tool_result r: r.subject = claim.subject ∧ r.outcome = fail ∧ r.seq < claim.seq\n' +
-    'AND ∄ passing verification of claim.subject before the claim\n' +
-    '→ ACTIVE · RESOLVED once withdrawn or a later pass exists\n' +
-    '→ INSUFFICIENT if no verification is visible but the claim cites a withheld/missing record',
-  superseded_claim_reused:
-    'action.referencesClaims ∋ C\nAND ∃ correction k: k.supersedes = C ∧ k.seq < action.seq\n' +
-    '→ ACTIVE · acknowledgement only counts if recorded by the acting agent\n' +
-    '→ RESOLVED when that agent later acknowledges, or acts on a current claim',
+const FAMILY_LABEL: Record<string, string> = {
+  'claim-evidence': 'Claim–evidence', propagation: 'Propagation', belief: 'Belief & memory', session: 'Session & task',
+  process: 'Process & tool', swarm: 'Swarm & coordination', human: 'Human intervention', meta: 'Meta',
 };
+const NEED_LABEL = (n: string) => (n === 'subject' ? 'claim/check subjects' : n === 'dependency' ? 'task dependencies' : (TYPE_LABEL as Record<string, string>)[n] ?? n);
 
 export function Monitors() {
   const { source, ws, findings, allFindings, navigate, experimentOn, setExperimentOn, sourceEntry } = useRecall();
@@ -42,21 +35,45 @@ export function Monitors() {
       <div className="hero">
         <div>
           <h1>Rules, not guesses.</h1>
-          <p className="sub">Both monitors are deterministic. They read only records visible at the cursor: no confidence scores, no causality from timing, and an agent only counts as having seen a correction if it acknowledged it.</p>
+          <p className="sub">Every monitor is a deterministic function over the records visible at the cursor: no confidence scores, no causality from timing, and an agent only counts as having seen a correction if it acknowledged it.</p>
         </div>
       </div>
 
       <div className="grid-2">
-        {(['unsupported_completion', 'superseded_claim_reused'] as const).map((m, i) => {
-          const now = findings.filter((f) => f.monitor === m);
-          const all = allFindings.filter((f) => f.monitor === m);
+        {registry.map((m) => {
+          const now = findings.filter((f) => f.monitor === m.id);
+          const all = allFindings.filter((f) => f.monitor === m.id);
           const last = [...now].sort((a, b) => b.detectedAt - a.detectedAt)[0];
+          const app = needsMet(m, source?.events ?? []);
+          const invariant = all.filter(isInvariantFailure);
           return (
-            <section key={m} className="card monitor-card">
-              <div className="row"><span className="tag real">Monitor {i ? 'B' : 'A'}</span><span className="spacer" /><span className="muted small">{now.length} at #{ws.cursor} · {all.length} in full log</span></div>
-              <h3>{MONITOR_LABEL[m]}</h3>
-              <pre className="rule" style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{RULES[m]}</pre>
-              {last ? <button className="link" onClick={() => navigate('incidents', last.id)}>Latest: {last.title} (#{last.detectedAt}) →</button> : <span className="muted small">Not fired at this point in time.</span>}
+            <section key={m.id} className={`card monitor-card ${app.met ? '' : 'na'}`}>
+              <div className="row">
+                <span className="tag real">Monitor {m.id}</span>
+                <span className="tag">{FAMILY_LABEL[m.family] ?? m.family}</span>
+                <span className="spacer" />
+                {app.met
+                  ? <span className="muted small">{now.length} at #{ws.cursor} · {all.length} in full log</span>
+                  : <span className="tag disputed" title={`Needs: ${app.unmet.map(NEED_LABEL).join(', ')}`}>Not applicable to this source</span>}
+              </div>
+              <h3>{m.title}</h3>
+              {invariant.length > 0 && (
+                <button className="tag stale" style={{ alignSelf: 'flex-start' }} onClick={() => navigate('incidents', invariant[0].id)}
+                  title="Findings that broke a monitor invariant were converted to insufficient instead of being dropped">
+                  {invariant.length} finding{invariant.length > 1 ? 's' : ''} failed an invariant → shown under Needs evidence
+                </button>
+              )}
+              <pre className="rule" style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{m.rule}</pre>
+              <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>
+                <span className="muted xs">Needs</span>
+                {m.needs.map((n) => <span key={n} className={`filter ${app.unmet.includes(n) ? '' : 'on'}`} style={{ height: 24, fontSize: 12 }}>{NEED_LABEL(n)}</span>)}
+                <span className="spacer" />
+                <span className="mono xs muted" title="Sabotage fixture run by npm run check">{m.fixture}</span>
+              </div>
+              {!app.met
+                ? <span className="muted small">This source has no {app.unmet.map(NEED_LABEL).join(' or ')}, so the monitor cannot apply. Zero findings here is not a clean bill.</span>
+                : last ? <button className="link" onClick={() => navigate('incidents', last.id)}>Latest: {last.title} (#{last.detectedAt}) →</button>
+                  : <span className="muted small">Not fired at this point in time.</span>}
             </section>
           );
         })}

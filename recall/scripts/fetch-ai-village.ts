@@ -392,9 +392,8 @@ async function main() {
     };
     const doc = adaptAiVillageWindow(input);
     const last = doc.events.length ? doc.events[doc.events.length - 1].sequence : 0;
-    const ws = reconstruct({ events: doc.events, withheld: new Set() }, last);
-    const name = (id: string) => doc.agents.find((a) => a.id === id)?.name ?? id;
-    const findings = runMonitors(ws, name);
+    const ws = reconstruct({ events: doc.events, withheld: new Set(), agents: doc.agents }, last);
+    const findings = runMonitors(ws);
     writeFileSync(join(OUT, `${p.id}.json`), JSON.stringify(doc));
     const counts = {
       events: doc.events.length,
@@ -427,7 +426,7 @@ async function main() {
     for (const f of findings) {
       const claimEv = ws.byId.get(f.evidence.find((x) => x.role.startsWith('Completion'))?.eventId ?? f.detectedEventId);
       const failEv = ws.byId.get(f.evidence[0]?.eventId ?? '');
-      log(`  [${f.monitor === 'unsupported_completion' ? 'A' : 'B'} · ${f.state}] ${f.summary}`);
+      log(`  [${f.monitor} · ${f.state}] ${f.summary}`);
       if (claimEv) log(`     claim  ${claimEv.id} @ ${claimEv.timestamp.slice(11, 19)}: ${claimEv.text.slice(0, 160).replace(/\n/g, ' ')}`);
       if (failEv && failEv.type === 'tool_result') log(`     check  ${failEv.id} @ ${failEv.timestamp.slice(11, 19)}: ${failEv.text.slice(0, 160)}`);
     }

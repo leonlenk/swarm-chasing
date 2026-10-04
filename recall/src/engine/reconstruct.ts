@@ -61,6 +61,8 @@ export interface AnalysisInput {
   events: RecallEvent[];
   /** Record ids deliberately removed from the analysis (evidence visibility experiment). */
   withheld: ReadonlySet<string>;
+  /** Display names, so monitors can phrase findings from WorldState alone. */
+  agents?: ReadonlyArray<{ id: string; name: string }>;
 }
 
 export interface WorldState {
@@ -68,6 +70,8 @@ export interface WorldState {
   /** Ids withheld from this analysis whose time has already passed. Their content is not retained. */
   withheld: string[];
   refStatus: (id: string) => RefStatus;
+  /** Agent display name (falls back to the id). */
+  agentName: (id: string) => string;
   visible: RecallEvent[];
   byId: Map<string, RecallEvent>;
   tasks: Map<string, TaskState>;
@@ -186,6 +190,8 @@ function evidenceForTask(task: TaskState, ws: Omit<WorldState, 'tasks'>): [Evide
 
 export function reconstruct(input: AnalysisInput, cursor: number): WorldState {
   const { events, withheld: hidden } = input;
+  const names = new Map((input.agents ?? []).map((a) => [a.id, a.name] as const));
+  const agentName = (id: string) => names.get(id) ?? id;
   const visible = events.filter((e) => e.sequence <= cursor && !hidden.has(e.id));
   const byId = new Map(visible.map((e) => [e.id, e] as const));
   // Only sequence numbers are kept for the full log, so withheld/future content can't leak.
@@ -244,7 +250,7 @@ export function reconstruct(input: AnalysisInput, cursor: number): WorldState {
   const claims = new Map<string, ClaimState>();
   for (const e of visible) if (e.type === 'claim') claims.set(e.payload.claimId, evaluateClaim(e, visible, refStatus));
 
-  const partial = { cursor, withheld, refStatus, visible, byId, edges, claims };
+  const partial = { cursor, withheld, refStatus, agentName, visible, byId, edges, claims };
   for (const t of tasks.values()) {
     const [status, reason] = evidenceForTask(t, partial);
     t.evidenceStatus = status;

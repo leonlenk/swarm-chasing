@@ -1,0 +1,45 @@
+{
+  "id": "fixture-B",
+  "label": "Fixture B · withdrawn claim reused without an observed acknowledgement",
+  "kind": "synthetic",
+  "description": "Synthetic sabotage fixture for monitor B. One aberration: a claim is withdrawn by its author; one agent acknowledges; another later acts on the withdrawn claim with no acknowledgement recorded, then acknowledges.",
+  "meta": { "origin": "synthetic" },
+  "agents": [
+    { "id": "bea", "name": "Bea", "role": "Build", "color": "#2f6a4f" },
+    { "id": "otto", "name": "Otto", "role": "Deploy", "color": "#2c5d86" },
+    { "id": "cy", "name": "Cy", "role": "Comms", "color": "#a8761b" }
+  ],
+  "events": [
+    { "id": "ev-01", "sequence": 1, "timestamp": "2026-01-02T09:00:00Z", "agentId": "bea", "taskId": null, "type": "task_created", "provenance": "declared",
+      "text": "Plan: build, deploy, announce.",
+      "payload": { "tasks": [
+        { "taskId": "T1", "title": "Build svc 2.0", "owner": "bea" },
+        { "taskId": "T2", "title": "Deploy svc 2.0", "owner": "otto", "dependsOn": ["T1"] },
+        { "taskId": "T3", "title": "Announce svc 2.0", "owner": "cy", "dependsOn": ["T1"] }
+      ] }, "evidenceRefs": [] },
+    { "id": "ev-02", "sequence": 2, "timestamp": "2026-01-02T09:10:00Z", "agentId": "bea", "taskId": "T1", "type": "claim", "provenance": "declared",
+      "text": "svc 2.0 build is complete.",
+      "payload": { "claimId": "C1", "asserts": "complete", "subject": { "artifact": "svc", "version": "2.0" } },
+      "evidenceRefs": [], "statusAfter": "done" },
+    { "id": "ev-03", "sequence": 3, "timestamp": "2026-01-02T09:20:00Z", "agentId": "bea", "taskId": "T1", "type": "correction", "provenance": "declared",
+      "text": "Correction: C1 was wrong, the 2.0 build is incomplete.",
+      "payload": { "supersedes": "C1", "addressedTo": ["otto", "cy"] }, "evidenceRefs": ["ev-02"], "statusAfter": "in_progress" },
+    { "id": "ev-04", "sequence": 4, "timestamp": "2026-01-02T09:22:00Z", "agentId": "otto", "taskId": "T2", "type": "acknowledgement", "provenance": "declared",
+      "text": "Ack, holding the deploy.", "payload": { "acknowledges": "ev-03" }, "evidenceRefs": ["ev-03"], "statusAfter": "paused" },
+    { "id": "ev-05", "sequence": 5, "timestamp": "2026-01-02T09:30:00Z", "agentId": "cy", "taskId": "T3", "type": "action", "provenance": "declared",
+      "text": "Announcing svc 2.0 per C1. [fixture record]",
+      "payload": { "action": "announce svc 2.0", "referencesClaims": ["C1"], "simulated": true }, "evidenceRefs": ["ev-02"], "statusAfter": "done" },
+    { "id": "ev-06", "sequence": 6, "timestamp": "2026-01-02T09:40:00Z", "agentId": "cy", "taskId": "T3", "type": "acknowledgement", "provenance": "declared",
+      "text": "Saw the correction late; retracting the announcement.", "payload": { "acknowledges": "ev-03" }, "evidenceRefs": ["ev-03"], "statusAfter": "in_progress" }
+  ],
+  "fixture": {
+    "monitor": "B",
+    "expect": [
+      { "atCursor": 4, "count": 0 },
+      { "atCursor": 5, "state": "active", "count": 1, "evidenceIds": ["ev-02", "ev-03", "ev-04", "ev-05"] },
+      { "atCursor": 6, "state": "resolved", "count": 1, "evidenceIds": ["ev-06"] },
+      { "withhold": ["ev-02"], "atCursor": 5, "state": "insufficient", "count": 1, "missing": ["ev-02"] }
+    ],
+    "quiet": ["A"]
+  }
+}
