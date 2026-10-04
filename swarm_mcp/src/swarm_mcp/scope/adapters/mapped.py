@@ -2,21 +2,22 @@
 
 ``setup.mapping.MappedAdapter`` turns any dataset plus a mapping JSON into
 ``protocol_bridge`` records (``StandardRecord`` / ``AgentRecord`` /
-``PeriodRecord``). This module converts those into the store's existing row
-types, so a mapped dataset lands in the same tables as AI Village:
+``PeriodRecord``). This module converts those into the store's row types, so a
+mapped dataset lands in the same tables as every other source:
 
-    StandardRecord, category "message"  -> messages   (location -> channel, type -> msg_type)
-    StandardRecord, category "action"   -> actions    (kind = the record's kind)
-    StandardRecord, category "other"    -> actions    (kind = the record's kind)
-    AgentRecord                          -> agents     (agent_id = <source>:agent:<local_id>)
-    PeriodRecord                         -> periods    (kind = the period's kind)
+    StandardRecord, category "message"  -> messages  (<source>:msg:<kind>/<id>; location -> channel,
+                                                      msg_type = the dataset kind, meta.type = the type role)
+    StandardRecord, category "action"   -> actions   (<source>:event:<kind>/<id>; kind = the dataset kind)
+    StandardRecord, category "other"    -> actions   (same as "action")
+    AgentRecord                          -> agents    (agent_id = <source>:agent:<local_id>)
+    PeriodRecord                         -> periods   (<source>:period:<kind>/<id>; kind = the dataset kind)
 
-Evidence ids are kept exactly as the mapping produced them (``<source>:<kind>:<id>``),
-and the mapping's kinds are recorded in ``sources.meta.kinds``, so they resolve
-through ``scope_get_record`` and ``core_get_event``. Records are yielded first (so
-agents carry first/last seen), then agents, then periods. ``ingest_mapped`` loads
-it with the normal idempotent ``scope.ingest.ingest`` (all rows of the source are
-replaced).
+Ids already use the schema kinds (see ``setup.mapping``), so they resolve through
+``core_get`` and the scope tools like any other source's. ``source_meta`` (stored in
+``sources.meta``) records the mapping path, its description and the dataset kind ->
+category map. Records are yielded first (so agents carry first/last seen), then agents,
+then periods. ``ingest_mapped`` loads it with the normal idempotent ``scope.ingest.ingest``
+(all rows of the source are replaced).
 """
 
 from __future__ import annotations
@@ -42,16 +43,18 @@ def _ts(value: str | None) -> datetime | None:
     return dt.astimezone(timezone.utc).replace(tzinfo=None) if dt.tzinfo else dt
 
 
-def record_row(rec: StandardRecord, source: str, category: str) -> tuple[str, dict[str, Any]]:
-    """(table, row) for one standard record; ``category`` is the mapping's category for its kind."""
+def record_row(rec: StandardRecord, source: str) -> tuple[str, dict[str, Any]]:
+    """(table, row) for one standard record: ``msg`` ids go to messages, ``event`` ids to actions."""
     ts = _ts(rec.time)
     quality = rec.ts_quality or ("exact" if ts else "missing")
     if ts is None:
         quality = "missing"
-    meta: dict[str, Any] = {"kind": rec.kind, "category": category, **(rec.meta or {})}
+    meta: dict[str, Any] = {"native_id": rec.local_id, **(rec.meta or {})}
     if rec.actor_type:
         meta["actor_type"] = rec.actor_type
-    if category == "message":
+    if rec.type:
+        meta.setdefault("type", rec.type)
+    if rec.schema_kind == "msg":
         return "messages", {
             "evidence_id": rec.event_id,
             "source": source,
@@ -61,11 +64,11 @@ def record_row(rec: StandardRecord, source: str, category: str) -> tuple[str, di
             "reply_to": rec.reply_to,
             "ts": ts,
             "ts_quality": quality,
-            "msg_type": rec.type,
+            "msg_type": rec.kind,
             "content": rec.text or "",
             "meta": meta,
         }
-    for key, value in (("type", rec.type), ("location", rec.location), ("reply_to", rec.reply_to)):
+    for key, value in (("location", rec.location), ("reply_to", rec.reply_to)):
         if value:
             meta.setdefault(key, value)
     if rec.recipients:
@@ -97,11 +100,10 @@ def agent_row(agent: AgentRecord, source: str) -> dict[str, Any]:
 
 
 def period_row(period: PeriodRecord, source: str) -> dict[str, Any]:
-    kind = period.event_id.split(":", 2)[1]
     return {
         "evidence_id": period.event_id,
         "source": source,
-        "kind": kind,
+        "kind": period.kind,
         "label": period.label or "",
         "start_ts": _ts(period.start_time),
         "end_ts": _ts(period.end_time),
@@ -124,16 +126,16 @@ class MappedStoreAdapter:
         return cls(MappedAdapter.from_file(mapping, path), mapping)
 
     def categories(self) -> dict[str, str]:
-        """kind -> category for the record kinds."""
-        return {k: v.category for k, v in self.mapped.kinds.items() if v.table == "events"}
+        """Dataset kind -> category: message/action/other for records, "period" for periods."""
+        kinds = self.mapped.kinds.items()
+        return {k: ("period" if v.table == "periods" else v.category) for k, v in kinds if v.table != "agents"}
 
     @property
     def source_meta(self) -> dict[str, Any]:
-        """Stored in ``sources.meta``: the kinds make mapped evidence ids resolvable."""
+        """Stored in ``sources.meta``: where the mapping is and which dataset kinds it maps."""
         return {
             "mapping": self.mapping_path,
             "description": self.mapped.description,
-            "kinds": {k: v.description for k, v in self.mapped.kinds.items()},
             "categories": self.categories(),
         }
 
@@ -142,9 +144,9 @@ class MappedStoreAdapter:
 
     def load(self, path: Path | None = None, **_: Any) -> Iterator[tuple[str, dict[str, Any]]]:
         """Records first (so agents carry first/last seen), then agents, then periods."""
-        src, cats = self.source, self.categories()
+        src = self.source
         for rec in self.mapped.records():
-            yield record_row(rec, src, cats.get(rec.kind, "message"))
+            yield record_row(rec, src)
         for agent in self.mapped.agents():
             yield "agents", agent_row(agent, src)
         for period in self.mapped.periods():

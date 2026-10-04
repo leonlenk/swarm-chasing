@@ -1,17 +1,30 @@
 """Declarative dataset mappings and the ``MappedAdapter`` that executes them.
 
 A mapping is a JSON document (schema: ``spec_schema.MAPPING_SCHEMA``, docs:
-``docs/BRING_YOUR_OWN_DATA.md``) that says, per file or table, which field is
+``ADDING_MODULES.md``, "Mapping a new dataset") that says, per file or table, which field is
 the record id, time, actor, location, text, reply target and recipients. It is
 pure data: paths are looked up in rows, filters are compared with fixed
 operators, and nothing in a spec is ever evaluated or imported.
 
 ``MappedAdapter(spec, root)`` follows ``protocol_bridge.Adapter``: ``agents()``,
 ``records()`` and ``periods()`` stream ``AgentRecord`` / ``StandardRecord`` /
-``PeriodRecord`` with ids from ``events.make_event_id``. Actors resolve to agent
-keys (``<source>:agent:<id>``) by agent id, name or alias; values that resolve to
-no agent become ``<unmatched_prefix><value>`` and are counted, so the check can
-report them.
+``PeriodRecord``. Actors resolve to agent keys (``<source>:agent:<id>``) by agent id,
+name or alias; values that resolve to no agent become ``<unmatched_prefix><value>`` and
+are counted, so the check can report them.
+
+Ids use the store's schema kinds (``scope.evidence``), never the mapping's own kinds. An
+entry's ``kind`` is the DATASET type ("post", "utterance"); its category picks the schema
+kind, and the local id is ALWAYS prefixed with ``<kind>/``:
+
+    records, category message        -> <source>:msg:<kind>/<local_id>     (messages.msg_type = kind)
+    records, category action / other -> <source>:event:<kind>/<local_id>   (actions.kind = kind)
+    periods                          -> <source>:period:<kind>/<local_id>  (periods.kind = kind)
+    agents                           -> <source>:agent:<agent id>          (no prefix)
+
+The prefix keeps entries that share a schema kind (two message kinds) from colliding and
+keeps ids stable when a mapping gains entries. ``reply_to: {field, kind}`` names a
+dataset kind (default: the entry's own); the target id is built the same way, with that
+kind's schema kind: ``reply_to: {field: re_mid, kind: post}`` -> ``forum:msg:post/<re_mid>``.
 """
 
 from __future__ import annotations
@@ -23,14 +36,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
-from swarm_mcp.events import make_event_id
 from swarm_mcp.setup import readers
 from swarm_mcp.setup.protocol_bridge import (
+    CATEGORY_SCHEMA_KIND,
+    PERIOD_SCHEMA_KIND,
     AgentRecord,
     KindInfo,
     PeriodRecord,
     StandardRecord,
     agent_key,
+    record_id,
 )
 from swarm_mcp.setup.spec_schema import MAPPING_SCHEMA, SLUG
 from swarm_mcp.setup.timeparse import FORMATS, iso_z, to_datetime
@@ -375,7 +390,7 @@ class MappedAdapter:
             found = readers.find_tables(self.root, pattern)
             if not found:
                 raise MappingError(
-                    f"no table matches {pattern!r} under {self.root}. Run `python -m swarm_mcp.setup inspect` to list table keys."
+                    f"no table matches {pattern!r} under {self.root}. Run `swarm-mcp add <path> --dry-run` to profile the dataset and list its table keys."
                 )
             self._tables_cache[pattern] = found
         return self._tables_cache[pattern]
@@ -480,6 +495,7 @@ class MappedAdapter:
         src = self.source
         for r in self.spec["records"]:
             kind = r["kind"]
+            schema_kind = CATEGORY_SCHEMA_KIND[r.get("category", "message")]
             actor_spec = _norm_field(r.get("actor")) if r.get("actor") is not None else None
             rec_spec = _norm_field(r.get("recipients")) if r.get("recipients") is not None else None
             text_spec = _norm_field(r.get("text")) if r.get("text") is not None else {}
@@ -495,7 +511,7 @@ class MappedAdapter:
                     self.stats[f"{kind}_skipped_no_id"] += 1
                     yield None, diag
                     continue
-                eid = make_event_id(src, kind, lid)
+                eid = record_id(src, schema_kind, kind, lid)
                 when = self._time(row, r.get("time"), diag)
 
                 actor = actor_type_auto = None
@@ -556,13 +572,17 @@ class MappedAdapter:
                     rv = _scalar(get_path(row, reply_spec["field"]))
                     diag.reply_raw = rv
                     if rv is not None:
-                        reply_to = make_event_id(src, reply_spec.get("kind") or kind, rv)
+                        tkind = reply_spec.get("kind") or kind
+                        tinfo = self.kinds.get(tkind)
+                        reply_to = record_id(src, tinfo.schema_kind if tinfo else schema_kind, tkind, rv)
 
                 actor_type = (
                     self._value(row, r.get("actor_type")) if r.get("actor_type") is not None else actor_type_auto
                 )
                 rec = StandardRecord(
                     event_id=eid,
+                    kind=kind,
+                    local_id=lid,
                     time=when,
                     actor=actor,
                     actor_type=actor_type,
@@ -602,7 +622,8 @@ class MappedAdapter:
                     self.stats[f"{p['kind']}_skipped_no_id"] += 1
                     continue
                 yield PeriodRecord(
-                    event_id=make_event_id(self.source, p["kind"], lid),
+                    event_id=record_id(self.source, PERIOD_SCHEMA_KIND, p["kind"], lid),
+                    kind=p["kind"],
                     label=_as_text(get_path(row, p["label"])) if p.get("label") else "",
                     start_time=self._time(row, p.get("start"), None),
                     end_time=self._time(row, p.get("end"), None),

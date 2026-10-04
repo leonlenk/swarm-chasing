@@ -1,14 +1,14 @@
 """Export a filtered, redacted subset of standard event records for sharing.
 
-    python -m swarm_mcp.export --in records.jsonl --out DIR \\
-        [--agents agents.jsonl] [--allow-email-domain agentvillage.org ...] \\
-        [--rules default|all|<rule,...>] [--redact-ips] \\
-        [--source S] [--kind K] [--actor A] [--since T] [--until T] [--check]
-    python -m swarm_mcp.export --check --out DIR          # re-check an existing export
+    swarm-mcp export --out DIR [--source S] [--kind K] [--channel C] [--author A]
+                     [--since T] [--until T] [--query Q] [--with-agents] [--keep-ips] [--no-check]
+
+The command reads from the SwarmScope store (``scope.records.export_store``) and
+runs ``check`` on the result unless ``--no-check``. This module is the library.
 
 An export directory holds:
 
-    events.jsonl    one standard record per line (``events.event_record`` shape), with
+    events.jsonl    one standard record per line (``scope.records.event_record`` shape), with
                     every string field redacted except the identity fields
                     (event_id, source, kind, time, actor_type)
     agents.jsonl    agent records, if given (every string but ``id`` redacted)
@@ -23,17 +23,13 @@ mismatch, unlisted file or unparseable line. By default the email allowlist reco
 in the manifest is honoured (it was a deliberate, recorded policy); pass
 ``honour_allowlist=False`` to flag those too.
 
-Record sources. For now the CLI reads standard records from a JSONL file and applies
-simple filters (``select``). Records are consumed as an iterable and written
-streaming, so any record provider plugs in unchanged: a future
-``swarm-mcp export --filters ...`` subcommand only has to turn its filters into an
-iterable of ``event_record`` dicts plus a ``filters_desc``, then call
-``export(provider(filters), out, Redactor(...), agents=..., filters_desc=...)``.
+Record sources. ``export`` consumes any iterable of ``event_record`` dicts, streaming:
+the store provider (``scope.records.store_records``) or a JSONL file (``read_jsonl`` +
+``select`` for simple filters).
 """
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import os
@@ -68,14 +64,14 @@ class ExportError(ValueError):
 
 
 def _split_event_id(value: Any) -> tuple[str, str]:
-    """(source, kind) of a ``<source>:<kind>:<local_id>`` id (see ``swarm_mcp.events``)."""
-    from swarm_mcp.events import parse_event_id  # deferred: pulls in the MCP toolkit
+    """(source, kind) of a ``<source>:<kind>:<native_id>`` evidence id (see ``scope.evidence``)."""
+    from swarm_mcp.scope import evidence  # deferred: pulls in the store and the MCP toolkit
 
     try:
-        eid = parse_event_id(value if isinstance(value, str) else "")
-    except ValueError as e:  # ToolInputError is a ValueError
+        ref = evidence.parse(value if isinstance(value, str) else "")
+    except ValueError as e:  # EvidenceError is a ToolInputError, a ValueError
         raise ExportError(str(e)) from None
-    return eid.source, eid.kind
+    return ref.source, ref.kind
 
 
 # --------------------------------------------------------------------------- writing
@@ -436,83 +432,3 @@ def select(
 def describe_filters(**f: Any) -> dict[str, Any]:
     """The non-empty filters as a dict, for ``filters_desc``."""
     return {k: (sorted(v) if isinstance(v, (list, tuple, set)) else v) for k, v in f.items() if v}
-
-
-# --------------------------------------------------------------------------- CLI
-
-
-def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        prog="python -m swarm_mcp.export",
-        description="Export a redacted subset of standard event records, or check an existing export.",
-    )
-    p.add_argument(
-        "--in", dest="inp", metavar="RECORDS.jsonl", help="standard event records, one per line ('-' = stdin)"
-    )
-    p.add_argument("--out", required=True, metavar="DIR", help="export directory (created if missing)")
-    p.add_argument("--agents", metavar="AGENTS.jsonl", help="optional agent records to include")
-    p.add_argument(
-        "--allow-email-domain", action="append", default=[], metavar="DOMAIN",
-        help="keep emails at this domain and its subdomains (repeatable)",
-    )  # fmt: skip
-    p.add_argument(
-        "--rules", default="default", help="rule names/groups, comma separated (default, all, credential, email, ...)"
-    )
-    p.add_argument("--redact-ips", action="store_true", help="also mask private/loopback IPs (adds the 'ip' rule)")
-    p.add_argument("--source", action="append", default=[], help="keep only these sources (repeatable)")
-    p.add_argument(
-        "--kind", action="append", default=[], help="keep only these kinds, 'kind' or 'source:kind' (repeatable)"
-    )
-    p.add_argument("--actor", action="append", default=[], help="keep only these actors (repeatable)")
-    p.add_argument("--since", help="keep records at or after this ISO time (UTC)")
-    p.add_argument("--until", help="keep records before this ISO time; a bare date includes that day")
-    p.add_argument("--filters-desc", help="free-text description of how the input was selected, stored in the manifest")
-    p.add_argument(
-        "--check",
-        action="store_true",
-        help="after exporting (or alone, on --out), rescan with the strictest rules (all rules incl. private IPs, "
-        "so an export made without --redact-ips fails if it still contains one)",
-    )
-    p.add_argument("--strict-emails", action="store_true", help="with --check: flag allow-listed emails too")
-    return p
-
-
-def main(argv: list[str] | None = None) -> int:
-    """Exit codes: 0 ok, 1 check failed, 2 bad input or usage."""
-    args = build_parser().parse_args(argv)
-    result: dict[str, Any] = {"out_dir": args.out}
-    try:
-        if args.inp:
-            rules = [args.rules] + (["ip"] if args.redact_ips else [])
-            redactor = Redactor(rules, allow_email_domains=args.allow_email_domain)
-            filters = describe_filters(
-                source=args.source, kind=args.kind, actor=args.actor, since=args.since, until=args.until
-            )
-            if args.filters_desc:
-                filters["description"] = args.filters_desc
-            records = select(
-                read_jsonl(args.inp),
-                sources=args.source, kinds=args.kind, actors=args.actor, since=args.since, until=args.until,
-            )  # fmt: skip
-            agents = list(read_jsonl(args.agents)) if args.agents else None
-            manifest = export(records, args.out, redactor, agents=agents, filters_desc=filters or None)
-            result["records"] = manifest["records"]
-            result["redaction"] = {k: manifest["redaction"][k] for k in ("rules", "counts", "records_changed")}
-        elif not args.check:
-            print("error: give --in RECORDS.jsonl to export, or --check to check an existing --out", file=sys.stderr)
-            return 2
-    except (ExportError, OSError, ValueError) as e:
-        print(f"error: {e}", file=sys.stderr)
-        return 2
-
-    code = 0
-    if args.check:
-        report = check(args.out, honour_allowlist=not args.strict_emails)
-        result["check"] = report.to_dict()
-        code = 0 if report.ok else 1
-    print(json.dumps(result, indent=2, ensure_ascii=False))
-    return code
-
-
-if __name__ == "__main__":
-    sys.exit(main())

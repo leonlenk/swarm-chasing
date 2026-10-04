@@ -1,13 +1,16 @@
 """Rubric sweeps: apply one yes/no rubric to many event records with an LLM, then measure precision.
 
-The engine is store-agnostic. It works on standard event records (``events.event_record``),
+The engine is store-agnostic. It works on standard event records (``scope.records.event_record``),
 however they were obtained:
 
-- ``resolve_event_ids`` / ``EventIdProvider`` resolve event ids through the EventSources
-  registry (the same path as ``core_get_event``).
+- ``resolve_ids(resolver, ids)`` / ``IdProvider`` resolve evidence ids through a resolver
+  callable, ``resolver(id) -> record``, which raises ``ToolInputError`` (message reported) or
+  ``LookupError`` ("no such record") for ids it cannot resolve. The sweep module builds it from
+  the store's ``get_record`` (the same path as ``core_get``).
 - Any other ``RecordProvider`` (e.g. a store-backed one that understands filters) can be
-  registered per server with ``register_provider(ctx.registry, name, provider)``;
-  ``sweep_run(filters=..., provider=...)`` then uses it.
+  registered per server with ``register_provider(ctx.registry, name, provider)``; the scope
+  module registers ``scope.records.StoreRecordProvider`` as ``"store"``, which
+  ``sweep_run(filters=...)`` uses.
 
 Each record is sent to the model as clearly delimited untrusted data, and the reply must be
 strict JSON ``{"verdict": "yes"|"no"|"unclear", "confidence": "low"|"medium"|"high",
@@ -15,7 +18,7 @@ strict JSON ``{"verdict": "yes"|"no"|"unclear", "confidence": "low"|"medium"|"hi
 object, single quotes, trailing commas, synonyms); anything unparseable becomes ``unclear``
 with ``parse_ok: false``.
 
-Files, under ``SWARMSCOPE_SWEEPS_DIR`` (default ``<project root>/sweeps``, gitignored):
+Files, under ``[data] sweeps`` in swarm.toml (default ``<project root>/sweeps``, gitignored):
 
     <sweep_id>.jsonl         line 1 {"type": "meta"}, then one {"type": "verdict"} per record,
                              then {"type": "summary"} when the run finishes
@@ -32,7 +35,6 @@ import ast
 import hashlib
 import json
 import math
-import os
 import random
 import re
 import secrets
@@ -40,12 +42,10 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping, Protocol, Sequence, runtime_checkable
+from typing import Any, Callable, Iterable, Iterator, Mapping, Protocol, Sequence, runtime_checkable
 
-from swarm_mcp.config import find_project_root
-from swarm_mcp.events import EventNotFound, EventSources
 from swarm_mcp.llm import LLMClient, LLMError
-from swarm_mcp.toolkit import ToolInputError
+from swarm_mcp.toolkit import ToolInputError, truncate
 
 PROMPT_VERSION = 1
 VERDICTS = ("yes", "no", "unclear")
@@ -59,7 +59,7 @@ DEFAULT_RECORD_CHARS = 4000
 CHARS_PER_TOKEN = 4
 
 # USD per 1M tokens: (input, output). First-party API list prices; override with prices= or
-# SWARM_SWEEP_PRICES='{"model": [in, out]}'. A model id matches its own entry or the longest prefix.
+# ``[llm] prices = { "model" = [in, out] }`` in swarm.toml. A model id matches its own entry or the longest prefix.
 DEFAULT_PRICES: dict[str, tuple[float, float]] = {
     "claude-sonnet-5-5": (2.0, 10.0),
     "claude-sonnet-5": (2.0, 10.0),
@@ -97,39 +97,55 @@ class RecordProvider(Protocol):
     def iter_records(self, filters: Mapping[str, Any], limit: int) -> Iterable[dict[str, Any]]: ...
 
 
-def resolve_event_ids(
-    sources: EventSources, event_ids: Sequence[str], max_chars: int = DEFAULT_RECORD_CHARS
+Resolver = Callable[[str], Mapping[str, Any]]
+"""``resolver(evidence_id) -> standard record``; raises ``ToolInputError`` or ``LookupError`` if it cannot."""
+
+
+def resolve_ids(
+    resolver: Resolver, ids: Sequence[str], max_chars: int | None = DEFAULT_RECORD_CHARS
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
-    """Resolve ids through the registry. Returns (records in input order, errors); duplicates are dropped."""
+    """Resolve ids with ``resolver``. Returns (records in input order, errors); duplicates are dropped.
+
+    Each record's ``text`` is capped at ``max_chars`` (``truncated: true`` when cut). A ``ToolInputError``
+    from the resolver is reported with its message, a ``LookupError`` as "no such record"."""
     records: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
     seen: set[str] = set()
-    for raw in event_ids:
-        eid = (raw or "").strip()
+    for raw in ids:
+        eid = raw.strip() if isinstance(raw, str) else ""
         if eid in seen:
             continue
         seen.add(eid)
+        if not eid:
+            errors.append({"event_id": str(raw or ""), "error": "empty id"})
+            continue
         try:
-            parsed, src = sources.lookup(eid)
-            out = src.resolve(parsed.kind, parsed.local_id, before=0, after=0, max_chars=max_chars)
-            records.append(out["event"])
-        except EventNotFound:
-            errors.append({"event_id": eid, "error": "no such record"})
+            rec = dict(resolver(eid))
         except ToolInputError as e:
             errors.append({"event_id": eid, "error": str(e)})
+            continue
+        except LookupError:
+            errors.append({"event_id": eid, "error": "no such record"})
+            continue
+        rec.setdefault("event_id", eid)
+        if max_chars is not None:
+            text, cut = truncate(str(rec.get("text") or ""), max_chars)
+            if cut:
+                rec["text"], rec["truncated"] = text, True
+        records.append(rec)
     return records, errors
 
 
-class EventIdProvider:
-    """``RecordProvider`` for ``{"event_ids": [...]}``; unresolvable ids are collected in ``errors``."""
+class IdProvider:
+    """``RecordProvider`` for ``{"ids": [...]}`` over a resolver; unresolvable ids are collected in ``errors``."""
 
-    def __init__(self, sources: EventSources, max_chars: int = DEFAULT_RECORD_CHARS):
-        self.sources = sources
+    def __init__(self, resolver: Resolver, max_chars: int | None = DEFAULT_RECORD_CHARS):
+        self.resolver = resolver
         self.max_chars = max_chars
         self.errors: list[dict[str, str]] = []
 
     def iter_records(self, filters: Mapping[str, Any], limit: int) -> Iterator[dict[str, Any]]:
-        records, self.errors = resolve_event_ids(self.sources, list(filters.get("event_ids") or []), self.max_chars)
+        records, self.errors = resolve_ids(self.resolver, list(filters.get("ids") or []), self.max_chars)
         yield from records[:limit]
 
 
@@ -152,15 +168,13 @@ def register_provider(registry: Any, name: str, provider: RecordProvider) -> Non
 # --------------------------------------------------------------------------- paths
 
 
-def sweeps_dir(env: Mapping[str, str] | None = None, cwd: Path | None = None) -> Path:
-    """``SWARMSCOPE_SWEEPS_DIR`` (relative: against the project root), default ``<project root>/sweeps``."""
-    env = os.environ if env is None else env
-    root = find_project_root(cwd or Path.cwd())
-    raw = (env.get("SWARMSCOPE_SWEEPS_DIR") or "").strip()
-    if not raw:
-        return root / "sweeps"
-    p = Path(raw).expanduser()
-    return p if p.is_absolute() else (root / p).resolve()
+def sweeps_dir(config: Any = None) -> Path:
+    """Where sweeps live: ``config.sweeps_path`` (``[data] sweeps``, default ``<project root>/sweeps``)."""
+    if config is None:
+        from swarm_mcp.config import Config
+
+        config = Config.load()
+    return config.sweeps_path
 
 
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,100}$")
@@ -169,7 +183,7 @@ _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,100}$")
 def _check_id(sweep_id: str) -> str:
     sid = (sweep_id or "").strip()
     if not _ID_RE.match(sid) or ".." in sid:
-        raise SweepError(f"Malformed sweep_id {sweep_id!r}. Use an id exactly as returned by sweep_run or sweep_list.")
+        raise SweepError(f"Malformed sweep_id {sweep_id!r}. Use an id exactly as returned by sweep_run or sweep_get.")
     return sid
 
 
@@ -272,7 +286,7 @@ def estimate(
         "(thinking can add more on subtle rubrics)"
     ]
     if p is None:
-        notes.append(f"no price known for model {model!r}; pass prices or set SWARM_SWEEP_PRICES")
+        notes.append(f"no price known for model {model!r}; pass prices or set [llm] prices in swarm.toml")
     return {
         "records": len(records),
         "model": model,
@@ -559,7 +573,7 @@ def load(sweep_id: str, directory: Path) -> dict[str, Any]:
     """``{"meta": {...}, "verdicts": [...], "summary": {...} | None}`` for one sweep."""
     path = _sweep_path(directory, sweep_id)
     if not path.exists():
-        raise SweepError(f"No sweep {sweep_id!r} in {directory}. sweep_list shows the available ids.")
+        raise SweepError(f"No sweep {sweep_id!r} in {directory}. sweep_get() lists the available ids.")
     rows = _read_jsonl(path)
     meta = next((r for r in rows if r.get("type") == "meta"), {})
     verdicts = sorted((r for r in rows if r.get("type") == "verdict"), key=lambda r: r.get("i", 0))
@@ -681,6 +695,23 @@ def sample_for_labeling(
     }
 
 
+def pending_labels(sweep_id: str, directory: Path) -> list[dict[str, Any]]:
+    """Sampled verdicts that have no label yet, in sampling order."""
+    s = load(sweep_id, directory)
+    labels = _labels(directory, sweep_id)
+    by_id = {v["event_id"]: v for v in s["verdicts"]}
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for r in _label_rows(directory, sweep_id):
+        eid = r.get("event_id")
+        if r.get("type") != "sample" or eid in seen:
+            continue
+        seen.add(eid)
+        if labels.get(eid) is None and eid in by_id:
+            out.append(_public(by_id[eid]))
+    return out
+
+
 def label(
     sweep_id: str, event_id: str, correct: bool, directory: Path, note: str | None = None, labeler: str | None = None
 ) -> dict[str, Any]:
@@ -725,12 +756,12 @@ def precision(sweep_id: str, directory: Path) -> dict[str, Any]:
     pending = sum(1 for e in sampled if labels.get(e) is None)
     notes: list[str] = []
     if yes["labeled"] == 0:
-        notes.append("no labeled 'yes' verdicts yet: run sweep_sample, then sweep_label each sampled event")
+        notes.append("no labeled 'yes' verdicts yet: call sweep_review for items, then sweep_review(labels=...)")
     elif yes["labeled"] < 20:
         notes.append(f"only {yes['labeled']} labels: the interval is wide; label more for a firmer number")
     if outside:
         notes.append(
-            f"{outside} labeled 'yes' verdict(s) were not drawn by sweep_sample, so the estimate may be biased"
+            f"{outside} labeled 'yes' verdict(s) were not drawn by sweep_review, so the estimate may be biased"
         )
     if pending:
         notes.append(f"{pending} sampled item(s) still unlabeled")

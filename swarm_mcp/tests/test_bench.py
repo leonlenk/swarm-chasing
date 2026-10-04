@@ -176,17 +176,26 @@ def test_store_backed_modules_read_it(bench, tmp_path: Path):
 
     db = tmp_path / "bench.duckdb"
     ingest("ai_village", bench["ds"], db)
-    app = build_server(config_for(bench["out"], SWARMSCOPE_DB=str(db)))
+    app = build_server(config_for(bench["out"], db=db))
     assert app.swarm_registry.records["village"].status == "loaded"
     assert app.swarm_registry.records["scope"].status == "loaded"
     out = call(app, "scope_agents", source="village")
     assert out["total"] == bench["truth"]["params"]["n_agents"]
     term, t = next((k, v) for k, v in bench["truth"]["diffusion"].items() if v["kind"] == "copied")
     hits = call(app, "scope_search", query=term, limit=50)
-    assert hits["total_matches"] == len(t["all_use_event_ids"])
-    assert hits["results"][0]["evidence_id"] == t["first"]
-    got = call(app, "core_get_event", event_id=t["first"])
-    assert got["event"]["event_id"] == t["first"]
+    assert hits["total"] == len(t["all_use_event_ids"])
+    assert [h["evidence_id"] for h in hits["results"]] == t["all_use_event_ids"]
+    first = hits["results"][0]
+    assert first["evidence_id"] == t["first"] and first["author_id"] == t["first_actor"]
+    assert first["text"]["untrusted"] is True and term in first["text"]["content"].lower()
+    got = call(app, "core_get", ids=t["first"])
+    assert (got["evidence_id"], got["table"], got["source"]) == (t["first"], "messages", "village")
+    assert got["author_id"] == t["first_actor"] and got["content"]["untrusted"] is True
+    # every truth id is a store id: a batch core_get resolves them all
+    ids = [*t["all_use_event_ids"], *bench["truth"]["coordinators"]["session_goal_event_ids"], t["first_actor"]]
+    batch = call(app, "core_get", ids=ids)
+    assert batch["errors"] in ({}, []) and batch["returned"] == batch["requested"] == len(ids)
+    assert [r["evidence_id"] for r in batch["results"]] == ids
 
 
 def _scope_adapter(monkeypatch):
@@ -235,8 +244,8 @@ def test_scope_adapter_smoke_ingest(bench, monkeypatch):
         for e in rows["events.jsonl.gz"]
     )
     assert len(by_table["actions"]) == n_actions
-    # adapter ids line up with truth ids (the adapter spells chat 'msg')
-    msg_ids = {r["evidence_id"].replace(":msg:", ":chat:", 1) for r in by_table["messages"]}
+    # adapter ids are the truth ids
+    msg_ids = {r["evidence_id"] for r in by_table["messages"]}
     assert all(e in msg_ids for t in truth["diffusion"].values() for e in t["all_use_event_ids"])
     action_ids = {r["evidence_id"] for r in by_table["actions"]}
     assert set(truth["coordinators"]["session_goal_event_ids"]) <= action_ids
@@ -244,9 +253,7 @@ def test_scope_adapter_smoke_ingest(bench, monkeypatch):
     # the named adopter is a recipient of the mention message
     t = next(v for v in truth["diffusion"].values() if v["kind"] == "copied")
     named = next(a for a in t["adopters"] if a["exposure"] == "mention")
-    mention = next(
-        r for r in by_table["messages"] if r["evidence_id"].replace(":msg:", ":chat:", 1) == named["basis_event_id"]
-    )
+    mention = next(r for r in by_table["messages"] if r["evidence_id"] == named["basis_event_id"])
     assert named["actor"] in mention["recipient_ids"]
 
 
@@ -268,6 +275,7 @@ def test_planted_copied_and_parallel_terms(bench):
         uses = sorted((m for m in msgs.values() if pat.search(m["content"])), key=lambda m: m["created_at"])
         assert [chat_eid(m["id"]) for m in uses] == t["all_use_event_ids"]
         assert t["first"] == chat_eid(uses[0]["id"]) and t["first_actor"] == agent_eid(uses[0]["agent_speaker_id"])
+        assert t["first"] == f"village:msg:{uses[0]['id']}"  # the store's message id
     # (a) research regulars copy it; one outsider adopts it after being named in a message containing it
     assert copied["first_room"] == "research"
     labels = Counter((a["label"], a["exposure"]) for a in copied["adopters"])
@@ -408,8 +416,9 @@ def test_scorer_other_penalties_and_leniency(bench, solved):
     extra = copy.deepcopy(solved)
     extra["integrity"]["name_collisions"].append({"agents": [decoy, truth["coordinators"]["ranked"][0]]})
     assert score(truth, extra)["tasks"]["integrity"]["subtasks"]["name_collisions"]["precision"] == 0.5
-    # leniency: 'msg' kind alias, display names / bare uuids as actors, talk event id for a mismatch
-    alias = json.loads(json.dumps(solved).replace("village:chat:", "village:msg:"))
+    # leniency: old 'chat' kind alias, display names / bare uuids as actors, talk event id for a mismatch
+    assert "village:msg:" in json.dumps(solved) and "village:chat:" not in json.dumps(solved)
+    alias = json.loads(json.dumps(solved).replace("village:msg:", "village:chat:"))
     names = {eid: a["name"] for eid, a in truth["agents"].items()}
     for t in alias["diffusion"].values():
         for a in t["adopters"]:
@@ -420,6 +429,9 @@ def test_scorer_other_penalties_and_leniency(bench, solved):
         if x.get("talk_event_id"):
             x["event_id"] = x["talk_event_id"]
     assert score(truth, alias)["summary"]["macro_f1"] == 1.0
+    # an old truth.json (v1, 'chat' ids) still scores new 'msg' outputs
+    old_truth = json.loads(json.dumps(truth).replace("village:msg:", "village:chat:"))
+    assert score(old_truth, solved)["summary"]["macro_f1"] == 1.0
     # missing tasks are reported
     assert set(score(truth, {"diffusion": solved["diffusion"]})["summary"]["missing"]) == {"coordinators", "integrity"}
 

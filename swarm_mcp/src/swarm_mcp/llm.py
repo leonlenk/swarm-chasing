@@ -7,12 +7,14 @@ with ``FakeClient`` and no network:
     res = client.complete(system, prompt, max_tokens=1024)
     res.text, res.input_tokens, res.output_tokens, res.model
 
-| env var                   | default             | meaning                                                   |
-|---------------------------|---------------------|-----------------------------------------------------------|
-| ANTHROPIC_API_KEY         | (unset)             | required: no key, no model calls                          |
-| SWARM_MCP_LLM_MODEL       | claude-sonnet-5-5   | model id                                                  |
-| SWARM_MCP_LLM_EFFORT      | low                 | ``output_config.effort``; ``none`` omits it (e.g. Haiku)  |
-| SWARM_MCP_LLM_FALLBACKS   | default             | server-side refusal fallback (``fallbacks: "default"``); ``off`` disables |
+Settings come from ``swarm.toml`` ``[llm]`` (see ``config.py``):
+
+| setting / env var            | default             | meaning                                                   |
+|------------------------------|---------------------|-----------------------------------------------------------|
+| ANTHROPIC_API_KEY (env)      | (unset)             | required: no key, no model calls                          |
+| [llm] model / SWARM_LLM_MODEL| claude-sonnet-5-5   | model id (the env var wins)                               |
+| [llm] effort                 | low                 | ``output_config.effort``; ``none`` omits it (e.g. Haiku)  |
+| [llm] fallbacks              | true                | server-side refusal fallback (``fallbacks: "default"``)   |
 
 The key check is deliberately explicit: the SDK can also pick up other
 credential sources, but a sweep spends money, so it only runs when the operator
@@ -21,10 +23,12 @@ has opted in by setting ``ANTHROPIC_API_KEY``.
 
 from __future__ import annotations
 
-import os
 import threading
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping, Protocol, Sequence, runtime_checkable
+from typing import TYPE_CHECKING, Any, Callable, Protocol, Sequence, runtime_checkable
+
+if TYPE_CHECKING:
+    from swarm_mcp.config import Config
 
 DEFAULT_MODEL = "claude-sonnet-5-5"
 DEFAULT_EFFORT = "low"  # a per-record yes/no judgement; raise it for subtle rubrics
@@ -158,7 +162,7 @@ class AnthropicClient:
         except a.PermissionDeniedError as e:
             raise LLMError(f"Anthropic denied the request (403): {e.message}") from e
         except a.NotFoundError as e:
-            raise LLMError(f"Model or endpoint not found (404). Check SWARM_MCP_LLM_MODEL={self.model!r}.") from e
+            raise LLMError(f"Model or endpoint not found (404). Check [llm] model / SWARM_LLM_MODEL={self.model!r}.") from e
         except a.RateLimitError as e:
             raise LLMError("Rate limited by Anthropic (429) after retries; lower the cap or retry later.") from e
         except a.BadRequestError as e:
@@ -184,10 +188,16 @@ class AnthropicClient:
         )
 
 
-def get_client(env: Mapping[str, str] | None = None) -> LLMClient:
+def _config(config: "Config | None") -> "Config":
+    from swarm_mcp.config import Config
+
+    return config if config is not None else Config.load()
+
+
+def get_client(config: "Config | None" = None) -> LLMClient:
     """Build the configured client, or raise ``LLMUnavailable`` saying exactly what is missing."""
-    env = os.environ if env is None else env
-    if not (env.get("ANTHROPIC_API_KEY") or "").strip():
+    config = _config(config)
+    if not config.api_key:
         raise LLMUnavailable(
             "No LLM configured: ANTHROPIC_API_KEY is not set in the server's environment, so no model calls "
             "were made. Set it (e.g. in .mcp.json's env block or your shell) and restart the server. "
@@ -199,15 +209,14 @@ def get_client(env: Mapping[str, str] | None = None) -> LLMClient:
         raise LLMUnavailable(
             "The 'anthropic' package is not installed in the server's environment. Run `uv sync --directory swarm_mcp`."
         ) from e
-    effort = (env.get("SWARM_MCP_LLM_EFFORT") or DEFAULT_EFFORT).strip().lower()
+    effort = (config.llm_effort or DEFAULT_EFFORT).strip().lower()
     return AnthropicClient(
-        model=(env.get("SWARM_MCP_LLM_MODEL") or DEFAULT_MODEL).strip(),
-        api_key=env["ANTHROPIC_API_KEY"].strip(),
+        model=config.llm_model or DEFAULT_MODEL,
+        api_key=config.api_key,
         effort=None if effort in _OFF else effort,
-        fallbacks=(env.get("SWARM_MCP_LLM_FALLBACKS") or "default").strip().lower() not in _OFF,
+        fallbacks=config.llm_fallbacks,
     )
 
 
-def configured_model(env: Mapping[str, str] | None = None) -> str:
-    env = os.environ if env is None else env
-    return (env.get("SWARM_MCP_LLM_MODEL") or DEFAULT_MODEL).strip()
+def configured_model(config: "Config | None" = None) -> str:
+    return _config(config).llm_model or DEFAULT_MODEL

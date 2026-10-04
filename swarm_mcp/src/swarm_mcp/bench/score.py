@@ -1,9 +1,101 @@
-"""Score tool outputs against a generated ``truth.json``.
+"""Score tool outputs against a generated ``truth.json``, and the output contracts they follow.
 
 ``score(truth, outputs)`` returns per-task precision / recall / F1 plus a summary.
-``outputs`` holds the three tools' results in the shapes from ``contracts.md``::
+The synthetic benchmark (``python -m swarm_mcp.bench``) scores three investigation
+tools that do not exist yet in the scope module. This docstring fixes the **output
+shapes** the scorer reads; a tool may return extra keys, which the scorer ignores.
 
-    {"diffusion": {term: {...}}, "coordinators": {...} | [...], "integrity": {...}}
+Ids and actors
+--------------
+- **Event ids** are ``<source>:<kind>:<native_id>`` (``swarm_mcp.scope.evidence``):
+  ``village:msg:<chat_messages.id>``, ``village:event:<events.id>``,
+  ``village:agent:<agents.id>``, ``village:goal:<village_goals.id>``. They are the
+  SwarmScope store's evidence ids, so they resolve with ``core_get``. The scorer also
+  accepts the older spelling ``village:chat:<uuid>`` as an alias of ``village:msg:<uuid>``.
+- **Actors** should be agent ids (``village:agent:<uuid>``). The scorer also accepts a
+  bare agent uuid or an exact display name. Display names are matched exactly, so a
+  Cyrillic look-alike name never resolves to the Latin original.
+- **Timestamps** are ISO 8601 or dataset format (``2031-03-11 14:02:07.123456``), naive UTC.
+
+``scope_trace_diffusion(term)``: how one term spread::
+
+    {"term": "glimmerframe",
+     "first": "village:msg:<uuid>",
+     "adopters": [
+       {"actor": "village:agent:<uuid>", "first_event_id": "village:msg:<uuid>",
+        "label": "likely_copier", "basis_event_id": "village:msg:<uuid>"},
+       {"actor": "village:agent:<uuid>", "first_event_id": "village:msg:<uuid>",
+        "label": "possibly_independent", "basis_event_id": null}]}
+
+- ``first``: the earliest message containing the term (case-insensitive, whole word).
+- ``adopters``: one entry per later user, excluding the first user, keyed by their first use.
+- ``label``: ``likely_copier`` when some earlier use of the term could have reached the
+  adopter before their first use, otherwise ``possibly_independent``. An earlier use can
+  reach the adopter if it was posted in a room the adopter took part in, or if it names
+  the adopter.
+- ``basis_event_id``: the earliest earlier use that could have reached them, or null
+  when ``possibly_independent``.
+
+``scope_coordinators()``: agents whose messages others act on (shortly after the agent
+posts, other agents reply naming it and start work whose session goal names it), ranked
+best first. A bare list or ``{"coordinators": [...]}`` is accepted::
+
+    {"coordinators": [
+       {"actor": "village:agent:<uuid>", "score": 8.0,
+        "example_event_ids": ["village:msg:<directive>", "village:msg:<reply>", "village:event:<goal>"]}]}
+
+``scope_integrity_report()``: data problems to know about before trusting attributions::
+
+    {"name_collisions": [
+       {"agents": ["village:agent:<a>", "village:agent:<b>"], "names": ["Corvin", "Cоrvin"],
+        "kind": "homoglyph", "evidence_event_ids": ["village:msg:<self-reference>"]}],
+     "gaps": [
+       {"actor": "village:agent:<uuid>", "start": "2031-03-10 19:44:01.000000",
+        "end": "2031-03-16 09:12:40.000000", "days": 5.6,
+        "evidence_event_ids": ["<last event before>", "<first event after>"]}],
+     "attribution_issues": [
+       {"event_id": "village:msg:<uuid>", "issue": "missing_event"},
+       {"event_id": "village:msg:<uuid>", "issue": "speaker_mismatch",
+        "talk_event_id": "village:event:<uuid>",
+        "chat_speaker": "village:agent:<uuid>", "event_speaker": "village:agent:<uuid>"}]}
+
+- ``name_collisions``: agents whose display names differ but look the same (Unicode
+  confusables, invisible characters). A group of two or more agents is scored as all its pairs.
+- ``gaps``: periods with no activity (chat or events) between an agent's first and last
+  activity. Silence before an agent joins or after it leaves is not a gap.
+- ``attribution_issues``: agent chat rows with no ``AGENT_TALK`` event (``missing_event``),
+  and rows whose ``AGENT_TALK.speakerId`` differs from ``agent_speaker_id``
+  (``speaker_mismatch``). ``event_id`` is the chat message; the ``AGENT_TALK`` event id is
+  also accepted there. Human messages (``USER_TALK``) are not issues.
+
+The outputs file read by ``score``::
+
+    {"diffusion": {"<term>": <scope_trace_diffusion(term)>, ...},
+     "coordinators": <scope_coordinators()>,
+     "integrity": <scope_integrity_report()>}
+
+A missing task scores 0 recall for that task and is listed in ``summary.missing``.
+
+Scoring
+-------
+==============================  ============================================  ==============================
+task                            items compared                                a match needs
+==============================  ============================================  ==============================
+diffusion                       ``first`` per term, ``(term, actor, label)``  the same id, or the same actor
+                                per adopter                                   with the same label (a wrong
+                                                                              label is one FP and one FN)
+coordinators                    the top-k actors, k = number of true ones     the same actor
+integrity.name_collisions       unordered agent pairs                         the same pair
+integrity.gaps                  ``(actor, [start, end])``                     same actor, interval IoU >= 0.5
+integrity.attribution_issues    ``(message id, issue)``                       the same message and issue
+==============================  ============================================  ==============================
+
+Each task reports precision, recall and F1. Diffusion also reports how often ``first``,
+each adopter's ``first_event_id``, and ``basis_event_id`` are correct; ``basis_event_id``
+is correct if it is any acceptable exposure listed in the truth. Coordinators also report
+the rank of each true coordinator, MRR, and the share of ``example_event_ids`` that are
+planted coordination events. The integrity score is micro-averaged over its three lists.
+``summary.macro_f1`` is the mean F1 of diffusion, coordinators and integrity.
 """
 
 from __future__ import annotations
@@ -203,13 +295,13 @@ def score_integrity(truth: dict[str, Any], output: Any) -> dict[str, Any]:
     names = _set_prf(t_pairs, p_pairs)
     # gaps: same actor, IoU >= 0.5
     gaps = _score_gaps(t.get("gaps") or [], [g for g in out.get("gaps") or [] if isinstance(g, dict)], actors)
-    # attribution: (chat id, issue); a talk event id maps back to its chat message
+    # attribution: (message id, issue); a talk event id maps back to its chat message
     talk_to_chat = {
-        normalize_eid(x["talk_event_id"]): x["event_id"]
+        normalize_eid(x["talk_event_id"]): normalize_eid(x["event_id"])
         for x in t.get("attribution_issues") or []
         if x.get("talk_event_id")
     }
-    t_attr = {(x["event_id"], x["issue"]) for x in t.get("attribution_issues") or []}
+    t_attr = {(normalize_eid(x["event_id"]), x["issue"]) for x in t.get("attribution_issues") or []}
     p_attr = set()
     for x in out.get("attribution_issues") or []:
         if not isinstance(x, dict):

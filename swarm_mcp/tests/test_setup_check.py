@@ -7,7 +7,7 @@ import json
 import pytest
 from setup_datasets import make_csv_chat, make_nested_jsonl
 
-from swarm_mcp.setup import cli
+from swarm_mcp import cli
 from swarm_mcp.setup.check import format_report, run_check
 
 GOOD_CSV = {
@@ -125,11 +125,11 @@ def test_cli_exit_codes(csv_root, tmp_path, capsys):
     good, bad = tmp_path / "good.json", tmp_path / "bad.json"
     good.write_text(json.dumps(GOOD_CSV))
     bad.write_text(json.dumps(_spec(text="sayd")))
-    for path, code in ((good, 0), (bad, 1)):
+    for path, code in ((good, 0), (bad, 1)):  # swarm-mcp add --mapping M --dry-run = the check alone
         with pytest.raises(SystemExit) as e:
-            cli.main(["check", str(path), str(csv_root)])
+            cli.main(["add", str(csv_root), "--mapping", str(path), "--dry-run"])
         assert e.value.code == code
     assert "FAIL" in capsys.readouterr().out
     with pytest.raises(SystemExit) as e:
-        cli.main(["check", str(tmp_path / "missing.json"), str(csv_root)])
+        cli.main(["add", str(csv_root), "--mapping", str(tmp_path / "missing.json"), "--dry-run"])
     assert e.value.code == 2

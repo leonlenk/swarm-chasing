@@ -1,5 +1,6 @@
 """How well do inferred subtasks match the collusion.wiki publishers' page_family labels?
 
+    uv run --directory swarm_mcp swarm-mcp add --adapter wiki data/collusion-wiki
     uv run --directory swarm_mcp python examples/wiki_eval.py
 
 page_family is the publishers' own heuristic task label per page (e.g. 'oecd-equity',
@@ -21,9 +22,10 @@ from pathlib import Path
 
 import numpy as np
 
+from swarm_mcp.config import Config
 from swarm_mcp.modules.subtasks.infer import LEVELS, METHODS, _ari, infer
-from swarm_mcp.modules.subtasks.sources import wiki_units
-from swarm_mcp.modules.wiki.data import find_wikis, load_wiki
+from swarm_mcp.modules.subtasks.sources import load_corpus
+from swarm_mcp.scope import db
 
 GENERIC = {
     "source-cache-url-list",
@@ -52,11 +54,11 @@ def completeness(pred: list[int], gold: list[str]) -> float:
 
 
 def main() -> None:
-    data = Path(os.environ.get("SWARM_DATA_DIR") or Path(__file__).resolve().parents[2] / "data")
-    name, path = next(iter(find_wikis(data).items()))
-    w = load_wiki(name, path)
-    units = wiki_units(w)
-    inf = infer(name, units, [])
+    os.environ.setdefault("SWARM_DATA_DIR", str(Path(__file__).resolve().parents[2] / "data"))
+    name = os.environ.get("CORPUS", "collusion-wiki")
+    with db.connect(Config.from_env().store_path) as s:
+        c = load_corpus(s, name)
+    inf = infer(name, c.units, c.chat, dup_min=c.dup_min, artifact_meta=c.artifact_meta)
     keep, gold = [], []
     for i, u in enumerate(inf.units):
         fams = {f for f in u.tags if f not in GENERIC}
@@ -84,7 +86,7 @@ def main() -> None:
             )
     main_page = []
     for i in keep:
-        pages = collections.Counter(a.changes[0].artifact for a in inf.units[i].actions)
+        pages = collections.Counter(a.changes[0].artifact for a in inf.units[i].actions if a.changes)
         main_page.append(hash(pages.most_common(1)[0][0]))
     rows.append(
         (

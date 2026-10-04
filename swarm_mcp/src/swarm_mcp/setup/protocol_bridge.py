@@ -1,28 +1,30 @@
 """The ONE place where setup code meets the dataset/ingest format.
 
 Everything in ``swarm_mcp.setup`` (the mapped adapter, the check, the agents)
-produces and consumes the three record types below, built only on
-``swarm_mcp.events`` (``make_event_id``, ``parse_event_id``, ``event_record``)
-from origin/main. When the unified data format lands, adopt or replace it here:
-convert ``AgentRecord`` / ``StandardRecord`` / ``PeriodRecord`` into its row
-types (or make these classes aliases of them) and register ``MappedAdapter``
-under the name ``mapped`` in its adapter registry. Nothing else should need to
-change.
+produces and consumes the three record types below, built on the store's id and
+record conventions: ``scope.evidence`` (``make``, ``parse``) and
+``scope.records.event_record``. ``scope.adapters.mapped`` converts them into the
+store's row types (messages, actions, agents, periods).
 
 The minimal adapter protocol (``Adapter``):
 
-    source: str                      # event-id source slug, e.g. "forum"
+    source: str                      # evidence-id source slug, e.g. "forum"
     description: str
-    kinds: dict[str, KindInfo]       # every kind it emits (records, periods, "agent")
+    kinds: dict[str, KindInfo]       # every dataset kind it emits (records, periods, "agent")
     agents()  -> Iterator[AgentRecord]
     records() -> Iterator[StandardRecord]
     periods() -> Iterator[PeriodRecord]
 
 Conventions (same as the rest of swarm_mcp):
-- record ids are event ids ``<source>:<kind>:<local_id>`` (``events.make_event_id``);
+- ids are evidence ids with SCHEMA kinds only (``scope.evidence``): a record of the
+  dataset kind ``post`` in category ``message`` is ``<source>:msg:post/<local_id>``;
+  categories ``action``/``other`` give ``<source>:event:<kind>/<local_id>``; periods
+  ``<source>:period:<kind>/<local_id>`` (``record_id``). The dataset kind always prefixes
+  the local id, so entries sharing a schema kind never collide and ids stay stable when a
+  mapping gains entries. The dataset kind is also kept on the record (``kind``);
 - an *actor key* is an agent id ``<source>:agent:<local_id>`` (``agent_key``) or
   a non-agent key such as ``human:<id>``; ``recipients`` are actor keys;
-- ``reply_to`` is a full event id; times are ISO UTC strings ending in ``Z``.
+- ``reply_to`` is a full evidence id; times are ISO UTC strings ending in ``Z``.
 """
 
 from __future__ import annotations
@@ -30,11 +32,16 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Iterator, Literal, Protocol, runtime_checkable
 
-from swarm_mcp.events import event_record, make_event_id, parse_event_id
+from swarm_mcp.scope import evidence
+from swarm_mcp.scope.records import event_record
 
 ADAPTER_NAME = "mapped"  # registry name for the declarative adapter
 TsQuality = Literal["exact", "approx", "derived", "missing"]
 Category = Literal["message", "action", "other"]
+
+# mapping category -> schema kind of the record's evidence id
+CATEGORY_SCHEMA_KIND: dict[str, str] = {"message": "msg", "action": "event", "other": "event"}
+PERIOD_SCHEMA_KIND = "period"
 
 
 @dataclass(frozen=True)
@@ -42,6 +49,15 @@ class KindInfo:
     description: str
     table: Literal["events", "agents", "periods"] = "events"
     category: Category = "other"
+
+    @property
+    def schema_kind(self) -> str:
+        """The evidence-id kind records of this dataset kind get (msg, event, period or agent)."""
+        if self.table == "agents":
+            return "agent"
+        if self.table == "periods":
+            return PERIOD_SCHEMA_KIND
+        return CATEGORY_SCHEMA_KIND[self.category]
 
 
 @dataclass
@@ -59,9 +75,14 @@ class AgentRecord:
 
 @dataclass
 class StandardRecord:
-    """One timestamped record. ``as_event_record()`` gives the ``events.event_record`` shape."""
+    """One timestamped record. ``as_event_record()`` gives the ``scope.records.event_record`` shape.
+
+    ``event_id`` uses the schema kind (``msg``/``event``); ``kind`` is the dataset's own record
+    type (the mapping entry's ``kind``, e.g. "post"); ``local_id`` is the dataset's id."""
 
     event_id: str
+    kind: str
+    local_id: str
     time: str | None
     actor: str | None
     actor_type: str | None = None
@@ -74,15 +95,13 @@ class StandardRecord:
     meta: dict[str, Any] = field(default_factory=dict)
 
     @property
-    def kind(self) -> str:
-        return parse_event_id(self.event_id).kind
-
-    @property
-    def local_id(self) -> str:
-        return parse_event_id(self.event_id).local_id
+    def schema_kind(self) -> str:
+        return evidence.parse(self.event_id).kind
 
     def as_event_record(self) -> dict[str, Any]:
+        type_key = "msg_type" if self.schema_kind == "msg" else "action_kind"
         extra = {
+            type_key: self.kind,
             "type": self.type,
             "recipients": self.recipients or None,
             "reply_to": self.reply_to,
@@ -103,6 +122,7 @@ class StandardRecord:
 @dataclass
 class PeriodRecord:
     event_id: str
+    kind: str = ""  # the dataset's period type (the mapping entry's ``kind``)
     label: str = ""
     start_time: str | None = None
     end_time: str | None = None
@@ -123,12 +143,15 @@ class Adapter(Protocol):
 
 
 def agent_key(source: str, local_id: str) -> str:
-    """Actor key of an agent: ``<source>:agent:<local_id>`` (itself an event id)."""
-    return make_event_id(source, "agent", local_id)
+    """Actor key of an agent: ``<source>:agent:<local_id>`` (itself an evidence id)."""
+    return evidence.make(source, "agent", local_id)
 
 
-def event_id(source: str, kind: str, local_id: str) -> str:
-    return make_event_id(source, kind, local_id)
+def record_id(source: str, schema_kind: str, kind: str, local_id: str) -> str:
+    """Evidence id of a mapped record or period: ``<source>:<schema_kind>:<kind>/<local_id>``."""
+    if not local_id:
+        raise ValueError("local_id must not be empty")
+    return evidence.make(source, schema_kind, f"{kind}/{local_id}")
 
 
 def to_dict(rec: AgentRecord | StandardRecord | PeriodRecord) -> dict[str, Any]:
@@ -141,5 +164,5 @@ def describe(adapter: Adapter) -> dict[str, Any]:
         "name": ADAPTER_NAME,
         "source": adapter.source,
         "description": adapter.description,
-        "kinds": {k: asdict(v) for k, v in adapter.kinds.items()},
+        "kinds": {k: {**asdict(v), "schema_kind": v.schema_kind} for k, v in adapter.kinds.items()},
     }

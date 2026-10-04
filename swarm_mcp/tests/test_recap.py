@@ -1,7 +1,7 @@
 """analysis/recap.py: window and period recaps, agent arcs and notable moments (synthetic data only).
 
 Synthetic rows go into a COPY of the fixture store. Evidence ids are derived from the fixture's
-own ids, so the tests don't depend on the id scheme ("village:chat:" today, "village:msg:" soon).
+own ids, so the tests don't depend on the id scheme (currently "village:msg:<id>").
 """
 
 from __future__ import annotations

@@ -8,9 +8,10 @@ Registered in .claude/settings.json (it imports swarm_mcp, so it runs in the uv 
 It runs ``swarm_mcp.scope.findings.check_findings`` on ``<findings dir>/findings.jsonl``
 against the SwarmScope store (read-only).
 
-Findings dir: $SWARMSCOPE_FINDINGS_DIR, else $CLAUDE_PROJECT_DIR/findings, else
-<this script's dir>/../findings. Store: $SWARMSCOPE_DB, else <project root>/data/swarmscope.duckdb
-(via ``Config.from_env(cwd=<project root>)``, so SWARM_DATA_DIR is honoured too).
+Project root: $CLAUDE_PROJECT_DIR, else <this script's dir>/... The findings dir and the
+store come from ``swarm_mcp.config.Config.load(cwd=<project root>)``: ``[data] findings`` and
+``[data] db`` in <project root>/swarm.toml, defaulting to <project root>/findings and
+<data dir>/swarmscope.duckdb (SWARM_DATA_DIR is honoured).
 
 Exit codes (Claude Code Stop-hook semantics):
   0  allow the stop: all findings resolve, findings.jsonl is missing/empty, the store is
@@ -34,16 +35,6 @@ MAX_LISTED = 20  # cap on problems spelled out in the stderr report
 def project_root() -> Path:
     env = os.environ.get("CLAUDE_PROJECT_DIR")
     return Path(env).expanduser() if env else Path(__file__).resolve().parent.parent
-
-
-def findings_dir(root: Path) -> Path:
-    raw = os.environ.get("SWARMSCOPE_FINDINGS_DIR")
-    if raw:
-        p = Path(raw).expanduser()
-        if p.is_absolute():
-            return p
-        return (Path.cwd() / p) if (Path.cwd() / p).exists() else root / p
-    return root / "findings"
 
 
 def read_input() -> dict:
@@ -71,14 +62,16 @@ def explain(result: dict) -> str:
         lines.append(f"- line {e.get('line')}: corrupt ({e.get('error')})")
     hidden = max(0, len(problems) - MAX_LISTED) + max(0, len(result.get("parse_errors") or []) - MAX_LISTED)
     if hidden:
-        lines.append(f"- ... and {hidden} more (run `swarm-mcp check-findings` for the full list)")
+        lines.append(f"- ... and {hidden} more (run `swarm-mcp info` for the list)")
     lines += [
         "How to fix:",
-        "  - For a finding with bad evidence ids: re-run findings_record with ids copied exactly from "
-        "tool results (e.g. the evidence_id field of search results; drop any id you cannot find), "
-        "then delete the old line from findings.jsonl.",
+        (
+            "  - For a finding with bad evidence ids: re-run findings_record with ids copied exactly from "
+            "tool results (e.g. the evidence_id field of search results; drop any id you cannot find), "
+            "then delete the old line from findings.jsonl."
+        ),
         "  - For a corrupt line: fix it so it is one JSON object per line, or remove it.",
-        "  - Verify with: uv run --directory swarm_mcp swarm-mcp check-findings",
+        "  - Verify with: uv run --directory swarm_mcp swarm-mcp info",
     ]
     return "\n".join(lines)
 
@@ -86,16 +79,16 @@ def explain(result: dict) -> str:
 def main() -> int:
     data = read_input()
     root = project_root()
-    ffile = findings_dir(root) / "findings.jsonl"
     loop_guard = bool(data.get("stop_hook_active"))
-
-    if not ffile.exists():
-        return 0
 
     from swarm_mcp.config import Config
     from swarm_mcp.scope.findings import check_findings
 
-    db_path = Config.from_env(cwd=root).store_path
+    config = Config.load(cwd=root)
+    ffile = config.findings_path / "findings.jsonl"
+    if not ffile.exists():
+        return 0
+    db_path = config.store_path
     if loop_guard:  # Claude is already continuing because of an earlier block: never block again
         try:
             result = check_findings(ffile, db_path)

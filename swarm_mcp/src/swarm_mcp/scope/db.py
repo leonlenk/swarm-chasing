@@ -1,12 +1,12 @@
 """DuckDB connection and query helpers for the SwarmScope store.
 
-Path: ``SWARMSCOPE_DB`` or ``<SWARM_DATA_DIR>/swarmscope.duckdb`` (default
+Path: ``[data] db`` in swarm.toml, or ``<data dir>/swarmscope.duckdb`` (default
 ``data/swarmscope.duckdb``); see ``Config.store_path``.
 
 Connections are short-lived on purpose. DuckDB lets one process hold a
 read-write handle *or* many processes hold read-only handles, so the MCP
 server opens a connection per tool call (read-only unless it writes a finding)
-and closes it straight away. That keeps the CLI (ingest/render/check-findings)
+and closes it straight away. That keeps the CLI (add/info/render/export)
 and the Stop hook usable while the server is running. Lock conflicts are
 retried briefly.
 """
@@ -34,7 +34,7 @@ class StoreMissing(ToolInputError):
 
 
 def missing_store_hint(path: Path) -> str:
-    return f"SwarmScope store not found at {path}. Build it with: swarm-mcp ingest ai_village data/ai-village"
+    return f"SwarmScope store not found at {path}. Build it with: swarm-mcp add data/ai-village"
 
 
 def _is_lock_error(e: Exception) -> bool:
