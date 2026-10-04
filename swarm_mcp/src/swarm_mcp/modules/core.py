@@ -1,4 +1,4 @@
-"""Server introspection (modules, config) and shared retrieval of any event by its event_id."""
+"""Server overview (modules, sources, findings health, config) and retrieval of any record by its id."""
 
 from __future__ import annotations
 
@@ -6,107 +6,73 @@ from typing import Annotated, Any
 
 from pydantic import Field
 
-from swarm_mcp import __version__
-from swarm_mcp.events import EventNotFound
+from swarm_mcp.info import server_info
 from swarm_mcp.toolkit import ToolInputError
 
 NAME = "core"
 DESCRIPTION = (
-    "Server introspection (loaded/skipped modules, config) and shared retrieval: core_get_event expands any "
-    "event_id returned by another tool into the original record plus its surrounding context."
+    "Server overview (core_info: modules, sources with counts and date ranges, findings health, config) and "
+    "retrieval (core_get: any '<source>:<kind>:<id>' id, or a batch, with optional surrounding context)."
 )
+MAX_BATCH = 50
 
 
 def register(mcp, ctx) -> None:
     @ctx.tool()
-    def list_modules(
-        include_skipped: Annotated[
-            bool, Field(description="Also list modules that were skipped, with reasons.")
-        ] = True,
-    ) -> dict[str, Any]:
-        """List the server's modules: loaded ones with their tool names, skipped ones with the reason they did not load."""
-        reg = ctx.registry
-        out: dict[str, Any] = {"loaded": [r.as_dict() for r in reg.loaded]}
-        if include_skipped:
-            out["skipped"] = [r.as_dict() for r in reg.skipped]
-        if reg.notes:
-            out["notes"] = reg.notes
-        return out
+    def info() -> dict[str, Any]:
+        """Start here. What this server has loaded and what is in it:
+        - modules: loaded ones with their tools/prompts, skipped ones with the reason;
+        - sources: every ingested source with its adapter, row counts per table, message/action date ranges,
+          channels, action kinds, the id kinds present (with id format) and ingest_meta.notes (its blind spots);
+        - findings: whether every recorded finding still cites ids that resolve;
+        - config: data dir, store, findings/sweeps dirs, limits, privacy and LLM settings (no secrets)."""
+        return server_info(ctx.config, ctx.registry)
+
+    def one(record_id: str, before: int, after: int, max_chars: int) -> dict[str, Any]:
+        api = getattr(ctx.registry, "store_api", None)
+        if not api:
+            raise ToolInputError(
+                f"Cannot resolve {record_id!r}: the SwarmScope store is not loaded (see core_info); "
+                "add a dataset with `swarm-mcp add <path>`."
+            )
+        return api["get_record"](record_id, max_chars=max_chars, before=before, after=after)
 
     @ctx.tool()
-    def server_info() -> dict[str, Any]:
-        """Server version, resolved data directory, effective configuration and cache status."""
-        reg = ctx.registry
-        return {
-            "name": "swarm",
-            "version": __version__,
-            "data_dir": str(ctx.config.data_dir),
-            "config": ctx.config.public(),
-            "modules": {"loaded": [r.name for r in reg.loaded], "skipped": [r.name for r in reg.skipped]},
-            "cache": ctx.cache.stats(),
-        }
-
-    # ------------------------------------------------------------------ shared retrieval
-
-    def resolve(event_id: str, before: int, after: int, max_chars: int) -> dict[str, Any]:
-        eid, src = ctx.registry.events.lookup(event_id)
-        try:
-            return src.resolve(eid.kind, eid.local_id, before=before, after=after, max_chars=max_chars)
-        except EventNotFound:
-            raise ToolInputError(f"No {eid.kind!r} record with id {eid.local_id!r} in source {eid.source!r}.") from None
-
-    @ctx.tool()
-    def event_sources() -> dict[str, Any]:
-        """List the event sources loaded on this server: the kinds of record each can return and the event_id
-        format. Every event_id is '<source>:<kind>:<id>' and can be expanded with core_get_event."""
-        srcs = [s.as_dict() for s in sorted(ctx.registry.events.by_name.values(), key=lambda s: s.name)]
-        return {"id_format": "<source>:<kind>:<id>", "sources": srcs, "count": len(srcs)}
-
-    @ctx.tool()
-    def get_event(
-        event_id: Annotated[
-            str, Field(description="An event_id exactly as returned by another tool, e.g. 'village:chat:<uuid>'.")
+    def get(
+        ids: Annotated[
+            str | list[str],
+            Field(
+                description="One id, or a list of up to 50, exactly as returned by another tool "
+                "(e.g. 'village:msg:<uuid>', 'village:agent:<uuid>', 'rpg-game:period:pr-109')."
+            ),
         ],
         before: Annotated[
-            int, Field(description="How many neighbouring records before it to include.", ge=0, le=50)
-        ] = 3,
-        after: Annotated[int, Field(description="How many neighbouring records after it to include.", ge=0, le=50)] = 3,
+            int,
+            Field(description="Neighbouring records before each one (e.g. earlier messages in the room).", ge=0, le=50),
+        ] = 0,
+        after: Annotated[int, Field(description="Neighbouring records after each one.", ge=0, le=50)] = 0,
         max_chars: Annotated[
             int | None,
-            Field(description="Truncate each record's text to this many characters (default 1000).", ge=80, le=50000),
+            Field(description="Truncate each record's text to this many characters (default 500).", ge=80, le=50000),
         ] = None,
     ) -> dict[str, Any]:
-        """Retrieve the original record for any event_id, plus surrounding context (e.g. the previous and next
-        messages in the same room). Works for every source listed by core_event_sources. `context` says what
-        the neighbouring records are."""
-        out = resolve(event_id, before, after, max_chars or ctx.config.max_text)
-        out.setdefault("before", [])
-        out.setdefault("after", [])
-        notes = list(out.pop("notes", []) or [])
-        cut = sum(1 for r in [out["event"], *out["before"], *out["after"]] if r.get("truncated"))
-        if cut:
-            notes.append(f"{cut} record(s) truncated; raise max_chars for full text")
-        out["notes"] = notes
-        return out
-
-    @ctx.tool()
-    def get_events(
-        event_ids: Annotated[list[str], Field(description="Up to 50 event_ids, exactly as returned by other tools.")],
-        max_chars: Annotated[
-            int | None,
-            Field(description="Truncate each record's text to this many characters (default 1000).", ge=80, le=50000),
-        ] = None,
-    ) -> dict[str, Any]:
-        """Retrieve several records by event_id in one call, without surrounding context. Ids that cannot be
-        resolved are listed under `errors` instead of failing the whole call."""
-        if not event_ids:
-            raise ToolInputError("event_ids must not be empty")
-        if len(event_ids) > 50:
-            raise ToolInputError(f"At most 50 event_ids per call (got {len(event_ids)}); split the request.")
-        events, errors = [], []
-        for e in event_ids:
+        """Resolve any id to its full record: a message (time, channel, author, named recipients, content), an
+        action (kind, agent, content), an agent (aliases, counts), a period (label, start/end, member records) or
+        an artifact (a file or page, with the records that created, changed or mentioned it). Messages and
+        actions also list the artifacts they touched; `before`/`after` add neighbouring messages in the same
+        channel or the same agent's adjacent actions (under `neighbors`). One id returns that record; a list
+        returns {results: [...], errors: [...]}, where unresolvable ids are listed instead of failing the call."""
+        cap = max_chars or ctx.config.max_text
+        if isinstance(ids, str):
+            return one(ids, before, after, cap)
+        if not ids:
+            raise ToolInputError("ids must not be empty")
+        if len(ids) > MAX_BATCH:
+            raise ToolInputError(f"At most {MAX_BATCH} ids per call (got {len(ids)}); split the request.")
+        results, errors = [], []
+        for e in ids:
             try:
-                events.append(resolve(e, 0, 0, max_chars or ctx.config.max_text)["event"])
+                results.append(one(e, before, after, cap))
             except ToolInputError as err:
-                errors.append({"event_id": e, "error": str(err)})
-        return {"returned": len(events), "events": events, "errors": errors}
+                errors.append({"id": e, "error": str(err)})
+        return {"requested": len(ids), "returned": len(results), "results": results, "errors": errors}

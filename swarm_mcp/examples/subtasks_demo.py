@@ -1,9 +1,9 @@
 """End-to-end demo over the real MCP protocol: launch the server on stdio (as Claude Code does) and follow
 one lead from a chat search to a subtask, its handoffs, and the commits behind them.
 
+    uv run --directory swarm_mcp swarm-mcp add data/ai-village
+    uv run --directory swarm_mcp swarm-mcp add data/ai-village/repos/rpg-game.git
     uv run --directory swarm_mcp python examples/subtasks_demo.py [query]
-
-Needs the AI Village dataset and the rpg-game repo under SWARM_DATA_DIR (default: <repo>/data).
 """
 
 from __future__ import annotations
@@ -47,17 +47,16 @@ async def main() -> None:
         tools = await c.list_tools()
         show("tools", sorted(t.name for t in tools.tools))
 
-        hits = await call("village_search_chat", query=QUERY, limit=1)
+        hits = await call("scope_search", query=QUERY, source="village", limit=1)
         hit = hits["results"][0]
-        show("search hit", {k: hit[k] for k in ("event_id", "time", "actor", "snippet")})
+        show("search hit", hit)
 
-        ctx = await call("core_get_event", event_id=hit["event_id"], before=1, after=1, max_chars=160)
-        show(
-            "context",
-            [f"{r['time']} {r['actor']}: {r['text'][:110]}" for r in ctx["before"] + [ctx["event"]] + ctx["after"]],
-        )
+        rec = await call("core_get", ids=hit["evidence_id"], before=1, after=1, max_chars=160)
+        around = rec["neighbors"]["before"] + [{"ts": rec["ts"], "author": rec["author"], "snippet": rec["content"]}]
+        around += rec["neighbors"]["after"]
+        show("context", [f"{r['ts']} {r['author']}: {r['snippet']['content'][:110]}" for r in around])
 
-        loc = await call("subtasks_locate", event_id=hit["event_id"])
+        loc = await call("subtasks_locate", event_id=hit["evidence_id"])
         sub = loc["matches"][0]["subtask"]
         show("its subtask", sub)
 
@@ -74,8 +73,11 @@ async def main() -> None:
         show("unresolved", got["unresolved"])
 
         ev = got["handoffs"][0]["evidence"][0]
-        commit = await call("core_get_event", event_id=ev, before=0, after=0, max_chars=400)
-        show("evidence commit", commit["event"]["text"])
+        commit = await call("core_get", ids=ev, max_chars=400)
+        show(
+            "evidence commit",
+            {"agent": commit["agent"], "content": commit["content"]["content"], "artifacts": commit.get("artifacts")},
+        )
 
         pair = await call("subtasks_trace_pair", corpus="rpg-game", actor_a="Opus 4.5", actor_b="GPT-5.2", limit=3)
         show("pair summary", pair["summary"])

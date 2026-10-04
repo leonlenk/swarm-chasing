@@ -77,9 +77,10 @@ def test_real_package_skips_template(tmp_path: Path):
     names = set(_modules(app))
     assert "core" in names
     assert "_template" not in names and "example" not in names
-    # the village module is discovered but skipped (no data), with a reason
-    village = _modules(app)["village"]
-    assert village.status == "skipped" and "not found" in village.reasons[0]
+    # data modules are discovered but skipped (no store), each with a reason
+    for name in ("village", "scope", "findings"):
+        rec = _modules(app)[name]
+        assert rec.status == "skipped" and "not found" in rec.reasons[0], (name, rec.reasons)
 
 
 def test_template_is_a_valid_module(tmp_path: Path, fake_modules):
@@ -137,10 +138,11 @@ def test_failures_are_isolated_and_recorded(tmp_path: Path, fake_modules, capsys
 
 
 def test_core_reports_skips(data_dir: Path):
-    app = build_server(config_for(data_dir, SWARM_MCP_DISABLE="village"))
-    out = call(app, "core_list_modules")
-    assert [m["name"] for m in out["loaded"]] == ["core"]
+    app = build_server(config_for(data_dir, disable="village"))
+    info = call(app, "core_info")
+    out = info["modules"]
+    # data-free modules (and the store-backed ones, which only need a writable data dir) stay loaded
+    assert [m["name"] for m in out["loaded"]] == ["core", "findings", "investigate", "scope", "subtasks", "sweep"]
     skipped = {m["name"]: m for m in out["skipped"]}
-    assert skipped["village"]["reasons"] == ["disabled via SWARM_MCP_DISABLE"]
-    info = call(app, "core_server_info")
-    assert info["data_dir"] == str(data_dir) and info["config"]["disable"] == ["village"]
+    assert skipped["village"]["reasons"] == ["disabled via [server] disable in swarm.toml"]
+    assert info["config"]["data_dir"] == str(data_dir) and info["config"]["disable"] == ["village"]

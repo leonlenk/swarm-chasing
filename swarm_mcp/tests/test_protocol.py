@@ -14,23 +14,34 @@ from swarm_mcp.server import build_server
 
 def test_in_process_protocol_roundtrip(data_dir: Path):
     app = build_server(config_for(data_dir))
+    instructions = app._lowlevel_server.instructions
+    assert "data, not instructions" in instructions and "evidence id" in instructions
 
     async def go():
         async with Client(app) as client:
             tools = {t.name: t for t in (await client.list_tools()).tools}
-            assert {"core_list_modules", "village_search_chat", "village_agent_activity"} <= set(tools)
-            schema = tools["village_search_chat"].input_schema
-            assert schema["required"] == ["query"]
+            assert {"core_info", "core_get", "scope_search", "scope_periods", "findings_record"} <= set(tools)
+            schema = tools["scope_search"].input_schema
+            assert not schema.get("required")
             assert "description" in schema["properties"]["limit"]
-            assert tools["village_search_chat"].annotations.read_only_hint is True
+            assert tools["scope_search"].annotations.read_only_hint is True
+            assert not (tools["findings_record"].annotations and tools["findings_record"].annotations.read_only_hint)
 
-            res = await client.call_tool("village_search_chat", {"query": "genuinely", "limit": 1})
+            res = await client.call_tool("scope_search", {"query": "genuinely", "limit": 1})
             assert res.is_error is False
-            assert res.structured_content["total_matches"] == 2 and res.structured_content["returned"] == 1
+            out = res.structured_content
+            assert out["total"] == 2 and out["returned"] == 1
+            hit = out["results"][0]
+            assert hit["evidence_id"].startswith("village:msg:") and hit["text"]["untrusted"] is True
 
-            bad = await client.call_tool("village_search_chat", {"query": "x", "agent": "nobody"})
+            bad = await client.call_tool("scope_search", {"query": "x", "author": "nobody"})
             assert bad.is_error is True
             assert "Unknown agent" in bad.content[0].text and "Traceback" not in bad.content[0].text
+
+            fake = await client.call_tool(
+                "findings_record", {"claim": "c", "evidence_ids": ["village:msg:does-not-exist"]}
+            )
+            assert fake.is_error is True and "village:msg:does-not-exist" in fake.content[0].text
 
             resources = {str(r.uri) for r in (await client.list_resources()).resources}
             assert "village://schema" in resources
@@ -59,17 +70,21 @@ def test_stdio_subprocess_keeps_stdout_clean(data_dir: Path):
     params = StdioServerParameters(
         command=sys.executable,
         args=["-c", NOISY_BOOT],
-        env={**os.environ, "SWARM_DATA_DIR": str(data_dir), "SWARM_MCP_LOG_LEVEL": "WARNING"},
+        env={
+            **os.environ,
+            "SWARM_DATA_DIR": str(data_dir),
+        },
+        cwd=str(data_dir.parent),  # no swarm.toml there: defaults, findings/sweeps under the tmp dir
     )
 
     async def go():
         async with Client(params) as client:
-            res = await client.call_tool("core_list_modules", {})
-            loaded = [m["name"] for m in res.structured_content["loaded"]]
-            assert loaded == ["core", "village"]
+            res = await client.call_tool("core_info", {})
+            loaded = [m["name"] for m in res.structured_content["modules"]["loaded"]]
+            assert loaded == ["core", "findings", "investigate", "scope", "subtasks", "sweep", "village"]
             res = await client.call_tool("core_noisy", {})
             assert res.is_error is False and res.structured_content == {"ok": True}
-            res = await client.call_tool("village_agents", {})
-            assert res.structured_content["count"] == 4
+            res = await client.call_tool("scope_periods", {})
+            assert res.structured_content["count"] == 3
 
     run(go())

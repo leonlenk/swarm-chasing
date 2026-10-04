@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/swarm_mcp/src/swarm_mcp/modules/live/launch.py\" 2>/dev/null || python \"${CLAUDE_PLUGIN_ROOT}/swarm_mcp/src/swarm_mcp/modules/live/launch.py\" 2>/dev/null || py \"${CLAUDE_PLUGIN_ROOT}/swarm_mcp/src/swarm_mcp/modules/live/launch.py\"",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/swarm_mcp/src/swarm_mcp/live/launch.py\" 2>/dev/null || python \"${CLAUDE_PLUGIN_ROOT}/swarm_mcp/src/swarm_mcp/live/launch.py\" 2>/dev/null || py \"${CLAUDE_PLUGIN_ROOT}/swarm_mcp/src/swarm_mcp/live/launch.py\"",
             "timeout": 20
           }
         ]

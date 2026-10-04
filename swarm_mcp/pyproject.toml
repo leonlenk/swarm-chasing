@@ -1,18 +1,21 @@
 [project]
 name = "swarm-mcp"
 version = "0.1.0"
-description = "Modular MCP server for the swarm-understanding toolkit (AI Village and friends)."
+description = "Modular MCP server for the swarm-understanding toolkit (AI Village and friends), with the SwarmScope evidence store."
 requires-python = ">=3.11"
 dependencies = [
+    "anthropic>=1.11.0",
     "mcp>=2.3,<3",
+    "duckdb>=1.1",
     "networkx>=3.6.1",
     "numpy>=2.4.6",
+    "pydantic>=2.7",
     "scipy>=1.17.1",
 ]
 
 [project.scripts]
-swarm-mcp = "swarm_mcp.server:main"
-swarm-live = "swarm_mcp.modules.live.cli:main"
+swarm-mcp = "swarm_mcp.cli:main"
+swarm-live = "swarm_mcp.live.cli:main"
 
 [build-system]
 requires = ["hatchling"]
