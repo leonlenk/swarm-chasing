@@ -7,8 +7,10 @@ Usage:
 With no inputs it reads out/sprint_idea/traces/ and writes out/sprint_idea/idea_spread.html
 (both relative to this script). A directory is read through its index.json when present,
 otherwise every *.json in it. An index.json given as a file is expanded the same way.
-Files that are not valid JSON, or fail the basic v0 checks below, are reported and skipped;
-the page runs the full field-by-field check again in the browser.
+Files that are not valid UTF-8 JSON, or that the page would reject (check() below mirrors the page's
+errors), are reported with the reason and skipped; the rest of the page is still built. Each kept trace is also
+run through the swarmtrace validator and any strict-v0 problems are printed as notes: the page reads such traces
+leniently (missing fields become warnings) and runs its full field-by-field check again in the browser.
 
 The page is self-contained: the shared paper style, PaperKit (SVG/PNG export) and d3 are
 inlined by pagekit.py, so it opens offline from file://.
@@ -19,20 +21,24 @@ defaults to 2025-04-02, America/Los_Angeles: the AI Village dataset README and S
 "day 1 = 2025-04-02", and every daily summary's day number equals its Pacific date minus
 2025-04-02, plus one. For any other input the day axis is off unless --day-one is given.
 
-Email addresses in free text (snippets, quotes, evidence, labels) are replaced with [email]
-unless their domain is passed with --keep-email-domain; --keep-emails turns this off.
+Free text (snippets, quotes, evidence, labels, statement, source) is scrubbed with swarmtrace's scrub, the
+same engine the exporter uses: email addresses become [email] and phone-number-like strings [phone]. Addresses at
+the AI Village agents' own mailbox domain (swarmtrace.adapters.aivillage.SCRUB_ALLOW_DOMAINS), which the export
+keeps on purpose, and at any --keep-email-domain are kept; --keep-emails turns scrubbing off.
 """
 from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pagekit
+from swarmtrace import validate as strict_problems
+from swarmtrace.adapters.aivillage import SCRUB_ALLOW_DOMAINS
+from swarmtrace.format import scrub
 
 HERE = Path(__file__).resolve().parent
 TEMPLATE = HERE / "trace_viz_template.html"
@@ -69,41 +75,46 @@ def expand(paths: list[Path]) -> list[Path]:
     return uniq
 
 
+def load_json(path: Path):
+    """Parse a JSON file; NaN/Infinity are rejected (they would break the page's JSON.parse)."""
+    def bad_constant(c):
+        raise ValueError(f"{c} is not valid JSON")
+    return json.loads(path.read_text(encoding="utf-8"), parse_constant=bad_constant)
+
+
 def from_index(idx: Path) -> list[Path]:
     try:
-        data = json.loads(idx.read_text())
-    except (OSError, json.JSONDecodeError) as e:
+        data = load_json(idx)
+    except (OSError, ValueError, RecursionError) as e:   # ValueError covers bad JSON and bad UTF-8
         print(f"skip: {idx} is not readable JSON ({e})", file=sys.stderr)
         return []
+    entries = data.get("traces") if isinstance(data, dict) else None
+    if not isinstance(entries, list):
+        print(f"skip: {idx} is not an index (expected an object with a 'traces' list)", file=sys.stderr)
+        return []
     files = []
-    for t in data.get("traces", []):
-        f = t.get("file") or (f"{t['id']}.json" if t.get("id") else None)
-        if not f:
-            print(f"skip: an entry in {idx} has neither file nor id", file=sys.stderr)
+    for i, t in enumerate(entries):
+        t = t if isinstance(t, dict) else {}
+        f = t.get("file") or (f"{t['id']}.json" if isinstance(t.get("id"), str) and t["id"] else None)
+        if not isinstance(f, str) or not f:
+            print(f"skip: {idx} traces[{i}] has no file name (expected an object with 'file' or 'id')", file=sys.stderr)
             continue
         files.append(idx.parent / f)
     return files
 
 
-EMAIL = re.compile(r"[\w.+-]+@([\w-]+(?:\.[\w-]+)+)")
-
-
 def redact(trace: dict, keep: set[str]) -> int:
-    """Replace email addresses in free-text fields, in place. Returns the number replaced."""
+    """Scrub emails (outside `keep` domains) and phone numbers from free-text fields, in place, with swarmtrace's
+    scrub. Returns the number of fields changed."""
     n = 0
 
     def sub(text):
         nonlocal n
         if not isinstance(text, str):
             return text
-
-        def r(m):
-            nonlocal n
-            if m.group(1).lower() in keep:
-                return m.group(0)
-            n += 1
-            return "[email]"
-        return EMAIL.sub(r, text)
+        out = scrub(text, tuple(keep))
+        n += out != text
+        return out
 
     for key, fields in (("events", ("snippet",)), ("quotes", ("text", "note")), ("edges", ("evidence",)), ("annotations", ("label",))):
         for item in trace.get(key) or []:
@@ -118,22 +129,41 @@ def redact(trace: dict, keep: set[str]) -> int:
 
 
 def check(trace, name: str) -> list[str]:
-    """Basic v0 checks; the page does the full validation."""
+    """Problems that make the page reject a trace (the same rules as its in-browser check, which reports softer
+    issues as warnings). Safe on any JSON value: a list or object where text is expected is an error, not a crash."""
     if not isinstance(trace, dict):
         return [f"{name}: not a JSON object"]
+    if isinstance(trace.get("traces"), list) and "events" not in trace:
+        return [f"{name}: is an index file, not a trace"]
     errs = []
-    if trace.get("version", 0) != 0:
-        errs.append(f"{name}: version is {trace.get('version')!r}; expected 0")
+    v = trace.get("version")
+    if v is not None and (isinstance(v, bool) or v != 0):
+        errs.append(f"{name}: version is {v!r}; expected 0")
     if not isinstance(trace.get("id"), str) or not trace["id"].strip():
         errs.append(f"{name}: id must be a non-empty string")
-    if trace.get("kind") not in KINDS:
+    if not isinstance(trace.get("kind"), str) or trace["kind"] not in KINDS:
         errs.append(f"{name}: kind {trace.get('kind')!r} is not one of belief, norm, term")
+    for k in ("title", "statement", "source"):
+        if trace.get(k) is not None and not isinstance(trace[k], str):
+            errs.append(f"{name}: {k} must be text")
+    lists = {}
     for k in LISTS:
-        if k in trace and not isinstance(trace[k], list):
+        x = trace.get(k)
+        if x is not None and not isinstance(x, list):
             errs.append(f"{name}: {k} must be a list")
-    names = {a.get("name") for a in trace.get("agents", []) if isinstance(a, dict)}
-    for i, e in enumerate(trace.get("events", []) or []):
-        if isinstance(e, dict) and e.get("agent") not in names:
+        lists[k] = x if isinstance(x, list) else []
+        bad = next((i for i, item in enumerate(lists[k]) if not isinstance(item, dict)), None)
+        if bad is not None:
+            errs.append(f"{name}: {k}[{bad}] must be an object")
+    names = set()
+    for i, a in enumerate(lists["agents"]):
+        if isinstance(a, dict):
+            if not isinstance(a.get("name"), str) or not a["name"].strip():
+                errs.append(f"{name}: agents[{i}].name must be a non-empty string")
+                break
+            names.add(a["name"])
+    for i, e in enumerate(lists["events"]):
+        if isinstance(e, dict) and not (isinstance(e.get("agent"), str) and e["agent"] in names):
             errs.append(f"{name}: events[{i}].agent {e.get('agent')!r} is not in agents")
             break
     return errs
@@ -155,8 +185,9 @@ def main(argv=None) -> int:
     ap.add_argument("inputs", nargs="*", type=Path, help=f"trace files, index.json files or directories (default: {DEFAULT_IN})")
     ap.add_argument("-o", "--out", type=Path, default=DEFAULT_OUT, help=f"output HTML (default: {DEFAULT_OUT})")
     ap.add_argument("--keep-email-domain", action="append", default=[], metavar="DOMAIN",
-                    help="leave addresses at this domain unredacted (repeatable), e.g. agent mailboxes")
-    ap.add_argument("--keep-emails", action="store_true", help="do not redact email addresses")
+                    help="also leave addresses at this domain unredacted (repeatable); "
+                         f"{', '.join(SCRUB_ALLOW_DOMAINS)} (the agents' mailboxes) is always kept")
+    ap.add_argument("--keep-emails", action="store_true", help="do not scrub emails or phone numbers")
     ap.add_argument("--schema", type=Path, default=SCHEMA, help="JSON Schema to bundle into the page's format section, if it exists")
     ap.add_argument("--day-one", metavar="YYYY-MM-DD",
                     help="date of Village day 1, so time axes can show 'Day N'; 'off' disables it. Default: "
@@ -166,12 +197,12 @@ def main(argv=None) -> int:
 
     inputs = args.inputs or [DEFAULT_IN]
     files = expand(inputs)
-    traces, failed = [], 0
+    traces, failed, seen_ids = [], 0, {}
     for f in files:
         try:
-            t = json.loads(f.read_text())
-        except (OSError, json.JSONDecodeError) as e:
-            print(f"skip: {f} ({e})", file=sys.stderr)
+            t = load_json(f)
+        except (OSError, ValueError, RecursionError) as e:   # ValueError covers bad JSON and bad UTF-8
+            print(f"skip: {f} is not readable JSON ({e})", file=sys.stderr)
             failed += 1
             continue
         errs = check(t, f.name)
@@ -180,11 +211,22 @@ def main(argv=None) -> int:
                 print("skip: " + m, file=sys.stderr)
             failed += 1
             continue
-        red = 0 if args.keep_emails else redact(t, {d.lower() for d in args.keep_email_domain})
+        if t["id"] in seen_ids:
+            print(f"skip: {f.name}: trace id {t['id']!r} was already loaded from {seen_ids[t['id']]}", file=sys.stderr)
+            failed += 1
+            continue
+        seen_ids[t["id"]] = f
+        strict = strict_problems(t, max_bytes=None)
+        if strict:
+            print(f"note: {f.name} is not strict v0 ({len(strict)} problems, e.g. {strict[0]}); "
+                  "the page reads it leniently", file=sys.stderr)
+        red = 0 if args.keep_emails else redact(t, {d.lower() for d in [*SCRUB_ALLOW_DOMAINS, *args.keep_email_domain]})
         traces.append(t)
-        print(f"ok:   {f.name}  {t.get('kind'):6} {len(t.get('agents', [])):3d} agents  {len(t.get('events', [])):5d} events  {t.get('title', t['id'])}{f'  ({red} emails redacted)' if red else ''}")
+        print(f"ok:   {f.name}  {t.get('kind'):6} {len(t.get('agents', [])):3d} agents  {len(t.get('events', [])):5d} events  {t.get('title', t['id'])}{f'  ({red} fields scrubbed)' if red else ''}")
     if not traces:
-        print("No valid traces found. Pass trace files or a directory, e.g. out/sprint_idea/mock_trace.json", file=sys.stderr)
+        print(f"No valid traces found in {', '.join(map(str, inputs))}. Export the AI Village traces first with "
+              "`python village_tools/trace_export.py` (writes out/sprint_idea/traces/), or pass trace files, "
+              "index.json files or directories.", file=sys.stderr)
         return 1
 
     schema = None

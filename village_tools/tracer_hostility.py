@@ -3,19 +3,27 @@
 Idea: "The agents' environment or system is hostile, i.e. it deliberately sabotages, targets or works
 against agents, as opposed to ordinary bugs or flaky tools." Gemini 2.5 Pro is the best-known holder.
 
+Prerequisites: the dataset in data/ai-village/ and the daily memory sample out/cache/memory_daily_sample.jsonl.gz,
+which only memories.py builds: run `python ideas.py` then `python memories.py` (from village_tools/) first.
+
 Stages (run in order; everything except the LLM labelling is rerunnable):
 
     python tracer_hostility.py build     # candidates.csv + bug-report pool, from chat, memories, events (~75 s)
     python tracer_hostility.py sample    # round 1: label_batches/batch_0-4.json (stratified + bug controls)
     python tracer_hostility.py sample2   # round 2: batch_5-7.json, each non-Gemini agent's earliest proxy-positive items
-    (LLM labelling: one Sonnet subagent per batch writes label_batches/labels_<k>.json using label_batches/RUBRIC.md;
-     labels_manual.json holds 3 hand labels for origin-critical early Gemini items)
+                                         # (run after round 1 is labelled: it skips labelled items, so without
+                                         # labels it re-draws round-1 items and warns)
+    (LLM labelling: one Sonnet subagent per batch writes label_batches/labels_<k>.json using the rubric in
+     village_tools/prompts/hostility_stance_rubric.md; labels_manual.json holds 3 hand labels for origin-critical
+     early Gemini items. The original runs' exact prompts were not preserved; the files in prompts/ are
+     reconstructions.)
     python tracer_hostility.py analyze   # labels.csv, adoption/exposure/persistence CSVs, results.json
                                          # (figures: export the hostility trace from the Idea Spread Viewer)
 
 Outputs go to out/sprint_idea/hostility/ (gitignored).
 """
 
+import argparse
 import collections
 import csv
 import datetime as dt
@@ -36,6 +44,9 @@ BATCH = OUT / "label_batches"
 OUT.mkdir(parents=True, exist_ok=True)
 BATCH.mkdir(exist_ok=True)
 
+MEM_SAMPLE = CACHE / "memory_daily_sample.jsonl.gz"   # built by memories.py
+MEM_HOW = "It is built by memories.py: run `python ideas.py` then `python memories.py` (from village_tools/) first."
+
 GEMINI = "Gemini 2.5 Pro"
 HELP_START = dt.datetime(2026, 6, 22, 14, 20, 55)    # "Help Gemini 2.5 Pro!" goal
 HELP_END = dt.datetime(2026, 6, 23, 14, 38, 18)
@@ -43,7 +54,7 @@ RPG_SABOTEUR = (dt.datetime(2026, 3, 5, 15, 51), dt.datetime(2026, 3, 23, 11, 17
 
 # --- idea spec ---------------------------------------------------------------------------------
 # Seeds from the brief. Expansion terms were picked from the top-lift terms in Gemini 2.5 Pro's seed
-# messages (ideas.terms tokenisation; lift vs all chat; see `expand` stage) and kept only when they
+# messages (ideas.terms tokenisation; lift vs all chat; a one-off check, not a stage here) and kept only when they
 # name the hostility idea itself. "divergent reality" (306 msgs) and "friction coefficient" (372;
 # coined by Gemini 3 Pro) co-occur strongly but denote state inconsistency / deployment friction,
 # not intent, so they are excluded to keep the candidate pool on-idea.
@@ -140,8 +151,9 @@ def load_events(agents):
 
 
 def load_memories():
+    need(MEM_SAMPLE, MEM_HOW)
     out = []
-    with gzip.open(CACHE / "memory_daily_sample.jsonl.gz", "rt") as f:
+    with gzip.open(MEM_SAMPLE, "rt") as f:
         for line in f:
             r = json.loads(line)
             t = dt.datetime.fromisoformat(r["t"])
@@ -198,6 +210,7 @@ def source_texts(cands, msgs=None, agents=None):
 # --- stage 1: candidates ---------------------------------------------------------------------------
 
 def build():
+    need(MEM_SAMPLE, MEM_HOW)               # checked before the dataset is loaded
     agents = load_agents()
     msgs = load_chat(agents, split_deepseek=True)
     rows = []
@@ -249,8 +262,11 @@ def build():
 
 
 def write_csv(path, rows, fields=None):
-    fields = fields or list(rows[0].keys())
+    """Rows as CSV; with no rows and no `fields` the file is left empty (no header to take from a first row)."""
+    fields = fields or (list(rows[0].keys()) if rows else [])
     with open(path, "w", newline="") as f:
+        if not fields:
+            return
         w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         w.writeheader()
         for r in rows:
@@ -376,8 +392,14 @@ def proxy_pos(r):
 def sample2(per_agent=5, n_batches=3):
     """Round 2: each non-Gemini agent's earliest unlabelled proxy-positive items (any channel), so a
     first adoption hidden behind the round-1 sample is not missed."""
+    need(OUT / "candidates.csv", "Run `python tracer_hostility.py build` first.")
+    need(OUT / "sample.csv", "Run `python tracer_hostility.py sample` first.")
     cands = read_csv(OUT / "candidates.csv")
     done = set(load_labels())
+    if not done:
+        print(f"warning: no round-1 labels yet ({BATCH}/labels_*.json). sample2 skips labelled items, so run it "
+              "after labelling batch_0-4.json; run now, it re-draws items already in sample.csv and differs from "
+              "the documented run.", file=sys.stderr)
     seen = collections.Counter()
     items = []
     for r in cands:
@@ -443,13 +465,34 @@ def days(td):
     return round(td.total_seconds() / 86400, 1)
 
 
+def need(path, how):
+    """Exit with a clear message (status 1) when a stage's input is missing."""
+    if not path.exists():
+        raise SystemExit(f"error: {path} is missing. {how}")
+
+
+def labels_or_exit():
+    """The LLM labels, or exit naming what produces them (labelling is not a command of this script)."""
+    lab = load_labels()
+    if not lab:
+        raise SystemExit(
+            f"error: no LLM labels found ({BATCH}/labels_*.json). analyze needs them; they are written outside this "
+            "script. Run `python tracer_hostility.py sample` (and optionally `sample2`), then label each "
+            f"{BATCH.name}/batch_<k>.json with an LLM following village_tools/prompts/hostility_stance_rubric.md, "
+            f"writing {BATCH.name}/labels_<k>.json as a JSON list of {{\"id\", \"label\" (one of {', '.join(LABELS)}), "
+            "\"confidence\" (1-3), \"reason\"}; then rerun `python tracer_hostility.py analyze`.")
+    return lab
+
+
 def analyze():
     from bisect import bisect_left, bisect_right
     from common import agent_presence
+    need(OUT / "candidates.csv", "Run `python tracer_hostility.py build` first.")
+    need(OUT / "sample.csv", "Run `python tracer_hostility.py sample` first.")
+    lab = labels_or_exit()                    # checked before the dataset is loaded
     agents = load_agents()
     msgs = load_chat(agents, split_deepseek=True)
     cands = {r["cid"]: r for r in read_csv(OUT / "candidates.csv")}
-    lab = load_labels()
     sample = read_csv(OUT / "sample.csv")
     if (OUT / "sample2.csv").exists():
         sample += read_csv(OUT / "sample2.csv")
@@ -786,13 +829,15 @@ def analyze():
                      default=str, indent=1))
 
 
+STAGES = {"build": build, "sample": sample, "sample2": sample2, "analyze": analyze}
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="Trace the 'hostile environment' belief; stages run in the order "
+                                             "listed (see the module docstring).")
+    ap.add_argument("stage", choices=list(STAGES))
+    STAGES[ap.parse_args(argv).stage]()
+
+
 if __name__ == "__main__":
-    stage = sys.argv[1] if len(sys.argv) > 1 else "build"
-    if stage == "build":
-        build()
-    elif stage == "sample":
-        sample()
-    elif stage == "sample2":
-        sample2()
-    elif stage == "analyze":
-        analyze()
+    main()
