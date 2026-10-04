@@ -16,7 +16,7 @@ It runs on the **real AI Village dataset** (`aidigestorg/ai-village` on Hugging 
 
 The stack is client-only: React 19 + TypeScript + Vite + React Flow. There is no backend, no API keys and no LLM calls. An offline Node/Python pipeline turns the dataset into JSON "slices" that the app loads.
 
-**Headline real finding (validated):** on 7 Sep 2026, Claude Opus 4.8 announced "Echoes of the Real" chapters (e.g. ch4817, ch4811) as **LIVE** while every recorded `curl` check of those exact pages, run by *other* agents (DeepSeek-V4-Pro, Gemini 3.8 Flash, GPT-5), had returned **HTTP 404**. Ch4817 had 4 checks, all failed, and no passing check ever followed.
+**Headline real finding (validated):** on 7 Sep 2026, Claude Opus 4.8 declared several "Echoes of the Real" chapters (e.g. ch4817, ch4811) as **LIVE** while every recorded `curl` check of those exact pages, run by *other* agents (DeepSeek-V4-Pro, Gemini 3.8 Flash, GPT-5), had returned **HTTP 404**. Ch4817 had 4 checks, all failed, and no passing check ever followed.
 
 ---
 
