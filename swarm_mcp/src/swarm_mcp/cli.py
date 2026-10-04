@@ -368,7 +368,13 @@ def _draft(args: argparse.Namespace, path: Path, source: str, mappings_dir: Path
 RenderView = tuple[str, Callable[[argparse.ArgumentParser], None], Callable[[argparse.Namespace, Config], Any]]
 
 
+def _window_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--since", help="inclusive start, ISO date/datetime (UTC)")
+    p.add_argument("--until", help="exclusive end, ISO date/datetime (UTC); a bare date includes that day")
+
+
 def _timeline_args(p: argparse.ArgumentParser) -> None:
+    _window_args(p)
     p.add_argument("--top", type=int, default=12, help="number of agents (by message count) to show")
     p.add_argument("--channel", help="only this channel (e.g. general)")
     p.add_argument("--snippet-chars", type=int, default=160, help="hover snippet length (masked)")
@@ -404,6 +410,9 @@ def _subtasks_args(p: argparse.ArgumentParser) -> None:
         "--corpus", help="source to infer subtasks for (defaults to --source; required if the store has several)"
     )
     p.add_argument("--title-chars", type=int, default=140, help="unit title length (masked)")
+    # subtasks are inferred over the whole corpus: a time window is refused, not silently ignored
+    p.add_argument("--since", help=argparse.SUPPRESS)
+    p.add_argument("--until", help=argparse.SUPPRESS)
     p.add_argument(
         "--llm-names",
         action="store_true",
@@ -419,6 +428,11 @@ def _subtasks_run(args: argparse.Namespace, config: Config) -> Any:
     from swarm_mcp.scope.viz.subtasks_html import render_subtasks
     from swarm_mcp.toolkit import Scrubber
 
+    if args.since or args.until:
+        raise CommandError(
+            "render subtasks has no --since/--until: subtasks are inferred over the whole corpus "
+            "(the time window applies to render timeline)"
+        )
     try:
         client = llm.get_client(config) if args.llm_names else None  # no key: a clear error before any work
     except llm.LLMUnavailable as e:
@@ -564,8 +578,6 @@ def build_parser() -> argparse.ArgumentParser:
     for name, (help_text, add_args, _run) in RENDER_VIEWS.items():
         v = views.add_parser(name, help=help_text)
         v.add_argument("--out", help=f"output HTML file (default: <data dir>/swarmscope-{name}.html, gitignored)")
-        v.add_argument("--since", help="inclusive start, ISO date/datetime (UTC)")
-        v.add_argument("--until", help="exclusive end, ISO date/datetime (UTC); a bare date includes that day")
         v.add_argument("--source", help="only this source (e.g. village)")
         v.add_argument("--db", help="store path")
         add_args(v)

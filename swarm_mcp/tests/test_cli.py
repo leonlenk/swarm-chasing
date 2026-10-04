@@ -405,3 +405,18 @@ def test_add_wiki_needs_a_db_in_the_given_folder(project: Path, capsys, monkeypa
     assert cli("add", "data/My Wiki", "--adapter", "wiki") == 2  # default source 'My Wiki': not an id part
     assert "pass --name" in capsys.readouterr().err
     assert [c[0] for c in calls] == ["inspect"]
+
+
+def test_render_subtasks_refuses_a_time_window(project: Path, capsys):
+    """Regression: `render subtasks --since/--until` were accepted and silently ignored (the whole corpus was
+    rendered). Subtasks are inferred over the whole corpus, so the window is refused with a clear error."""
+    for flag in ("--since", "--until"):
+        assert cli("render", "subtasks", flag, "2030-01-01", "--out", "data/x.html") == 2
+        assert "render subtasks has no --since/--until" in capsys.readouterr().err
+    assert not (project / "data" / "x.html").exists()
+    with pytest.raises(SystemExit):
+        main(["render", "subtasks", "--help"])
+    assert "--since" not in capsys.readouterr().out
+    with pytest.raises(SystemExit):
+        main(["render", "timeline", "--help"])
+    assert "--since" in capsys.readouterr().out
