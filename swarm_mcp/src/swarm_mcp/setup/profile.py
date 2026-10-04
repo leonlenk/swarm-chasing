@@ -26,6 +26,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from swarm_mcp.fence import safe_name
 from swarm_mcp.setup import readers
 from swarm_mcp.setup.masking import show
 from swarm_mcp.setup.timeparse import detect_format
@@ -900,22 +901,27 @@ def _looks_like(d: dict[str, Any], agents: dict[str, Any] | None) -> str:
 
 
 def summarize(profile: dict[str, Any], top: int = 1) -> str:
-    """Readable text summary of a profile (no example values)."""
-    lines = [f"Profile of {profile['root']} ({len(profile['tables'])} tables, {profile['seconds']}s)"]
+    """Readable text summary of a profile (no example values).
+
+    Names from the dataset (tables, fields, paths, errors) go through ``fence.safe_name``, so a
+    name with a newline or backticks stays on one line and can't escape a markdown fence.
+    """
+    q = safe_name
+    lines = [f"Profile of {q(profile['root'])} ({len(profile['tables'])} tables, {profile['seconds']}s)"]
     ag = profile.get("agents_table")
     if ag:
         lines.append(
-            f"agents table: {ag['table']} (score {ag['score']}): id={ag['id']} display_name={ag['display_name']}"
-            + (f" aliases={','.join(ag['aliases'])}" if ag["aliases"] else "")
+            f"agents table: {q(ag['table'])} (score {ag['score']}): id={q(ag['id'])} display_name={q(ag['display_name'])}"
+            + (f" aliases={','.join(q(a) for a in ag['aliases'])}" if ag["aliases"] else "")
         )
     else:
         lines.append("agents table: none found (agents can be derived from distinct actors)")
     for t in profile["tables"]:
         total = t["rows_total"]
         count = "?" if total is None else (f"{total:,}" if t["rows_total_exact"] else f"~{total:,}")
-        lines.append(f"\n[{t['looks_like']}] {t['table']}  ({t['format']}, {count} rows, {len(t['fields'])} fields)")
+        lines.append(f"\n[{t['looks_like']}] {q(t['table'])}  ({t['format']}, {count} rows, {len(t['fields'])} fields)")
         if t.get("error"):
-            lines.append(f"  error: {t['error']}")
+            lines.append(f"  error: {q(t['error'])}")
         for role in ROLES:
             gs = t["roles"].get(role) or []
             if not gs:
@@ -924,21 +930,21 @@ def summarize(profile: dict[str, Any], top: int = 1) -> str:
             for g in gs[:top]:
                 extra = ""
                 if g.get("format"):
-                    extra = f" [{g['format']}]"
+                    extra = f" [{q(g['format'])}]"
                 if g.get("join"):
-                    extra += f" -> {g['join']['table']}.{g['join']['field']}"
+                    extra += f" -> {q(g['join']['table'])}.{q(g['join']['field'])}"
                 if g.get("target"):
-                    extra += f" -> {g['target']['table']}.{g['target']['field']}"
-                parts.append(f"{g['field']} ({g['score']}){extra}")
+                    extra += f" -> {q(g['target']['table'])}.{q(g['target']['field'])}"
+                parts.append(f"{q(g['field'])} ({g['score']}){extra}")
             lines.append(f"  {role:<11} {'; '.join(parts)}")
     if profile["foreign_keys"]:
         lines.append("\nforeign keys (by value overlap in the samples):")
         for fk in profile["foreign_keys"][:20]:
-            lines.append(f"  {fk['from']} -> {fk['to']}  overlap {fk['overlap']:.0%} score {fk['score']}")
+            lines.append(f"  {q(fk['from'])} -> {q(fk['to'])}  overlap {fk['overlap']:.0%} score {fk['score']}")
     if profile["docs"]:
-        lines.append("\ndocs: " + ", ".join(d["path"] for d in profile["docs"]))
+        lines.append("\ndocs: " + ", ".join(q(d["path"]) for d in profile["docs"]))
     if profile["skipped"]:
-        lines.append("skipped: " + ", ".join(f"{s['path']} ({s['reason']})" for s in profile["skipped"][:10]))
+        lines.append("skipped: " + ", ".join(f"{q(s['path'])} ({q(s['reason'])})" for s in profile["skipped"][:10]))
     return "\n".join(lines)
 
 

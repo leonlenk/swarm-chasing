@@ -50,8 +50,8 @@ def record_row(rec: StandardRecord, source: str) -> tuple[str, dict[str, Any]]:
     if ts is None:
         quality = "missing"
     meta: dict[str, Any] = {"native_id": rec.local_id, **(rec.meta or {})}
-    if rec.actor_type:
-        meta["actor_type"] = rec.actor_type
+    # always stored, so readers never guess "agent" for an unmatched (external:...) or missing actor
+    meta["actor_type"] = rec.actor_type or ("external" if rec.actor else UNKNOWN_ACTOR)
     if rec.type:
         meta.setdefault("type", rec.type)
     if rec.schema_kind == "msg":
@@ -119,7 +119,7 @@ class MappedStoreAdapter:
     def __init__(self, mapped: MappedAdapter, mapping_path: str | Path | None = None):
         self.mapped = mapped
         self.source = mapped.source
-        self.mapping_path = str(mapping_path) if mapping_path else None
+        self.mapping_path = str(Path(mapping_path).resolve()) if mapping_path else None
 
     @classmethod
     def from_file(cls, mapping: str | Path, path: str | Path | None = None) -> "MappedStoreAdapter":

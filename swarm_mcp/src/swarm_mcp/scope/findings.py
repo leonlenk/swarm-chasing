@@ -10,7 +10,8 @@ last line wins when listing.
 
 Strictness. ``record_finding`` refuses a finding unless *every* evidence id
 resolves in the store, and ``check_findings`` (the CLI and the Stop hook)
-reports any line whose ids do not resolve. Both use short-lived read-only
+reports any current finding (last line per id, not rejected or retracted)
+whose ids do not resolve. Both use short-lived read-only
 connections so they work while the MCP server or other readers are running.
 
 This module returns raw record text (``evidence_view(...)["text"]``); callers
@@ -339,19 +340,27 @@ def record_finding(
 # --------------------------------------------------------------------------- checking
 
 
-def check_findings(findings_file: Path, db_path: Path) -> dict[str, Any]:
-    """Verify every finding line in ``findings_file`` against the store at ``db_path``.
+INACTIVE_STATUSES = ("rejected", "retracted")  # withdrawn findings: their evidence is not checked
 
-    Returns ``{ok, checked, problems: [{finding_id, line, bad_evidence: {id: reason}, error?}],
-    parse_errors: [{line, error}], store_missing, message}``. A missing or empty
-    file is ok. Corrupt lines and findings without evidence ids are problems.
+
+def check_findings(findings_file: Path, db_path: Path) -> dict[str, Any]:
+    """Verify the current findings in ``findings_file`` against the store at ``db_path``.
+
+    Current means the last line per finding_id (the same last-line-wins rule as listing),
+    minus findings whose status is rejected or retracted (counted in ``skipped``). Returns
+    ``{ok, checked, skipped, problems: [{finding_id, line, bad_evidence: {id: reason}, error?}],
+    parse_errors: [{line, error}], store_missing, message}``. A missing or empty file is ok.
+    Corrupt lines and findings without evidence ids are problems.
     """
     findings_file, db_path = Path(findings_file), Path(db_path)
-    entries, parse_errors = read_findings(findings_file)
+    all_entries, parse_errors = read_findings(findings_file)
+    latest = _latest(all_entries)
+    entries = [e for e in latest if e["finding"].get("status", "open") not in INACTIVE_STATUSES]
     problems: list[dict[str, Any]] = []
     result: dict[str, Any] = {
         "ok": True,
         "checked": 0,
+        "skipped": len(all_entries) - len(entries),
         "problems": problems,
         "parse_errors": parse_errors,
         "store_missing": False,
@@ -360,11 +369,12 @@ def check_findings(findings_file: Path, db_path: Path) -> dict[str, Any]:
         "message": "",
     }
     if not entries and not parse_errors:
-        result["message"] = (
-            f"No findings to check ({findings_file} does not exist)."
-            if not findings_file.exists()
-            else f"No findings to check ({findings_file} is empty)."
-        )
+        if not findings_file.exists():
+            result["message"] = f"No findings to check ({findings_file} does not exist)."
+        elif all_entries:
+            result["message"] = f"No current findings to check in {findings_file} (all superseded or withdrawn)."
+        else:
+            result["message"] = f"No findings to check ({findings_file} is empty)."
         return result
 
     # one candidate problem per finding line; kept only if something is wrong with it

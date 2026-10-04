@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -260,6 +261,26 @@ def test_check_findings_ok_and_missing(store_path: Path, tmp_path: Path):
     assert nostore["ok"] is False and nostore["store_missing"] is True and "swarm-mcp add" in nostore["message"]
 
 
+def test_check_findings_uses_the_latest_line_and_skips_withdrawn(store_path: Path, tmp_path: Path):
+    """Regression: every line was checked, so a fixed or retracted finding kept failing the check forever."""
+    bad_ids = ["village:msg:does-not-exist"]
+    rows = [
+        _finding("f-fixed", bad_ids),
+        _finding("f-fixed", GOOD_IDS),  # re-recorded with good ids: the last line wins
+        {**_finding("f-gone", bad_ids), "status": "retracted"},
+        {**_finding("f-no", bad_ids), "status": "rejected"},
+        _finding("f-ok", GOOD_IDS),
+    ]
+    res = lib.check_findings(_write_findings(tmp_path / "f.jsonl", rows), store_path)
+    assert res["ok"] is True and res["checked"] == 2 and res["skipped"] == 3, res
+    rows.append(_finding("f-ok", bad_ids))  # ...and a later bad line for a good finding fails it
+    res = lib.check_findings(_write_findings(tmp_path / "g.jsonl", rows), store_path)
+    assert res["ok"] is False and [p["finding_id"] for p in res["problems"]] == ["f-ok"]
+    assert res["problems"][0]["line"] == 6
+    only_withdrawn = _write_findings(tmp_path / "h.jsonl", rows[2:4])
+    assert lib.check_findings(only_withdrawn, store_path)["ok"] is True
+
+
 def test_check_findings_corrupt(store_path: Path, tmp_path: Path):
     bad = _write_findings(
         tmp_path / "bad.jsonl",
@@ -358,6 +379,18 @@ def test_audit_log_hook(tmp_path: Path, store_path: Path):
     assert r.returncode == 0 and r.stdout == "" and "audit_log hook" in r.stderr
 
 
+def _block_reason(r: subprocess.CompletedProcess) -> str:
+    """The reason of a Stop-hook block (JSON decision on stdout, exit 0)."""
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert out["decision"] == "block"
+    return out["reason"]
+
+
+needs_uv = pytest.mark.skipif(shutil.which("uv") is None, reason="the Stop hook runs its check through uv")
+
+
+@needs_uv
 def test_require_evidence_hook(tmp_path: Path, store_path: Path):
     fdir = tmp_path / "stop-findings"
     env = _hook_env(tmp_path, store_path, fdir)
@@ -373,17 +406,95 @@ def test_require_evidence_hook(tmp_path: Path, store_path: Path):
     assert r.stdout == ""
 
     _write_findings(ffile, [_finding("f-ok", GOOD_IDS), _finding("f-fake", ["village:msg:does-not-exist"]), "oops"])
-    r = _run(STOP_HOOK, stop, env)
-    assert r.returncode == 2 and r.stdout == ""
-    assert "f-fake" in r.stderr and "line 2" in r.stderr and "village:msg:does-not-exist" in r.stderr
-    assert "line 3" in r.stderr and "corrupt" in r.stderr and "findings_record" in r.stderr
+    reason = _block_reason(_run(STOP_HOOK, stop, env))
+    assert "f-fake" in reason and "line 2" in reason and "village:msg:does-not-exist" in reason
+    assert "line 3" in reason and "corrupt" in reason and "findings_record" in reason
 
     r = _run(STOP_HOOK, stop_again, env)  # loop guard
-    assert r.returncode == 0 and "stop_hook_active" in r.stderr
+    assert r.returncode == 0 and r.stdout == "" and "stop_hook_active" in r.stderr
 
     nostore = _hook_env(tmp_path / "nostore", tmp_path / "no-store.duckdb", fdir)
     r = _run(STOP_HOOK, stop, nostore)
-    assert r.returncode == 0 and "not found" in r.stderr
+    assert r.returncode == 0 and r.stdout == "" and "not found" in r.stderr
 
-    r = _run(STOP_HOOK, "not json", env)  # unparsable stdin: still checks, still blocks
-    assert r.returncode == 2
+    for garbage in ("not json", "", "[1, 2]"):  # stop_hook_active unknown: never block
+        r = _run(STOP_HOOK, garbage, env)
+        assert r.returncode == 0 and r.stdout == "" and "not a JSON object" in r.stderr
+
+    r = _run(STOP_HOOK, stop, {**env, "PATH": ""})  # no uv: allow, with a note
+    assert r.returncode == 0 and r.stdout == "" and "uv not found" in r.stderr
+
+
+@needs_uv
+def test_stop_hook_only_blocks_on_this_sessions_findings(tmp_path: Path, store_path: Path):
+    """Regression: one stale finding blocked every turn of every session in the checkout. Findings the audit
+    log ties to another session are reported, not blocking; unattributed ones still block."""
+    fdir = tmp_path / "sess-findings"
+    env = _hook_env(tmp_path, store_path, fdir)
+    bad = ["village:msg:does-not-exist"]
+    _write_findings(fdir / "findings.jsonl", [_finding("f-aaaaaaaaaaaa", bad), _finding("f-bbbbbbbbbbbb", bad)])
+    response = [{"type": "text", "text": json.dumps({"finding": {"finding_id": "f-aaaaaaaaaaaa"}})}]
+    payload = _hook_json("PostToolUse", tool_name="mcp__swarm__findings_record", tool_input={"claim": "x"},
+                         tool_use_id="toolu_9", tool_response=response, session_id="sess-old")  # fmt: skip
+    assert _run(AUDIT_HOOK, payload, env).returncode == 0
+    audit = [json.loads(x) for x in _lines(fdir / "audit.jsonl")]
+    assert audit[-1]["finding_ids"] == ["f-aaaaaaaaaaaa"] and audit[-1]["session_id"] == "sess-old"
+
+    # sess-1: f-aaaa belongs to sess-old (not blocking), f-bbbb has no session on record (blocks)
+    reason = _block_reason(_run(STOP_HOOK, _hook_json("Stop", stop_hook_active=False), env))
+    assert "f-bbbbbbbbbbbb" in reason and "f-aaaaaaaaaaaa" not in reason
+    # once f-bbbb is retracted, sess-1 may stop; the other session's finding is only noted
+    with (fdir / "findings.jsonl").open("a") as f:
+        f.write(json.dumps({**_finding("f-bbbbbbbbbbbb", bad), "status": "retracted"}) + "\n")
+    r = _run(STOP_HOOK, _hook_json("Stop", stop_hook_active=False), env)
+    assert r.returncode == 0 and r.stdout == "" and "other sessions" in r.stderr and "f-aaaaaaaaaaaa" in r.stderr
+    # the session that recorded it is still blocked
+    reason = _block_reason(_run(STOP_HOOK, _hook_json("Stop", stop_hook_active=False, session_id="sess-old"), env))
+    assert "f-aaaaaaaaaaaa" in reason
+
+
+def _settings_command(event: str) -> str:
+    settings = json.loads((REPO / ".claude" / "settings.json").read_text())
+    return settings["hooks"][event][0]["hooks"][0]["command"]
+
+
+def _run_command(command: str, stdin: str, project: Path) -> subprocess.CompletedProcess:
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("SWARM", "CLAUDE_"))}
+    env["CLAUDE_PROJECT_DIR"] = str(project)
+    return subprocess.run(["sh", "-c", command], input=stdin, env=env, capture_output=True, text=True, timeout=60)
+
+
+@needs_uv
+def test_stop_hook_never_blocks_on_broken_infrastructure(tmp_path: Path, store_path: Path):
+    """Regression: a merge-conflicted pyproject.toml made `uv run` exit 2, which Claude Code read as
+    "block the stop" even with stop_hook_active set, so the session could never end."""
+    project = tmp_path / "project"
+    (project / "hooks").mkdir(parents=True)
+    (project / "swarm_mcp").mkdir()
+    shutil.copy(STOP_HOOK, project / "hooks" / STOP_HOOK.name)
+    shutil.copy(AUDIT_HOOK, project / "hooks" / AUDIT_HOOK.name)
+    (project / "swarm_mcp" / "pyproject.toml").write_text(
+        '<<<<<<< HEAD\n[project]\nname = "a"\n=======\n[project]\nname = "b"\n>>>>>>> other\n'
+    )
+    fdir = tmp_path / "f"
+    _hook_env(project, store_path, fdir)
+    _write_findings(fdir / "findings.jsonl", [_finding("f-fake", ["village:msg:does-not-exist"])])
+    stop_cmd = _settings_command("Stop")
+
+    for active in (False, True):
+        r = _run_command(stop_cmd, _hook_json("Stop", stop_hook_active=active), project)
+        assert r.returncode == 0 and r.stdout == "", (active, r.returncode, r.stdout, r.stderr)
+    assert "could not run" in _run_command(stop_cmd, _hook_json("Stop", stop_hook_active=False), project).stderr
+
+    # the hook script itself is missing: python3 exits 2, the command maps it to a non-blocking 1
+    (project / "hooks" / STOP_HOOK.name).unlink()
+    r = _run_command(stop_cmd, _hook_json("Stop", stop_hook_active=False), project)
+    assert r.returncode == 1 and r.stdout == ""
+
+    # PostToolUse: a missing or broken audit script never blocks and never errors
+    audit_cmd = _settings_command("PostToolUse")
+    payload = _hook_json("PostToolUse", tool_name="mcp__swarm__scope_search", tool_input={}, tool_response=[])
+    (project / "hooks" / AUDIT_HOOK.name).write_text("<<<<<<< HEAD\nsyntax error\n")
+    assert _run_command(audit_cmd, payload, project).returncode == 0
+    (project / "hooks" / AUDIT_HOOK.name).unlink()
+    assert _run_command(audit_cmd, payload, project).returncode == 0

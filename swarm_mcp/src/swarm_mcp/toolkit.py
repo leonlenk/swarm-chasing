@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import functools
 import inspect
+import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
@@ -77,7 +78,40 @@ def clamp_limit(limit: int | None, default: int, maximum: int) -> tuple[int, str
 
 
 DEFAULT_MAX_CHARS = 500  # default cap for any dataset text returned to a caller
+# Every tool's ``max_chars`` parameter accepts the same range, [MIN_MAX_CHARS, HARD_MAX_CHARS]
+# (pydantic ``Field(ge=MIN_MAX_CHARS, le=HARD_MAX_CHARS)``); values outside it are rejected.
+MIN_MAX_CHARS = 20  # lower bound for an explicit max_chars
 HARD_MAX_CHARS = 20000  # upper bound for an explicit max_chars
+
+# Total size (JSON characters) of the items one tool call may return. A tool that returns many texts
+# stops adding items once the next one would not fit, and says so with ResponseBudget.note().
+RESPONSE_BUDGET_CHARS = 80_000
+
+
+class ResponseBudget:
+    """Running total of the JSON size of the items a tool returns, against ``RESPONSE_BUDGET_CHARS``.
+
+    ``admit(item)`` counts the item and returns True while it fits; once one does not, the budget is
+    exhausted and every later call returns False. The first item is always admitted, so paging
+    (offset=next_offset) always makes progress."""
+
+    def __init__(self, limit: int | None = None) -> None:
+        self.limit = RESPONSE_BUDGET_CHARS if limit is None else limit
+        self.used = 0
+        self.exhausted = False
+
+    def admit(self, item: Any) -> bool:
+        if self.exhausted:
+            return False
+        n = len(json.dumps(item, ensure_ascii=False, default=str))
+        if self.used and self.used + n > self.limit:
+            self.exhausted = True
+            return False
+        self.used += n
+        return True
+
+    def note(self, hint: str) -> str:
+        return f"truncated: response budget reached ({self.limit:,} chars), narrow your request; {hint}"
 
 
 def truncate(text: str | None, max_chars: int) -> tuple[str, bool]:

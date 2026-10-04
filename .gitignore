@@ -26,5 +26,15 @@ __pycache__/
 .venv/
 .cache/
 
-# SwarmScope rubric sweeps (verdicts over dataset records are derived data)
-/sweeps/
+# SwarmScope stores (with DuckDB's write-ahead log) hold dataset text
+*.duckdb
+*.duckdb.wal
+
+# SwarmScope rubric sweeps (verdicts over dataset records are derived data), at any depth
+**/sweeps/
+
+# Dataset setup outputs: profiles hold masked dataset excerpts, setup logs and task files
+# hold absolute paths and field names. The mapping (<source>.json) itself may be committed.
+**/mappings/*.profile.json
+**/mappings/*.setup.json
+**/mappings/*.task.md

@@ -157,6 +157,29 @@ def test_check_fails_on_tampered_export_without_leaking(exported):
         assert secret not in dumped
 
 
+def test_export_redacts_dict_keys(tmp_path):
+    """Regression: keys were copied verbatim, so {"meta": {"carol@example.com": ...}} exported the address."""
+    carol, dan = "carol" + "@" + "example.com", "dan" + "@" + "example.com"
+    rec = event_record("village:msg:k1", time="2026-01-05T13:00:00Z", actor="A", text="hi",
+                       meta={"reactions": {carol: "reacted", dan: "liked"}}, **{carol: "top-level"})  # fmt: skip
+    manifest = export(iter([rec]), tmp_path / "k", Redactor(), agents=[{"id": "a1", "by": {carol: 1}}])
+    raw = (tmp_path / "k" / EVENTS_FILE).read_text() + (tmp_path / "k" / AGENTS_FILE).read_text()
+    raw += json.dumps(manifest)
+    assert carol not in raw and dan not in raw
+    out = lines(tmp_path / "k" / EVENTS_FILE)[0]
+    assert out["meta"]["reactions"] == {"[email]": "reacted", "[email] (2)": "liked"}
+    assert out["[email]"] == "top-level"
+    assert check(tmp_path / "k").ok
+
+
+def test_check_finds_pii_next_to_non_ascii_letters(exported):
+    out, _ = exported
+    with (out / EVENTS_FILE).open("a") as f:
+        f.write(json.dumps({"event_id": "village:msg:y", "text": "連絡はbob@example.comまで、電話+81 90 1234 5678です"}) + "\n")
+    report = check(out)
+    assert {(f["field"], f["type"]) for f in report.findings} == {("text", "email"), ("text", "phone")}
+
+
 def test_check_detects_benign_tampering_and_unlisted_files(exported):
     out, _ = exported
     p = out / AGENTS_FILE

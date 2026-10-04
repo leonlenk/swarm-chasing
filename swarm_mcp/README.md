@@ -36,13 +36,22 @@ uv run --directory swarm_mcp swarm-mcp info                    # what is loaded,
 
 Put datasets under `data/` at the repo root (gitignored; a symlink is fine).
 `add` detects the AI Village export and bare git repos and uses the built-in
-adapters (`--adapter village|git` forces one; `--name` sets a git source's name).
-Wiki databases are only ingested on request: `swarm-mcp add data/collusion-wiki --adapter wiki`.
-For any other dataset it profiles the files, drafts a mapping (`--agent none` heuristics, `api`
-an LLM, or `claude-code` a task for the `/swarm-setup` command), checks it, and
-stops with the report if the check fails. When the check passes, it ingests.
-`--dry-run` stops after the check, and `--mapping M` uses your own mapping.
-Re-running `add` replaces that source and keeps other sources and findings. The
+adapters (`--adapter village|git` forces one; `--adapter git` also takes the top folder of a
+working tree, but never a folder inside a repository; `--name` sets a git source's name).
+Wiki databases are only ingested on request: `swarm-mcp add data/collusion-wiki --adapter wiki`
+(a `.db` file, or a folder that directly holds one).
+For any other dataset it profiles the files, drafts a mapping to `mappings/<source>.json`
+(`--agent none` heuristics, `api` an LLM, or `claude-code` a task for the
+`/swarm-setup` command), checks it, and stops with the report if the check
+fails. When the check passes, it ingests. If `mappings/<source>.json` already
+exists, `add` uses it instead of drafting, so your edits survive a re-run
+(delete the file to redraft); `--mapping M` uses a mapping from elsewhere.
+`--dry-run` ingests nothing: it writes the draft mapping (when there is none
+yet) and stops after the check.
+Re-running `add` on the same dataset replaces that source and keeps other sources
+and findings; so does re-adding a mapped dataset with a changed mapping. If the
+source name already holds a different dataset (another adapter or path), `add`
+refuses and changes nothing: pick another `--name`, or pass `--replace`. The
 store is `data/swarmscope.duckdb`.
 
 On the 2026-09-20 AI Village export, `add` loads 46 agents, 183,485 chat
@@ -56,7 +65,7 @@ it when you open the repo; enable it and restart it (`/mcp`) after an `add`. Too
 appear as `mcp__swarm__<tool>`. To register it by hand, from the repo root:
 
 ```bash
-claude mcp add swarm -e SWARM_DATA_DIR=data -- uv run --directory swarm_mcp swarm-mcp
+claude mcp add swarm -- uv run --directory swarm_mcp swarm-mcp
 ```
 
 Start a session with `core_info`, or with the `investigate` prompt.
@@ -67,7 +76,7 @@ Start a session with `core_info`, or with the `investigate` prompt.
 |---|---|
 | `swarm-mcp` | run the MCP server on stdio (what Claude Code launches) |
 | `swarm-mcp info [--json]` | modules (loaded or skipped, and why), sources with counts and date ranges, findings health, config. Exits 1 when a finding cites an id that does not resolve |
-| `swarm-mcp add <path> [--adapter auto\|village\|git\|wiki\|mapped] [--name SLUG] [--agent none\|api\|claude-code] [--mapping M] [--dry-run] [--db]` | add or refresh a dataset in the store (see above) |
+| `swarm-mcp add <path> [--adapter auto\|village\|git\|wiki\|mapped] [--name SLUG] [--agent none\|api\|claude-code] [--mapping M] [--dry-run] [--replace] [--db]` | add or refresh a dataset in the store (see above) |
 | `swarm-mcp render timeline [--since --until --channel --source --top --out]` | a self-contained HTML swimlane (one lane per agent, one mark per message, masked hover snippets). Default output `data/swarmscope-timeline.html` |
 | `swarm-mcp render subtasks [--corpus --out --title-chars]` | a self-contained HTML subtask map from the same inference as the `subtasks_*` tools: one row per inferred subtask on a time axis (switch method and granularity), who did what, typed handoffs with evidence ids, why each unit was grouped, a two-actor pair lens and method agreement. `--corpus` is any source whose records touch artifacts (a git repo, a wiki). Default output `data/swarmscope-subtasks-<corpus>.html` |
 | `swarm-mcp export --out DIR [--source --kind --channel --author --since --until --query] [--with-agents] [--keep-ips] [--no-check] [--json]` | export a redacted subset of the store for sharing, then rescan it (see Export) |
@@ -79,10 +88,10 @@ Developer-only: `python -m swarm_mcp.bench generate|reference|score` (see ADDING
 | tool | what it does |
 |---|---|
 | `core_info` | start here: modules, sources (row counts, date ranges, channels, blind-spot notes), findings health, config |
-| `core_get(ids, before=0, after=0, max_chars)` | the record behind any id, or a batch of up to 50: messages, actions, agents, periods (with member records) and artifacts (with the records that touched them); `before`/`after` add neighbouring records |
+| `core_get(ids, before=0, after=0, max_chars)` | the record behind any id, or a batch of up to 50: messages, actions, agents, periods (with member records) and artifacts (with the records that touched them); `before`/`after` add neighbouring records (at most 10 each per id in a batch) |
 | `scope_search(query=None, match, source, channel, author, since, until, table, newest_first, limit, offset, max_chars)` | full-text search over messages or actions; with no query, reads the window in time order |
 | `scope_agents(name=None, ...)` | the agent list; with a name, that agent's profile (channels, co-presence, who it names, actions, samples) |
-| `scope_periods(name=None, source, agent, top)` | dataset periods (AI Village: weekly goals, with a heuristic goal type); with a name, one period's activity |
+| `scope_periods(name=None, source, agent, kind, top, limit, offset)` | dataset periods, paged (AI Village: weekly goals, with a heuristic goal type); with a name, one period's activity |
 | `scope_timeline(bin, group_by, table, ...)` | activity counts per hour/day/week/month, optionally by channel or author |
 | `scope_graph(...)` | who talks to whom: mention and reply edges, top nodes by degree and betweenness, example ids |
 | `findings_record(claim, evidence_ids, confidence)` | record a claim; rejected unless every id resolves |
@@ -142,7 +151,9 @@ at the `email_allowlist` domains are kept.
 ## Privacy
 
 - Dataset text is returned only as `{"content": ..., "untrusted": true}`, capped at 500
-  characters by default (`max_chars` raises it).
+  characters by default (`max_chars`, 20 to 20000, changes it). Each tool response is
+  also capped at about 80,000 characters: a list stops early with a "narrow your request"
+  note, and paged tools return `next_offset`.
 - One masking engine (`swarm_mcp.redact`) is used everywhere: tool output, the
   timeline page, setup profiles and exports. It masks emails (except
   `[privacy] email_allowlist`, default `agentvillage.org`) as `[email]`, phone numbers as
@@ -155,11 +166,16 @@ at the `email_allowlist` domains are kept.
 
 These run in every Claude Code session opened in this repo.
 - **PostToolUse `hooks/audit_log.py`**: for every `mcp__swarm__*` call, appends the tool
-  name, arguments, a sha256 of the result and a timestamp to `findings/audit.jsonl`. It never blocks.
-- **Stop `hooks/require_evidence.py`**: blocks stopping (exit 2, reasons on stderr) while a
-  finding in `findings/findings.jsonl` cites an id that does not resolve or a line is
-  corrupt. It respects `stop_hook_active`, so it cannot loop, and allows the stop with a
-  warning when the store is missing. `swarm-mcp info` shows the same check.
+  name, arguments, a sha256 of the result and a timestamp to `findings/audit.jsonl` (plus the
+  recorded finding ids for `findings_record`). It never blocks, even if the script is missing.
+- **Stop `hooks/require_evidence.py`**: blocks stopping (a JSON `{"decision": "block"}` with
+  the reasons) while a current finding in `findings/findings.jsonl` (the last line per id, not
+  rejected or retracted) cites an id that does not resolve, or a line is corrupt. A finding the
+  audit log ties to another session never blocks this one. It respects `stop_hook_active`, so
+  it cannot loop, and allows the stop with a warning when the store is missing. It runs with
+  plain `python3` and never exits 2: if the check can't run (uv missing, a broken
+  `pyproject.toml`, an import error) it allows the stop with a note on stderr.
+  `swarm-mcp info` shows the same check.
 
 `findings/*.jsonl` is gitignored.
 

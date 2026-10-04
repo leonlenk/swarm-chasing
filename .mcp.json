@@ -3,12 +3,12 @@
     "swarm": {
       "type": "stdio",
       "command": "uv",
-      "args": ["run", "--directory", "swarm_mcp", "swarm-mcp"],
-      "env": {
-        "SWARM_DATA_DIR": "${SWARM_DATA_DIR:-data}",
-        "SWARMSCOPE_DB": "${SWARMSCOPE_DB:-data/swarmscope.duckdb}",
-        "SWARMSCOPE_FINDINGS_DIR": "${SWARMSCOPE_FINDINGS_DIR:-findings}"
-      }
+      "args": [
+        "run",
+        "--directory",
+        "swarm_mcp",
+        "swarm-mcp"
+      ]
     }
   }
 }

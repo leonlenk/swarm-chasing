@@ -162,13 +162,42 @@ def parse_iso(s):
     return dt.datetime.fromisoformat(s[:-1])
 
 
-def clip(text, start=None, end=None, limit=SNIPPET_MAX):
-    """Collapse whitespace and cut `text` to <= limit chars, keeping text[start:end] (the key phrase) in view,
-    with an ellipsis on each cut side."""
+_EDGE_DIGITS = re.compile(r"^[\d\s().+\-/]+")       # digits and phone separators left at a cut edge
+
+
+def _drop_edge(flat, lead):
+    """Drop the word fragment at a cut edge of `flat` (lead: the start, else the end), plus any digits and phone
+    separators next to it, so a cut never leaves part of an email address or phone number. Returns the new text
+    and how many characters were dropped."""
+    if lead:
+        m = re.match(r"^\S*", flat)
+        rest = flat[m.end():]
+        d = _EDGE_DIGITS.match(rest)
+        rest = rest[d.end() if d else 0:].lstrip()
+        return rest, len(flat) - len(rest)
+    rev, n = _drop_edge(flat[::-1], True)
+    return rev[::-1], n
+
+
+def clip(text, start=None, end=None, limit=SNIPPET_MAX, allow_domains=(), cut_before=False, cut_after=False):
+    """Scrub PII from `text`, collapse whitespace and cut it to <= limit chars, keeping text[start:end] (the key
+    phrase) in view, with an ellipsis on each cut side.
+
+    Scrubbing (see scrub(); emails in allow_domains are kept) happens before the cut, so a cut can't leave part of
+    an email or phone number that scrub() would no longer recognise. A cut also drops the word fragment at its edge
+    and any digits next to it. cut_before / cut_after say `text` was already cut on that side (a stored excerpt):
+    its edge fragment is dropped the same way, and no ellipsis is added for it (the caller keeps its own)."""
     text = text or ""
     if start is None:
         start, end = 0, 0
     end = start if end is None else end
+    text, (start, end) = scrub_tracking(text, (start, end), allow_domains)
+    if cut_before and text:
+        text, n = _drop_edge(text, True)
+        start, end = max(0, start - n), max(0, end - n)
+    if cut_after and text:
+        text, _ = _drop_edge(text, False)
+        start, end = min(start, len(text)), min(end, len(text))
     # collapse whitespace while tracking where the key phrase moves to
     out, pos_map = [], []
     prev_space = False
@@ -191,7 +220,12 @@ def clip(text, start=None, end=None, limit=SNIPPET_MAX):
     lo = max(0, s - (room - key) // 3)                # a third of the spare room before the phrase
     lo = min(lo, max(0, len(flat) - room))
     hi = min(len(flat), lo + room)
-    snip = flat[lo:hi].strip()
+    snip = flat[lo:hi]
+    if lo > 0:
+        snip, _ = _drop_edge(snip, True) if not flat[lo - 1].isspace() else _drop_edge(" " + snip, True)
+    if hi < len(flat):
+        snip, _ = _drop_edge(snip, False) if not flat[hi].isspace() else _drop_edge(snip + " ", False)
+    snip = snip.strip()
     return ("…" if lo > 0 else "") + snip + ("…" if hi < len(flat) else "")
 
 
@@ -201,11 +235,17 @@ def dumps(obj):
 
 # --- PII scrubbing -------------------------------------------------------------------------------
 
-EMAIL_RX = re.compile(r"(?<![\w.%+-])[A-Za-z0-9._%+-]+@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})(?![\w-])")
+# Boundaries are ASCII (Python's \w is Unicode, so a CJK or accented letter next to an address or number used to hide
+# it). The email local part takes letters of scripts written with spaces (jöhn, иван) but not Han, kana, Hangul, Thai
+# and the like, so in "連絡はbob@example.comまで" the address starts at "bob".
+_NO_SPACE_SCRIPTS = "\u0e00-\u0eff\u1000-\u109f\u1780-\u17ff\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff66-\uff9f"
+_LOCAL = f"(?:[^\\W{_NO_SPACE_SCRIPTS}]|[.%+-])"
+EMAIL_RX = re.compile(rf"(?<!{_LOCAL}){_LOCAL}+@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{{2,}})(?![A-Za-z0-9-])")
 # Phone-like: 3-3-4 digit groups with separators (optionally +country / (area)), or +country followed by 2-4
 # separated groups. Separators are required so dates, versions, IPs, ids and hashes don't match.
-PHONE_RX = re.compile(r"(?<![\w.+/-])(?:\+\d{1,3}[\s.-]?)?(?:\(\d{3}\)\s?|\d{3}[\s.-])\d{3}[\s.-]\d{4}(?![\w.-]*\d)"
-                      r"|(?<![\w+])\+\d{1,3}(?:[\s.-]\d{2,4}){2,4}(?![\w-])")
+PHONE_RX = re.compile(r"(?<![A-Za-z0-9_.+/-])(?:\+\d{1,3}[\s.-]?)?(?:\(\d{3}\)\s?|\d{3}[\s.-])\d{3}[\s.-]\d{4}"
+                      r"(?![A-Za-z0-9_.-]*\d)"
+                      r"|(?<![A-Za-z0-9_+])\+\d{1,3}(?:[\s.-]\d{2,4}){2,4}(?![A-Za-z0-9_-])")
 # Free-text fields that can carry raw agent/human content.
 _TEXT_FIELDS = {"events": ("snippet",), "quotes": ("text", "note"), "edges": ("evidence",), "annotations": ("label",)}
 _TEXT_LIMITS = {("events", "snippet"): SNIPPET_MAX, ("quotes", "text"): QUOTE_MAX}
@@ -221,8 +261,29 @@ def scrub(text, allow_domains=()):
     phone-number-like strings with [phone]."""
     if not text:
         return text
-    text = EMAIL_RX.sub(lambda m: m.group(0) if _allowed(m.group(1), allow_domains) else "[email]", text)
-    return PHONE_RX.sub("[phone]", text)
+    return scrub_tracking(text, (), allow_domains)[0]
+
+
+def scrub_tracking(text, marks, allow_domains=()):
+    """scrub(text), also moving the character offsets in `marks` (a tuple) along with the text. An offset inside a
+    replaced match moves to the start of its placeholder (the end, for the last mark of a (start, end) pair)."""
+    marks = list(marks)
+    for rx, repl in ((EMAIL_RX, lambda m: m.group(0) if _allowed(m.group(1), allow_domains) else "[email]"),
+                     (PHONE_RX, lambda m: "[phone]")):
+        out, pos, delta, moved = [], 0, 0, list(marks)
+        for m in rx.finditer(text):
+            r = repl(m)
+            out += [text[pos:m.start()], r]
+            for i, k in enumerate(marks):
+                if m.start() < k < m.end():
+                    moved[i] = m.start() + delta + (len(r) if i == len(marks) - 1 and i > 0 else 0)
+                elif k >= m.end():
+                    moved[i] += len(r) - (m.end() - m.start())
+            delta += len(r) - (m.end() - m.start())
+            pos = m.end()
+        out.append(text[pos:])
+        text, marks = "".join(out), moved
+    return text, tuple(marks)
 
 
 def pii_hits(text, allow_domains=()):
@@ -421,12 +482,13 @@ def _validate(trace, max_bytes):
     def items(k):
         return [(f"{k}[{i}]", x) for i, x in enumerate(lists[k]) if isinstance(x, dict)]
 
-    names = set()
+    names = set()                                   # string names only, so a list or dict can't break the lookups
     for p, a in items("agents"):
         err.text(f"{p}.name", a.get("name"), nonempty=True)
-        if a.get("name") in names:
-            err.at(f"{p}.name", f"duplicate agent {a.get('name')!r}")
-        names.add(a.get("name"))
+        if isinstance(a.get("name"), str):
+            if a["name"] in names:
+                err.at(f"{p}.name", f"duplicate agent {a['name']!r}")
+            names.add(a["name"])
         err.text(f"{p}.lab", a.get("lab"), nonempty=True)
         if "group" in a:
             err.text(f"{p}.group", a["group"])
@@ -438,16 +500,17 @@ def _validate(trace, max_bytes):
     def agent_ref(path, v, nullable=False):
         if v is None and nullable:
             return
-        if v not in names:
+        if not isinstance(v, str) or v not in names:
             err.at(path, f"{v!r} not in agents")
 
     ids = set()
     for p, e in items("events"):
         if not isinstance(e.get("id"), str) or not e.get("id"):
             err.at(f"{p}.id", "expected a non-empty string")
-        elif e["id"] in ids:
-            err.at(f"{p}.id", f"duplicate event id {e['id']!r}")
-        ids.add(e.get("id"))
+        else:
+            if e["id"] in ids:
+                err.at(f"{p}.id", f"duplicate event id {e['id']!r}")
+            ids.add(e["id"])
         err.time(f"{p}.t", e.get("t"))
         agent_ref(f"{p}.agent", e.get("agent"))
         err.enum(f"{p}.channel", e.get("channel"), CHANNELS)
@@ -460,7 +523,7 @@ def _validate(trace, max_bytes):
     def event_ref(path, v, nullable=False):
         if v is None and nullable:
             return
-        if v not in ids:
+        if not isinstance(v, str) or v not in ids:
             err.at(path, f"{v!r} not an event id")
 
     for p, x in items("exposures"):
@@ -545,9 +608,11 @@ def validate_index(index):
             err.at(f"{p}.{f}", "missing")
         for f in sorted(x.keys() - need):
             err.at(f"{p}.{f}", "unknown field")
-        if x.get("id") in seen:
-            err.at(f"{p}.id", f"duplicate id {x.get('id')!r}")
-        seen.add(x.get("id"))
+        err.text(f"{p}.id", x.get("id"), nonempty=True)
+        if isinstance(x.get("id"), str):
+            if x["id"] in seen:
+                err.at(f"{p}.id", f"duplicate id {x['id']!r}")
+            seen.add(x["id"])
         err.enum(f"{p}.kind", x.get("kind"), KINDS)
         err.text(f"{p}.file", x.get("file"), nonempty=True)
         for f in ("n_agents", "n_events"):

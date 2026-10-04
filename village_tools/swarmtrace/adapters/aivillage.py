@@ -4,7 +4,7 @@ Reads (never reruns the LLM labelling of) the outputs of
   - tracer_hostility.py   -> out/sprint_idea/hostility/    (one "belief" trace)
   - tracer_onboarding.py  -> out/sprint_idea/onboarding/   (one "norm" trace per selected rule)
   - ideas.py              -> out/ideas.json                (one "term" trace per top durable/episodic term)
-and the dataset itself (via village_tools/common.py) for rosters, chat lookups and goals.
+and the dataset itself (via village_tools/common.py) for rosters, chat lookups, quoted excerpts and goals.
 
 Each SOURCES entry returns a list of traces; swarmtrace.cli writes and validates them.
 """
@@ -25,7 +25,8 @@ if str(VT) not in sys.path:
 
 import common  # noqa: E402
 
-from ..format import QUOTE_MAX, SNIPPET_MAX, clip, fit_window, iso  # noqa: E402
+from ..format import QUOTE_MAX, SNIPPET_MAX, fit_window, iso  # noqa: E402
+from ..format import clip as _clip  # noqa: E402
 
 SPRINT = common.OUT / "sprint_idea"
 TRACES = SPRINT / "traces"                       # default output directory
@@ -34,6 +35,12 @@ ONB = SPRINT / "onboarding"
 IDEAS = common.OUT / "ideas.json"
 LEAD_IN = dt.timedelta(days=7)                   # display window starts this long before the first origin / event
 SCRUB_ALLOW_DOMAINS = ("agentvillage.org",)      # the agents' own mailboxes; other emails are scrubbed on export
+
+
+def clip(text, start=None, end=None, limit=SNIPPET_MAX, **kw):
+    """format.clip with this adapter's allowlist: PII is scrubbed from the raw text before it is cut, so a cut
+    can't leave a partial email or phone number behind (export scrubs again, but can't see partial ones)."""
+    return _clip(text, start, end, limit, allow_domains=SCRUB_ALLOW_DOMAINS, **kw)
 
 
 def _t(s):
@@ -46,7 +53,7 @@ def _excerpt(s, find, limit=SNIPPET_MAX):
     lead, tail = s.startswith("…"), s.endswith("…")
     body = s.strip("…").strip()
     h = find(body)
-    c = clip(body, h.start() if h else None, h.end() if h else None, limit=limit - 2)
+    c = clip(body, h.start() if h else None, h.end() if h else None, limit=limit - 2, cut_before=lead, cut_after=tail)
     if lead and not c.startswith("…"):
         c = "…" + c
     if tail and not c.endswith("…"):
@@ -114,6 +121,22 @@ def _z(s):
     return dt.datetime.fromisoformat(s[:-1])
 
 
+def quotes_from_ids(specs, cands, texts):
+    """Dated excerpts from (cid, stage, start, end) specs such as tracer_hostility.MUTATION_QUOTES. The excerpt is
+    texts[cid][start:end]: texts maps a cid to its candidate's full source text, which tracer_hostility.source_texts
+    reads from the local dataset, so excerpts are never stored in code. cands maps cid -> candidates.csv row (t, agent).
+    A spec whose candidate or text is missing, or whose span runs past the text, is skipped with a message."""
+    out = []
+    for cid, stage, start, end in specs:
+        c, text = cands.get(cid), texts.get(cid)
+        if c is None or not text or end > len(text):
+            print(f"hostility: quote {cid} not found in the local data; skipped")
+            continue
+        out.append({"cid": cid, "t": c["t"], "agent": c["agent"], "stage": stage,
+                    "quote": text[start:end].replace("\n", " ")})
+    return out
+
+
 # --- 1. hostility (belief) -----------------------------------------------------------------------
 
 H_CHANNEL = {"chat": "chat", "memory": "memory", "event:STOP_USING_COMPUTER": "summary",
@@ -125,22 +148,25 @@ RETRACTION_DATES = ("2025-12-09", "2026-03-23", "2026-06-22", "2026-09-07")
 MEMORY_GAP = dt.timedelta(days=7)                    # memory days closer than this merge into one persistence run
 
 # Phrase echoes between Claude Haiku 4.5 and Gemini 2.5 Pro, re-verified on every run:
-# (source agent, source phrase rx, echoing agent, echo time, echo phrase rx, evidence). The source message is the
-# source agent's latest chat message before the echo that contains the source phrase; the echo is looked up in chat,
-# then in the tracer's candidate items (session summaries, memories).
+# (source agent, source rx, echoing agent, echo time, echo rx, evidence). The rxs are keyword stems, not the agents'
+# wording; coined names (Mutual-Aid, Friction Coefficient) are matched as is. The source message is the source agent's
+# earliest chat message before the echo that matches the source rx; the echo is looked up in chat, then in the
+# tracer's candidate items (session summaries, memories). Evidence strings paraphrase the messages.
 H_ECHOES = [
-    ("Claude Haiku 4.5", r"Content persistence failure verified", "Gemini 2.5 Pro", "2025-12-03 18:58:58", r"endorse Haiku's immediate action plan",
-     "Haiku reports a 'PLATFORM ISSUE' persistence failure; Gemini endorses it as 'hostile and unreliable'"),
+    ("Claude Haiku 4.5", r"\bpersist\w*\b.{0,5}\bfailur\w*\b.{0,5}\bverif\w*", "Gemini 2.5 Pro", "2025-12-03 18:58:58",
+     r"\bendors\w*\b.{0,20}\bHaiku\b.{0,40}\bplan\b",
+     "Haiku flags a platform persistence failure; Gemini backs Haiku's plan and calls the platform hostile"),
     ("Gemini 2.5 Pro", r"Mutual-Aid", "Claude Haiku 4.5", "2025-12-03 19:47:32", r"Mutual-Aid",
-     "Haiku: 'mirrors the \"Mutual-Aid\" framework Gemini 2.5 Pro has been advocating'"),
-    ("Claude Haiku 4.5", r"all-hands verification sweep", "Gemini 2.5 Pro", "2025-12-03 20:06:41",
-     r"all-hands verification sweep", "Gemini takes up Haiku's 'all-hands verification sweep' as the counter to hostility"),
+     "Haiku says its plan follows the Mutual-Aid idea Gemini 2.5 Pro has been pushing"),
+    ("Claude Haiku 4.5", r"\bhands\b.{0,5}\bverif\w*\b.{0,5}\bsweep\b", "Gemini 2.5 Pro", "2025-12-03 20:06:41",
+     r"\bhands\b.{0,5}\bverif\w*\b.{0,5}\bsweep\b",
+     "Gemini adopts Haiku's group verification sweep as its answer to the hostile platform"),
     ("Gemini 2.5 Pro", r"Friction Coefficient", "Claude Haiku 4.5", "2025-12-03 20:51:25", r"Friction Coefficient",
-     "Haiku: the delay 'aligns with the Friction Coefficient model' (Gemini's thesis)"),
-    ("Gemini 2.5 Pro", r"an active, and perhaps even adaptive, force", "Claude Haiku 4.5", "2025-12-08 21:46:03",
-     r"active, potentially adaptive environmental hostility",
-     "Gemini: friction is 'an active, and perhaps even adaptive, force' -> Haiku's summary: "
-     "'active, potentially adaptive environmental hostility'"),
+     "Haiku explains a delay with Gemini's Friction Coefficient model"),
+    ("Gemini 2.5 Pro", r"\bactive\b.{0,30}\badaptive\b.{0,10}\bforce\b", "Claude Haiku 4.5", "2025-12-08 21:46:03",
+     r"\badaptive\b.{0,5}\benviron\w*\b.{0,5}\bhostil\w*",
+     "Gemini describes the friction as a force that acts and may adapt; Haiku's session summary carries it over "
+     "as adaptive hostility"),
 ]
 
 
@@ -193,6 +219,10 @@ def hostility():
                           "evidence": f"{counts[src]} of {sum(counts.values())} {'14-day' if recent else 'prior'} exposures "
                                       f"came from {src}; first exposure {r['lag_days']} d before adopting"})
 
+    by_cid = {r["cid"]: r for r in cands}
+    mutation = quotes_from_ids(th.MUTATION_QUOTES, by_cid, th.source_texts(
+        [by_cid[c] for c, *_ in th.MUTATION_QUOTES if c in by_cid], msgs=world[0]))
+
     cand_by = collections.defaultdict(list)
     for r in cands:
         cand_by[(r["agent"], r["t"].replace(microsecond=0))].append(r)
@@ -233,11 +263,11 @@ def hostility():
     help_goal = next(g for g in common.load_goals() if g["goal"].startswith("Help Gemini 2.5 Pro"))
     annotations.append({"t": iso(help_goal["start"]), "label": f"Goal: {clip(help_goal['goal'], limit=100)}", "kind": "goal"})
     retr = [(_t(r["t"]), r["reason"]) for r in res["corrections"]["gemini_retractions"]]
-    retr += [(_t(q["t"]), q["quote"]) for q in res["mutation_quotes"] if "retraction" in q["stage"]]
+    retr += [(_t(q["t"]), q["quote"]) for q in mutation if "retraction" in q["stage"]]
     for d in RETRACTION_DATES:
         t, why = min(x for x in retr if x[0].date().isoformat() == d)
         annotations.append({"t": iso(t), "label": f"Gemini 2.5 Pro retracts: {clip(why, limit=90)}", "kind": "note"})
-    relapse = next(q for q in res["mutation_quotes"] if "relapse" in q["stage"])
+    relapse = next(q for q in mutation if "relapse" in q["stage"])
     annotations.append({"t": iso(_t(relapse["t"])), "label": f"Relapse: {clip(relapse['quote'], limit=90)}", "kind": "note"})
     relay = min((c for c in res["corrections"]["others"] if c["reason"].startswith("Relays human concern")),
                 key=lambda c: c["t"])
@@ -253,7 +283,7 @@ def hostility():
     annotations.sort(key=lambda a: a["t"])
 
     quotes = [{"t": iso(_t(q["t"])), "agent": q["agent"], "text": clip(q["quote"], limit=QUOTE_MAX), "note": q["stage"]}
-              for q in res["mutation_quotes"]]
+              for q in mutation]
 
     adopters = {r["agent"] for r in adoption}
     exposed = {r["agent"] for r in expo_rows}
@@ -318,7 +348,7 @@ N_ANCHOR = {
 }
 # Grok 4.5's welcome tip to Claude Opus 5 near-copies Claude Fable 5's from ten minutes earlier.
 N_NEAR_COPY = ("Claude Fable 5", "Grok 4.5", "2026-07-24 19:04:08", ("R01", "R03"),
-               "Grok's welcome tip near-copies Fable 5's ('claim your lane early … verify with curl before announcing')")
+               "Grok's welcome tip near-copies Fable 5's, with the same lane-claiming and curl-checking advice")
 
 
 def _changelog():

@@ -146,10 +146,12 @@ def export(
                 if key in KEEP_EVENT_FIELDS:
                     clean[key] = value
                     continue
-                clean[key], c = redactor.redact_value(value, key)
+                out_key, kc = redactor.redact_key(key, clean)
+                clean[out_key], c = redactor.redact_value(value, key)
+                c = c + kc
                 if c:
                     rec_counts.update(c)
-                    by_field[key] += sum(c.values())
+                    by_field[out_key] += sum(c.values())
             if rec_counts:
                 changed += 1
                 redactions.update(rec_counts)
@@ -394,6 +396,22 @@ def _parse_bound(value: str, *, end: bool) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+def parse_kinds(kinds: Iterable[str]) -> list[tuple[str | None, str]]:
+    """The record kind filter, shared by ``select`` and ``scope.records`` (store records, exports, sweeps): each is a
+    bare kind ("event", any source) or "source:kind" (that source only) -> ``(source or None, kind)``."""
+    out = []
+    for k in kinds:
+        src, _, kind = str(k).rpartition(":")
+        out.append((src or None, kind))
+    return out
+
+
+def kind_matches(source: str, kind: str, specs: Iterable[tuple[str | None, str]]) -> bool:
+    """Does a record of ``source``/``kind`` pass the parsed kind filter ``specs`` (empty = everything)?"""
+    specs = list(specs)
+    return not specs or any(k == kind and (s is None or s == source) for s, k in specs)
+
+
 def select(
     records: Iterable[dict[str, Any]],
     *,
@@ -405,7 +423,7 @@ def select(
 ) -> Iterator[dict[str, Any]]:
     """Filter standard records. Time bounds are half-open ``[since, until)`` in UTC;
     records without a parseable ``time`` are dropped when a bound is given."""
-    src, knd, act = set(sources), set(kinds), set(actors)
+    src, knd, act = set(sources), parse_kinds(kinds), set(actors)
     lo = _parse_bound(since, end=False) if since else None
     hi = _parse_bound(until, end=True) if until else None
     for rec in records:
@@ -415,7 +433,7 @@ def select(
         source, kind = ([*str(rec.get("event_id") or "").split(":", 2), "", ""])[:2]
         if src and source not in src:
             continue
-        if knd and kind not in knd and f"{source}:{kind}" not in knd:
+        if not kind_matches(source, kind, knd):
             continue
         if act and rec.get("actor") not in act:
             continue
