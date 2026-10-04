@@ -447,6 +447,23 @@ def test_scorer_other_penalties_and_leniency(bench, solved):
     assert set(score(truth, {"diffusion": solved["diffusion"]})["summary"]["missing"]) == {"coordinators", "integrity"}
 
 
+def test_scorer_skips_non_dict_adopters_and_dedupes(bench, solved):
+    """A malformed adopter entry is ignored (no crash), and a repeated adopter counts once, so
+    it can't pad the matched-adopter accuracies."""
+    truth = bench["truth"]
+    base = score(truth, solved)["tasks"]["diffusion"]
+    noisy = copy.deepcopy(solved)
+    term = next(t for t in noisy["diffusion"].values() if t["adopters"])
+    first = term["adopters"][0]
+    dup = copy.deepcopy(first)
+    dup["first_event_id"] = dup["basis_event_id"] = "village:msg:nope"  # a wrong repeat of a right adopter
+    term["adopters"] += ["not-an-object", None, 42, ["a", "list"], copy.deepcopy(first), dup]
+    d = score(truth, noisy)["tasks"]["diffusion"]
+    for k in ("tp", "fp", "fn", "f1", "adopter_first_event_accuracy", "basis_accuracy"):
+        assert d[k] == base[k], k
+    assert d["adopter_first_event_accuracy"] == 1.0
+
+
 def test_cli_generate_reference_score(tmp_path: Path, capsys):
     out = tmp_path / "run"
     assert bench_main(["generate", "--out", str(out), "--seed", "4", "--days", "14", "--msgs-per-day", "40"]) == 0
