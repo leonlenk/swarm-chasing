@@ -34,6 +34,7 @@ from swarm_mcp.scope.analysis import timeline as timeline_analysis
 from swarm_mcp.scope.analysis.timeline import record_filters, ts_iso
 from swarm_mcp.scope.db import HUMAN, Store, label_for
 from swarm_mcp.scope.records import StoreRecordProvider
+from swarm_mcp.scope.viz.pagekit import day_number, village_days
 from swarm_mcp.toolkit import HARD_MAX_CHARS, MIN_MAX_CHARS, ResponseBudget, ToolInputError, parse_time
 
 NAME = "scope"
@@ -146,6 +147,25 @@ def _matcher(query: str, match: str) -> tuple[str, list[Any], re.Pattern[str] | 
             focus = None  # RE2 syntax that Python can't compile: snippets fall back to the start
         return "regexp_matches(content, ?, 'i')", [query], focus
     raise ToolInputError(f"match must be one of phrase, all_terms, regex, not {match!r}")
+
+
+def _busiest_sql(spec: dict[str, str] | None, where: str) -> str:
+    """The busiest day of the messages matching ``where``: the Village day (local date) when
+    ``spec`` is a Village day spec, else the UTC date. Columns: day, n, t0 (its first message)."""
+    day = recap_analysis._local_date_sql("ts", spec)
+    return (
+        f"SELECT {day} AS day, count(*) AS n, min(ts) AS t0 FROM messages WHERE {where} AND ts IS NOT NULL "
+        "GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 1"
+    )
+
+
+def _busiest(row: dict[str, Any] | None, spec: dict[str, str] | None) -> dict[str, Any] | None:
+    if not row:
+        return None
+    out = {"day": ts_iso(row["day"]), "messages": row["n"]}
+    if spec:  # day is then the Village-local date, numbered as in scope_recap / scope_moments
+        out.update(village_day=day_number(row["t0"], spec), tz=spec["tz"])
+    return out
 
 
 def _filters(**kw: Any) -> dict[str, Any]:
@@ -616,11 +636,8 @@ def register(mcp, ctx) -> None:
             actions = s.all(
                 f"SELECT kind, count(*) AS n FROM actions WHERE {_w(act_w)} GROUP BY 1 ORDER BY 2 DESC, 1", act_p
             )
-            busiest = s.one(
-                f"SELECT CAST(ts AS DATE) AS day, count(*) AS n FROM messages WHERE {mw} AND ts IS NOT NULL "
-                "GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 1",
-                mp,
-            )
+            spec = village_days(s, source=a["source"])
+            busiest = s.one(_busiest_sql(spec, mw), mp)
             cols = "evidence_id, ts, channel, content"
             first = s.one(f"SELECT {cols} FROM messages WHERE {mw} ORDER BY ts NULLS LAST, evidence_id LIMIT 1", mp)
             last = s.one(
@@ -677,7 +694,7 @@ def register(mcp, ctx) -> None:
             ],
             "named_by_total_messages": named_total,
             "actions_by_kind": {r["kind"]: r["n"] for r in actions},
-            "busiest_day": {"day": ts_iso(busiest["day"]), "messages": busiest["n"]} if busiest else None,
+            "busiest_day": _busiest(busiest, spec),
             "samples": {"first": sample(first), "last": sample(last), "spread": [sample(r) for r in spread]},
             "notes": [
                 "first_seen/last_seen cover the whole store; every count and sample respects since/until.",
@@ -685,16 +702,26 @@ def register(mcp, ctx) -> None:
                 "both posted at least once; active_channel_days is this agent's own bucket count.",
                 "names_most / named_by_most count messages whose text names the agent (recipient_ids).",
                 "spread samples are deterministic (ordered by hash(evidence_id)), shown in time order.",
-            ],
+            ]
+            + (
+                [
+                    "busiest_day is a Village day: day is its local date in tz and village_day its number (as in scope_recap)"
+                ]
+                if spec
+                else ["busiest_day is a UTC date."]
+            ),
         }
 
     # ------------------------------------------------------------------ periods
 
-    # every period of a source with its 1-based list index (stable across kind filters and pages)
+    # every period with its 1-based index in the store-wide list; numbered before any filter, so an
+    # index means the same period with or without source/kind filters, pages, or in scope_recap
     _PERIODS_SQL = """
-    SELECT evidence_id, source, kind, label, start_ts, end_ts, meta,
-           row_number() OVER (ORDER BY source, start_ts NULLS LAST, evidence_id) AS idx
-    FROM periods
+    SELECT * FROM (
+        SELECT evidence_id, source, kind, label, start_ts, end_ts, meta,
+               row_number() OVER (ORDER BY source, start_ts NULLS LAST, evidence_id) AS idx
+        FROM periods
+    )
     WHERE (CAST(? AS TEXT) IS NULL OR source = ?)
     """
     # chat volume of a set of periods (by evidence_id) in one GROUP BY
@@ -744,21 +771,28 @@ def register(mcp, ctx) -> None:
         )
         return d
 
-    def _find_period(rows: list[dict[str, Any]], name: str) -> tuple[int, dict[str, Any]]:
+    def _find_period(s: Store, name: str, source: str | None) -> tuple[int, dict[str, Any]]:
+        """(store-wide index, row) of a period given by index, evidence_id or label substring."""
         q = name.strip()
         if q.isdigit():
             i = int(q)
-            if 1 <= i <= len(rows):
-                return i, rows[i - 1]
-            raise ToolInputError(f"period index {i} out of range 1..{len(rows)}; call scope_periods() to list them")
-        hits = [
-            (i, r) for i, r in enumerate(rows, 1) if r["evidence_id"] == q or q.lower() in (r["label"] or "").lower()
-        ]
+            r = s.one(f"{_PERIODS_SQL} AND idx = ?", [None, None, i])
+            if r is None:
+                n = s.scalar("SELECT count(*) FROM periods") or 0
+                raise ToolInputError(f"period index {i} out of range 1..{n}; call scope_periods() to list them")
+            if source and r["source"] != source:
+                raise ToolInputError(
+                    f"period {i} belongs to source {r['source']!r}, not {source!r}; indexes are store-wide "
+                    "(see scope_periods), so drop source or pass an index listed for that source"
+                )
+            return i, r
+        rows = s.all(f"{_PERIODS_SQL} ORDER BY idx", [source, source])
+        hits = [r for r in rows if r["evidence_id"] == q or q.lower() in (r["label"] or "").lower()]
         if len(hits) == 1:
-            return hits[0]
+            return hits[0]["idx"], hits[0]
         if not hits:
             raise ToolInputError(f"No period matches {name!r}. Call scope_periods() to list them.")
-        opts = "; ".join(f"{i}: {(r['label'] or '')[:60]}" for i, r in hits[:10])
+        opts = "; ".join(f"{r['idx']}: {(r['label'] or '')[:60]}" for r in hits[:10])
         raise ToolInputError(f"{name!r} matches {len(hits)} periods; pass the index. Candidates: {opts}")
 
     @ctx.tool()
@@ -789,13 +823,13 @@ def register(mcp, ctx) -> None:
         Without `name`: one page of periods (total, has_more, next_offset), each with its index, evidence_id,
         label, kind, start/end (UTC), duration, chat volume (messages, active agents) and, for AI Village goals,
         a heuristic goal type (holiday, self_directed, competitive, collaborative, individual, assigned_individual,
-        open_task). `kind` filters the list; indexes stay those of the unfiltered list.
+        open_task). Indexes are store-wide: `source` and `kind` filter the list but keep each period's index.
         With `name`: one period's activity: top speakers, channels, busiest day, human messages and action counts.
         Use start/end as since/until for scope_search, scope_timeline and scope_graph."""
         with ctx.store() as s:
             _check_source(s, source)
             if name is not None and name.strip():
-                i, r = _find_period(s.all(f"{_PERIODS_SQL} ORDER BY idx", [source, source]), name)
+                i, r = _find_period(s, name, source)
                 r = _with_volume(s, [r])[0]
                 window = "source = ? AND ts >= ? AND (? IS NULL OR ts < ?)"
                 params = [r["source"], r["start_ts"], r["end_ts"], r["end_ts"]]
@@ -808,11 +842,8 @@ def register(mcp, ctx) -> None:
                     f"SELECT channel, count(*) n FROM messages WHERE {window} GROUP BY 1 ORDER BY n DESC, 1 LIMIT ?",
                     [*params, top],
                 )
-                peak = s.one(
-                    f"SELECT CAST(date_trunc('day', ts) AS DATE) AS day, count(*) n FROM messages WHERE {window} "
-                    "GROUP BY 1 ORDER BY n DESC, 1 LIMIT 1",
-                    params,
-                )
+                spec = village_days(s, source=r["source"])
+                peak = s.one(_busiest_sql(spec, window), params)
                 actions = s.all(f"SELECT kind, count(*) n FROM actions WHERE {window} GROUP BY 1 ORDER BY 1", params)
                 humans = s.scalar(f"SELECT count(*) FROM messages WHERE {window} AND author_id LIKE 'human:%'", params)
                 d = _period_dict(r, i)
@@ -829,7 +860,7 @@ def register(mcp, ctx) -> None:
                             for x in speakers
                         ],
                         "channels": [{"channel": x["channel"], "messages": x["n"]} for x in channels],
-                        "busiest_day": {"day": ts_iso(peak["day"]), "messages": peak["n"]} if peak else None,
+                        "busiest_day": _busiest(peak, spec),
                         "actions": {x["kind"]: x["n"] for x in actions},
                         "notes": [
                             f"for centrality call scope_graph(since={d['start']!r}, until={d['end']!r}); "
@@ -839,6 +870,13 @@ def register(mcp, ctx) -> None:
                             ["'type' is a keyword heuristic from the goal text, not a dataset field"]
                             if "type" in d
                             else []
+                        )
+                        + (
+                            [
+                                "busiest_day is a Village day: day is its local date in tz and village_day its number (as in scope_recap)"
+                            ]
+                            if spec
+                            else ["busiest_day is a UTC date."]
                         ),
                     }
                 )
@@ -896,7 +934,10 @@ def register(mcp, ctx) -> None:
 
     @ctx.tool()
     def timeline(
-        bin: Annotated[Literal["hour", "day", "week", "month"], Field(description="Bucket size (UTC).")] = "day",
+        bin: Annotated[
+            Literal["hour", "day", "week", "month"],
+            Field(description="Bucket size (UTC; AI Village data: Village days, Pacific time)."),
+        ] = "day",
         group_by: Annotated[
             Literal["none", "channel", "author"],
             Field(description="Split counts by channel (messages only) or author/agent; 'none' = one series."),
@@ -915,7 +956,8 @@ def register(mcp, ctx) -> None:
     ) -> dict[str, Any]:
         """Activity over time: counts per hour/day/week/month bucket, optionally split by channel or author
         (top groups by total, the rest summed as 'other'). Returns the total, the peak bucket and the sparse
-        series (empty buckets omitted). Use it to find bursts, then read them with scope_search (no query)."""
+        series (empty buckets omitted). For one AI Village source, buckets are Village days (Pacific) and carry
+        village_day. Use it to find bursts, then read them with scope_search (no query)."""
         lo, hi = _window(since, until)
         with ctx.store() as s:
             _check_source(s, source)
@@ -1036,7 +1078,7 @@ def register(mcp, ctx) -> None:
             ch = s.resolve_channel(channel, source)
             pinfo = None
             if period is not None:
-                i, r = _find_period(s.all(f"{_PERIODS_SQL} ORDER BY idx", [source, source]), period)
+                i, r = _find_period(s, period, source)
                 if r["start_ts"] is None:
                     raise ToolInputError(f"period {i} has no start time, so it cannot be recapped")
                 end = r["end_ts"] or s.scalar(
@@ -1141,7 +1183,9 @@ def register(mcp, ctx) -> None:
                     "end": b["end"],
                     **({"day": b["day"]} if "day" in b else {}),
                     "messages": b["n"],
-                    "agents": b["agents"][:8],
+                    "agents": [n for n, k in zip(b["agents"], b["author_kinds"], strict=True) if k == "agent"][:8],
+                    "humans": [n for n, k in zip(b["agents"], b["author_kinds"], strict=True) if k == "human"][:8],
+                    "external": sum(k == "external" for k in b["author_kinds"]),
                     "first_snippet": text(snip.get(b["first_id"]), cap),
                     "evidence_ids": b["ids"][:10],
                 }
@@ -1155,7 +1199,8 @@ def register(mcp, ctx) -> None:
             "rising_terms are candidates: lowercased words and two-word phrases of agent messages, ranked by the "
             "z-score of a log-odds ratio against the baseline window with an informative Dirichlet prior "
             "(Monroe et al. 2008). Read them in context before claiming anything.",
-            "threads: runs of messages in one channel with gaps of at most 20 minutes, longest first; "
+            "threads: runs of messages in one channel with gaps of at most 20 minutes, longest first; agents and "
+            "humans list who wrote in it (most messages first, up to 8 each), external counts other authors; "
             "evidence_ids are the first 10 messages of each.",
         ]
         return res
@@ -1179,7 +1224,7 @@ def register(mcp, ctx) -> None:
         open. Kinds: burst (an agent's or channel's messages on one day far above its previous 14 active days,
         by z-score), silence (an active agent posts nothing for 3+ active days, then returns), partner_shift (an
         agent's mix of mention partners changes sharply between consecutive periods, by Jensen-Shannon distance)
-        and first_use (the first use of a term that other agents picked up within 14 days). Scores are not
+        and first_use (the first use of a coined word that other agents picked up within 14 days). Scores are not
         comparable across kinds, so the ranking interleaves them: the strongest of each kind first, then the
         second of each, and so on. Read a moment with core_get(evidence_ids[0], before=5, after=5)."""
         lo, hi = _window(since, until)
@@ -1229,8 +1274,10 @@ def register(mcp, ctx) -> None:
             "silence: >= 3 consecutive active days without a message after >= 3 messages per active day.",
             "partner_shift: Jensen-Shannon distance (0 = same mix, 1 = disjoint) between consecutive periods "
             "(village goals, else 14-day bins) with >= 20 mentions each.",
-            "first_use: a term first used after the first tenth of the data that >= 2 other agents used in >= 2 "
-            "messages within 14 days; ordinary words that first appear late can qualify, so read it in context.",
+            "first_use: a coined word (letters, hyphens allowed; not a common English word or agent name) that no "
+            "message used before, first used after the first tenth of the data, and used by >= 1 other agent within "
+            "14 days (once is enough); score = those other agents. A word in > 10% of agent messages in those 14 "
+            "days is a new topic and left out. Read it in context before calling it copied.",
             "reason and term are dataset-derived text (untrusted).",
         ]
         res: dict[str, Any] = {

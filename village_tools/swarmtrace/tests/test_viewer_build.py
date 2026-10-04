@@ -116,3 +116,118 @@ def test_day_spec_defaults():
     assert btv.day_spec(None, btv.AI_VILLAGE_TZ, default_on=False) is None
     with pytest.raises(ValueError):
         btv.day_spec("April 2nd", "UTC", default_on=False)
+
+
+def _malformed(tmp_path: Path) -> dict[str, Path]:
+    """One file per malformed case the build used to crash on, keyed by a label."""
+    def variant(**changes):
+        t = toy_trace()
+        for k, v in changes.items():
+            t[k] = v
+        return t
+    cases = {
+        "agent-name-list": variant(agents=[{"name": ["alpha"], "lab": "LabA", "joined": None, "left": None}]),
+        "agent-name-dict": variant(agents=[{"name": {"n": "alpha"}, "lab": "LabA", "joined": None, "left": None}]),
+        "kind-list": variant(kind=["belief"]),
+        "kind-dict": variant(kind={"k": "belief"}),
+        "event-agent-list": variant(events=[dict(toy_trace()["events"][0], agent=["alpha"])]),
+        "agents-dict": variant(agents={"alpha": 1}),
+        "agents-int": variant(agents=7),
+        "events-int": variant(events=7),
+        "events-strings": variant(events=["e1"]),
+    }
+    out = {}
+    for label, t in cases.items():
+        out[label] = tmp_path / f"{label}.json"
+        out[label].write_text(json.dumps(t))
+    out["bad-utf8"] = tmp_path / "bad-utf8.json"
+    out["bad-utf8"].write_bytes(b'{"version": 0, "id": "\xff\xfe"}')
+    out["nan"] = tmp_path / "nan.json"
+    out["nan"].write_text(json.dumps(variant(metrics={"Agents": float("nan")})))
+    return out
+
+
+def _good(tmp_path: Path, tid="toy-idea") -> Path:
+    t = toy_trace()
+    t["id"] = tid
+    p = tmp_path / f"{tid}.json"
+    p.write_text(json.dumps(t))
+    return p
+
+
+def _payload(out: Path) -> dict:
+    page = _Page()
+    page.feed(out.read_text(encoding="utf-8"))
+    return json.loads(next(s for s in page.scripts if s["attrs"].get("id") == "trace-data")["text"])
+
+
+def test_malformed_traces_are_skipped_with_a_reason(tmp_path, capsys):
+    bad = _malformed(tmp_path)
+    good = _good(tmp_path)
+    out = tmp_path / "page.html"
+    assert btv.main([str(good), *map(str, bad.values()), "-o", str(out)]) == 0
+    assert [t["id"] for t in _payload(out)["traces"]] == ["toy-idea"]
+    err = capsys.readouterr().err
+    for label, path in bad.items():
+        assert any(line.startswith("skip:") and path.name in line for line in err.splitlines()), label
+
+
+def test_malformed_index_files_are_skipped(tmp_path, capsys):
+    (tmp_path / "ok").mkdir()
+    good = _good(tmp_path / "ok", "toy-ok")
+    (tmp_path / "ok" / "index.json").write_text(json.dumps({"traces": [{"file": good.name}]}))
+    for name, idx in {"top-list": [good.name], "strings": {"traces": [good.name]}, "file-list": {"traces": [{"file": [1]}]},
+                      "traces-dict": {"traces": {"a": 1}}}.items():
+        d = tmp_path / name
+        d.mkdir()
+        (d / "index.json").write_text(json.dumps(idx))
+    (tmp_path / "bad-utf8").mkdir()
+    (tmp_path / "bad-utf8" / "index.json").write_bytes(b"\xff\xfe{}")
+    out = tmp_path / "page.html"
+    dirs = ["ok", "top-list", "strings", "file-list", "traces-dict", "bad-utf8"]
+    assert btv.main([*(str(tmp_path / d) for d in dirs), "-o", str(out)]) == 0
+    assert [t["id"] for t in _payload(out)["traces"]] == ["toy-ok"]
+    err = capsys.readouterr().err
+    for d in dirs[1:]:
+        assert f"{tmp_path / d / 'index.json'}" in err, d
+
+
+def test_duplicate_trace_ids_are_skipped(tmp_path, capsys):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    a, b = _good(tmp_path / "a"), _good(tmp_path / "b")
+    out = tmp_path / "page.html"
+    assert btv.main([str(a), str(b), "-o", str(out)]) == 0
+    assert len(_payload(out)["traces"]) == 1
+    assert "already loaded" in capsys.readouterr().err
+
+
+def test_only_malformed_inputs_fail_cleanly(tmp_path, capsys):
+    bad = _malformed(tmp_path)
+    assert btv.main([*map(str, bad.values()), "-o", str(tmp_path / "page.html")]) == 1
+    assert "No valid traces found" in capsys.readouterr().err
+
+
+def test_redaction_uses_swarmtrace_scrub(tmp_path):
+    t = toy_trace()
+    t["events"][0]["snippet"] = "連絡はbob@example.comまで, ops@agentvillage.org, call 555-123-4567"
+    t["quotes"][0]["text"] = "メールcat@keep.example.org確認"
+    src = tmp_path / "toy.json"
+    src.write_text(json.dumps(t))
+    out = tmp_path / "page.html"
+    assert btv.main([str(src), "-o", str(out), "--keep-email-domain", "keep.example.org"]) == 0
+    tr = _payload(out)["traces"][0]
+    snip = tr["events"][0]["snippet"]
+    assert snip.startswith("連絡は[email]まで")            # CJK next to the address survives
+    assert "ops@agentvillage.org" in snip                 # the agents' mailboxes are kept, as on export
+    assert "555-123-4567" not in snip and "[phone]" in snip
+    assert tr["quotes"][0]["text"] == "メールcat@keep.example.org確認"  # --keep-email-domain holds next to CJK
+    assert btv.main([str(src), "-o", str(out), "--keep-emails"]) == 0
+    assert _payload(out)["traces"][0]["events"][0]["snippet"] == t["events"][0]["snippet"]
+
+
+def test_empty_input_points_at_the_exporter(tmp_path, capsys):
+    (tmp_path / "empty").mkdir()
+    assert btv.main([str(tmp_path / "empty"), "-o", str(tmp_path / "page.html")]) == 1
+    err = capsys.readouterr().err
+    assert "trace_export.py" in err and "mock_trace" not in err

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -45,6 +46,30 @@ def test_in_process_protocol_roundtrip(data_dir: Path):
 
             resources = {str(r.uri) for r in (await client.list_resources()).resources}
             assert "village://schema" in resources
+
+    run(go())
+
+
+def test_bad_arguments_are_one_line_messages(data_dir: Path):
+    """Arguments that fail a tool's input schema come back as one short line per field, not pydantic's
+    multi-line text with documentation URLs (over the protocol, as a client sees them)."""
+    app = build_server(config_for(data_dir))
+    cases = {
+        ("scope_search", '{"query": "x", "max_chars": 19}'): "max_chars: must be >= 20 (got 19)",
+        ("sweep_run", '{"rubric": "x", "cap": 0}'): "cap: must be >= 1 (got 0)",
+        ("sweep_review", '{"n": 600}'): "sweep_id: required; n: must be <= 500 (got 600)",
+        ("scope_moments", '{"kinds": ["nope"]}'): "kinds.0: must be one of 'burst', 'silence', 'partner_shift'",
+        ("core_get", '{"ids": 5}'): "ids: must be a string or a list (got 5)",
+        ("scope_search", '{"limit": "abc"}'): "limit: must be an integer (got 'abc')",
+    }
+
+    async def go():
+        async with Client(app) as client:
+            for (tool, args), expected in cases.items():
+                res = await client.call_tool(tool, json.loads(args))
+                text = res.content[0].text
+                assert res.is_error and expected in text, text
+                assert "\n" not in text and "pydantic" not in text and "validation error" not in text, text
 
     run(go())
 

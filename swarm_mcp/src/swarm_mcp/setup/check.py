@@ -39,6 +39,7 @@ from swarm_mcp.scope import evidence
 from swarm_mcp.setup.mapping import MappedAdapter, MappingError, has_path, mapped_paths, validate_spec
 from swarm_mcp.setup.masking import show
 from swarm_mcp.setup.profile import flatten
+from swarm_mcp.setup.readers import skipped_note
 from swarm_mcp.setup.timeparse import plausible, to_datetime
 
 DEFAULT_SAMPLE_ROWS = 2000
@@ -99,7 +100,11 @@ def run_check(
         "mode": "full" if full else f"sample ({rows} rows per table)",
     }
 
+    built: dict[str, MappedAdapter] = {}
+
     def finish() -> dict[str, Any]:
+        if built:
+            report["skipped_files"] = built["adapter"].skipped_files
         errors = [p for p in problems if p.severity == "error"]
         report["status"] = "fail" if errors else "pass"
         report["errors"] = len(errors)
@@ -122,6 +127,7 @@ def run_check(
         problems.append(Problem("error", "spec_invalid", str(e), 1))
         return finish()
     report["root"] = str(adapter.root)
+    built["adapter"] = adapter
 
     # ---------------------------------------------------------------- every mapped field exists
     for frm, roles in mapped_paths(spec).items():
@@ -381,6 +387,8 @@ def format_report(report: dict[str, Any]) -> str:
         )
         if cnt["actors"]:
             lines.append("  actors: " + ", ".join(f"{k} {v:,}" for k, v in sorted(cnt["actors"].items())))
+    if report.get("skipped_files"):
+        lines.append("  note: " + skipped_note(report["skipped_files"]))
     for p in report["problems"]:
         lines.append(f"  [{p['severity'].upper()}] {p['code']}: {p['message']}")
         for e in p["examples"]:

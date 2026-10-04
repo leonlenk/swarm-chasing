@@ -24,6 +24,8 @@ Other rules:
 - `uv run --directory swarm_mcp` runs from `swarm_mcp/`, so use **absolute paths** for the
   dataset and the mapping. Below, `<repo>` is the repository root
   (`git rev-parse --show-toplevel`), `<source>` is `$0` and `<path>` is the absolute form of `$1`.
+- If the task file's check and add commands carry more flags (such as `--db <store>` or `--replace`),
+  keep them in every `swarm-mcp add` command below.
 
 ## Steps
 
@@ -63,7 +65,9 @@ This runs the check again, then ingests. It is idempotent: re-running replaces t
 After a restart of the `swarm` MCP server (`/mcp`):
 - `core_info` lists `<source>` with every mapped kind and its row counts;
 - `scope_search` finds a phrase you know is in the data;
-- `core_get` resolves one id of each kind (`<source>:<kind>:<id>`).
+- `core_get` resolves one id of each mapped kind: `<source>:msg:<kind>/<id>` for a message kind,
+  `<source>:event:<kind>/<id>` for an action or other kind, `<source>:period:<kind>/<id>` for a
+  period (`<kind>` is the mapping's own kind, e.g. `forum:msg:post/42`; copy ids from `scope_search`).
 
 ### 6. Report
 Report back with:

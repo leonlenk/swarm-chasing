@@ -6,15 +6,18 @@ different adapter, or by a different mapping, is only replaced with ``replace=Tr
 (``SourceConflict`` otherwise), so a mapping named ``village`` can't wipe AI Village. Rows are validated
 against the pydantic models, spooled to temporary NDJSON files next to the
 store (deleted afterwards) and bulk-loaded with DuckDB's ``read_json``, which
-is far faster than row-by-row inserts.
+is far faster than row-by-row inserts. DuckDB keeps the deleted rows of a replaced source
+in the file, so after an ingest ``compact`` rewrites the store once they fill much of it.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import shutil
+import stat
 import tempfile
 import time
 from datetime import datetime, timezone
@@ -93,6 +96,12 @@ def _owner_of(row: Any) -> Owner | None:
     return str(row[0]), _resolved(row[1]), _resolved(mapping) if mapping else None
 
 
+def _in_use(e: Exception) -> str:
+    """'in use by another process (PID n)' for a DuckDB lock error (its own text suggests read-only mode)."""
+    m = re.search(r"\(PID (\d+)\)", str(e))
+    return "in use by another process" + (f" (PID {m.group(1)})" if m else "")
+
+
 def _read_spool(table: str, spool: Path) -> str:
     file = _sql_str(str(spool / f"{table}.ndjson"))
     return (
@@ -102,32 +111,33 @@ def _read_spool(table: str, spool: Path) -> str:
 
 
 def _duplicate_error(
-    con: duckdb.DuckDBPyConnection, table: str, spool: Path, adapter: Adapter, path: Path, err: Exception
+    con: duckdb.DuckDBPyConnection, table: str, spool: Path, adapter: Adapter, err: Exception
 ) -> ToolInputError:
     """A readable error for a primary-key collision at INSERT (e.g. two mapped records with one local_id).
 
-    Called after ROLLBACK; names up to three duplicate ids from the spooled rows (or, when the clash is
-    with another source's rows, the key DuckDB reported)."""
+    Called after ROLLBACK; names up to five duplicate ids from the spooled rows and how many there are
+    (or, when the clash is with another source's rows, the key DuckDB reported)."""
     pk = schema.PRIMARY_KEYS[table]
-    dupes: list[tuple[Any, int]] = []
+    dupes: list[tuple[Any, int, int]] = []
     try:
         dupes = con.execute(
-            f"SELECT {pk}, count(*) AS n FROM {_read_spool(table, spool)} GROUP BY 1 HAVING count(*) > 1 "
-            "ORDER BY n DESC, 1 LIMIT 3"
+            f"SELECT {pk}, n, count(*) OVER () FROM (SELECT {pk}, count(*) AS n FROM {_read_spool(table, spool)} "
+            "GROUP BY 1 HAVING count(*) > 1) ORDER BY n DESC, 1 LIMIT 5"
         ).fetchall()
     except duckdb.Error:
         pass
     if dupes:
-        ids = ", ".join(f"{k!r} ({n}x)" for k, n in dupes)
+        ids = ", ".join(f"{k!r} ({n}x)" for k, n, _ in dupes)
+        more = dupes[0][2] - len(dupes)
+        ids += f" and {more:,} more" if more else ""
     else:
         m = re.search(r'duplicate key "([^"]*)"', str(err))
         ids = repr(m.group(1)) if m else "(unknown)"
-    mapping = (getattr(adapter, "source_meta", None) or {}).get("mapping")
-    check = f"swarm-mcp add {path}" + (f" --mapping {mapping}" if mapping else "") + " --dry-run"
     return ToolInputError(
         f"source {adapter.source!r}: duplicate {pk} in {table}: {ids}. Nothing was ingested (the store is "
         "unchanged). Each record's id must be unique; for a mapping, make each entry's local_id unique "
-        f"within its kind (e.g. a primary key, not a foreign key). `{check}` runs the mapping check."
+        "within its kind (e.g. a primary key, not a foreign key). The mapping check (--dry-run) reads only "
+        "a sample, so it can miss duplicates further into the data."
     )
 
 
@@ -174,7 +184,16 @@ def ingest(
         t_read = time.perf_counter()
         say(f"read {', '.join(f'{v:,} {k}' for k, v in counts.items())} in {t_read - t0:.1f}s; loading into {db_path}")
 
-        con = db.open_connection(db_path, read_only=False, timeout=30)
+        try:
+            con = db.open_connection(db_path, read_only=False, timeout=30)
+        except duckdb.Error as e:
+            if not db._is_lock_error(e):
+                raise
+            raise ToolInputError(
+                f"the store {db_path} is {_in_use(e)}, so nothing was ingested. DuckDB allows one writer or "
+                "several readers at a time: close the other program (the MCP server holds the store only "
+                "during a tool call) and retry."
+            ) from None
         in_tx = False
         try:
             not_tables = [
@@ -220,7 +239,7 @@ def ingest(
                 except duckdb.ConstraintException as e:
                     con.execute("ROLLBACK")
                     in_tx = False
-                    raise _duplicate_error(con, table, spool, adapter, path, e) from None
+                    raise _duplicate_error(con, table, spool, adapter, e) from None
             con.execute("DELETE FROM sources WHERE source = ?", [adapter.source])
             con.execute(
                 "INSERT INTO sources VALUES (?, ?, ?, ?, ?, ?)",
@@ -255,6 +274,7 @@ def ingest(
     finally:
         shutil.rmtree(spool, ignore_errors=True)
 
+    compaction = compact(db_path, progress=say)
     return {
         "adapter": adapter.name,
         "source": adapter.source,
@@ -264,7 +284,102 @@ def ingest(
         "seconds": round(time.perf_counter() - t0, 1),
         "replaced": replaced,
         **({"previous": _describe(previous)} if replaced in ("replaced", "mapping") and previous else {}),
+        "compaction": compaction,
     }
+
+
+COMPACT_MIN_DEAD = 0.25  # compact once deleted rows still in the file reach this share of the live rows
+
+
+def _fsync(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def compact(
+    db_path: Path,
+    *,
+    min_dead: float = COMPACT_MIN_DEAD,
+    timeout: float = 10.0,
+    progress: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """Rewrite the store into a fresh file when deleted rows fill much of it. Never raises.
+
+    DuckDB never drops the deleted rows of a table that has an index (every store table has a
+    primary key), and neither CHECKPOINT nor VACUUM reclaims them, so each re-ingest of a source
+    would leave its old copy in the file for good. Once the deleted rows reach ``min_dead`` of the
+    live ones, the store is copied (``COPY FROM DATABASE``: every table, findings and sources
+    included) into a temporary file next to it, the row counts are compared, and the copy is
+    synced and moved over the store with ``os.replace``. The store stays attached read-only
+    throughout: its shared lock lets readers in (they keep reading the old, identical file) and
+    keeps writers out until the new file is in place. A busy store (a writer holds it for longer
+    than ``timeout`` seconds), a leftover write-ahead log or any error leaves the store as it was
+    and is reported in ``skipped``; a crash leaves at most a ``.swarmscope-compact-*`` folder."""
+    say = progress or (lambda msg: log.info(msg))
+    store = Path(db_path).resolve()  # a symlinked store: replace its target, not the link
+    out: dict[str, Any] = {"compacted": False}
+    tmpdir: Path | None = None
+    con = duckdb.connect(":memory:")
+    try:
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                con.execute(f"ATTACH {_sql_str(str(store))} AS store (READ_ONLY)")
+                break
+            except duckdb.Error as e:
+                if not db._is_lock_error(e) or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.2)
+        if store.with_name(store.name + ".wal").exists():  # under our lock: a crashed writer's log
+            raise RuntimeError("the store has a write-ahead log that its next writer will apply first")
+        tables = con.execute(
+            "SELECT schema_name, table_name, estimated_size FROM duckdb_tables() WHERE database_name = 'store'"
+        ).fetchall()
+        live: dict[str, int] = {}
+        dead = 0
+        for sch, name, size in tables:
+            ref = f'"{sch}"."{name}"'
+            live[ref] = con.execute(f"SELECT count(*) FROM store.{ref}").fetchone()[0]
+            dead += max(0, (size or 0) - live[ref])
+        total = sum(live.values())
+        out.update(live_rows=total, dead_rows=dead)
+        if not dead or dead < min_dead * total:
+            return out
+        tmpdir = Path(tempfile.mkdtemp(prefix=".swarmscope-compact-", dir=store.parent))
+        tmp = tmpdir / store.name
+        con.execute(f"ATTACH {_sql_str(str(tmp))} AS compact")
+        con.execute("COPY FROM DATABASE store TO compact")
+        con.execute("DETACH compact")
+        con.execute(f"ATTACH {_sql_str(str(tmp))} AS compact (READ_ONLY)")
+        for ref, n in live.items():
+            got = con.execute(f"SELECT count(*) FROM compact.{ref}").fetchone()[0]
+            if got != n:
+                raise RuntimeError(f"the copy of {ref} has {got} rows, not {n}")
+        con.execute("DETACH compact")
+        if any(p.name != tmp.name for p in tmpdir.iterdir()):  # e.g. a WAL the DETACH did not fold in
+            raise RuntimeError("the copy left extra files")
+        os.chmod(tmp, stat.S_IMODE(store.stat().st_mode))
+        _fsync(tmp)
+        before = store.stat().st_size
+        os.replace(tmp, store)  # still holding the old file's lock: no writer can open it in between
+        try:
+            _fsync(store.parent)
+        except OSError:
+            pass
+        out.update(compacted=True, before_mb=round(before / 1e6, 1), after_mb=round(store.stat().st_size / 1e6, 1))
+        say(f"compacted the store: {out['before_mb']:,} MB -> {out['after_mb']:,} MB ({dead:,} deleted rows dropped)")
+    except Exception as e:  # noqa: BLE001 - compaction only saves disk: never fail the ingest over it
+        busy = isinstance(e, duckdb.Error) and db._is_lock_error(e)
+        out["skipped"] = f"the store is {_in_use(e)}" if busy else f"{type(e).__name__}: {e}".splitlines()[0]
+        say(f"store not compacted ({out['skipped']}); the next add tries again")
+    finally:
+        con.close()
+        if tmpdir is not None:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+    return out
 
 
 def ingest_mapped(

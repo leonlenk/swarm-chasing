@@ -162,7 +162,11 @@ def test_duplicate_local_id_is_a_tool_error_and_rolls_back(mapped_store):
     mapping.write_text(json.dumps(bad))  # same mapping path, so the source owner matches
     with pytest.raises(ToolInputError, match=r"duplicate evidence_id in messages: 'board:msg:post/\d+'") as ei:
         ingest_mapped(mapping, mapped_store["root"], store)
-    assert "--dry-run" in str(ei.value) and "swarm-mcp add" in str(ei.value)
+    # all 12 shared ids are counted, five are named; the sampled mapping check (--dry-run) is not
+    # offered as the way to find them (it can miss duplicates past its sample)
+    msg = str(ei.value)
+    assert msg.count("x)") == 5 and "and 7 more." in msg
+    assert "reads only a sample" in msg and "swarm-mcp add" not in msg
     with db.connect(store) as s:
         assert s.scalar("SELECT count(*) FROM messages WHERE source = 'board'") == 240
         assert s.scalar("SELECT count(*) FROM actions WHERE source = 'board'") == 12

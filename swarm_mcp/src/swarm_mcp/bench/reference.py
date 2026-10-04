@@ -1,9 +1,9 @@
 """Reference solver: recover the planted events straight from the dataset files.
 
-It never reads ``truth.json`` (only the term list, which a user would pass to
-``scope_trace_diffusion`` anyway). It shows the benchmark is solvable with simple
-logic, gives the scorer something to test against, and is a baseline for the real
-scope tools. Its output follows the contract in ``score.py``.
+It never reads ``truth.json`` (only the term list, which an investigator would
+search for anyway, e.g. with ``scope_search``). It shows the benchmark is solvable
+with simple logic, gives the scorer something to test against, and is a baseline
+for solvers built on the scope tools. Its output follows the contract in ``score.py``.
 """
 
 from __future__ import annotations

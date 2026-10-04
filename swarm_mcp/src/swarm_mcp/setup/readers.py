@@ -468,6 +468,23 @@ def _table_for(root: Path, path: Path) -> tuple[list[Table], dict[str, Any] | No
     return [Table(rel, path, fmt, gz=gz)], None
 
 
+OUTSIDE_LINK = "symlink to outside the dataset folder"
+
+
+def skipped_note(skipped: list[dict[str, Any]], limit: int = 3) -> str:
+    """One line for the files ``discover`` skipped: how many, grouped by why, with a few paths."""
+    if not skipped:
+        return ""
+    by_reason: dict[str, list[str]] = {}
+    for s in skipped:
+        by_reason.setdefault(str(s.get("reason", "")).split(":")[0], []).append(str(s.get("path")))
+    parts = [
+        f"{reason}: {', '.join(paths[:limit])}" + (f" and {len(paths) - limit} more" if len(paths) > limit else "")
+        for reason, paths in by_reason.items()
+    ]
+    return f"skipped {len(skipped)} files or folders (not read): " + "; ".join(parts)
+
+
 def discover(root: Path) -> tuple[list[Table], list[dict[str, Any]], list[dict[str, Any]]]:
     """Walk ``root`` (a file or folder): (tables, docs, skipped). Hidden and cache folders are skipped."""
     root = Path(root)
@@ -483,12 +500,16 @@ def discover(root: Path) -> tuple[list[Table], list[dict[str, Any]], list[dict[s
         real_root = root.resolve()
         for dirpath, dirnames, filenames in os.walk(root):  # does not descend into symlinked folders
             dirnames[:] = sorted(d for d in dirnames if not d.startswith(".") and d not in SKIP_DIRS)
+            for d in dirnames:  # reported, so a dataset reached through a symlinked folder is not silently empty
+                f = Path(dirpath) / d
+                if f.is_symlink() and not f.resolve().is_relative_to(real_root):
+                    skipped.append({"path": f.relative_to(root).as_posix() + "/", "reason": OUTSIDE_LINK})
             for fn in sorted(filenames):
                 if fn.startswith("."):
                     continue
                 f = Path(dirpath) / fn
                 if f.is_symlink() and not f.resolve().is_relative_to(real_root):
-                    skipped.append({"path": f.relative_to(root).as_posix(), "reason": "symlink to outside the dataset folder"})
+                    skipped.append({"path": f.relative_to(root).as_posix(), "reason": OUTSIDE_LINK})
                     continue
                 files.append(f)
             if len(files) > MAX_FILES:

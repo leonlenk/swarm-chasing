@@ -1,19 +1,36 @@
 """Trace norms passed on through agent-written onboarding guides in the AI Village.
 
+Prerequisites: the dataset in data/ai-village/ and the daily memory sample out/cache/memory_daily_sample.jsonl.gz
+(read by guides, items and analyze), which only memories.py builds: run `python ideas.py` then `python memories.py`
+(from village_tools/) first.
+
 Stages (each rerunnable; the LLM steps in between are done by Sonnet subagents):
   python tracer_onboarding.py events    -> events_slim.jsonl.gz (SEARCH_HISTORY + session goals; streams the 328 MB events file)
   python tracer_onboarding.py guides    -> guides.csv, evidence/rules_batch_*.txt   (for rule extraction)
-  [LLM] rule extraction -> rules.csv (hand-merged canonical list)
+  [LLM] rule extraction (village_tools/prompts/onboarding_rule_extraction.md) -> rules.csv (hand-merged canonical list)
   python tracer_onboarding.py rules     -> rules.csv, label_batches/RULES.txt (canonical list hand-merged in RULES below)
   python tracer_onboarding.py items     -> items.csv, label_batches/batch_*.jsonl     (for labelling)
-  [LLM] labelling -> label_batches/labels_*.jsonl
+  [LLM] labelling (village_tools/prompts/onboarding_labelling.md) -> label_batches/labels_*.jsonl
   python tracer_onboarding.py analyze   -> labels.csv, results.json, uptake.png/.pdf  (needs matplotlib:
                                            uv run --no-project --with matplotlib python tracer_onboarding.py analyze)
   python tracer_onboarding.py plots     -> uptake.png/.pdf redrawn from results.json
+The original runs' exact prompts were not preserved; the files in village_tools/prompts/ are reconstructions.
 
 Outputs live in out/sprint_idea/onboarding/.
+
+analyze refuses to run (exit 1) until label_batches/labels_*.jsonl hold labels for at least one item. Each labels
+file has one JSON object per line: {"item_id": "I0001", "guide_ref": "...", "labels": [{"rule": "R01", "label":
+"STATES|FOLLOWS|MUTATED|VIOLATES|NA", "conf": 1-3, "version": "the agent's wording, for MUTATED"}]}
+(guide_ref, conf and version are optional).
+
+Hand check (optional): results.json reports label agreement only when out/sprint_idea/onboarding/handcheck.json
+exists (local, derived from this run's labels; never committed). It is a JSON object mapping "ITEM_ID/RULE_ID" to
+1 when a person reading the item agrees with the LLM's label for that rule, 0 when not, e.g. {"I0121/R11": 1,
+"I0022/R12": 0}. The original run hand-checked 30 labels (stratified 7 STATES / 13 FOLLOWS / 5 VIOLATES / 5 MUTATED,
+seed 11; 24 agreed); those ids only fit that run's items, so they are not applied to new runs.
 """
 
+import argparse
 import csv
 import datetime as dt
 import gzip
@@ -30,7 +47,7 @@ EVD = OUTD / "evidence"
 LBD = OUTD / "label_batches"
 for d in (OUTD, EVD, LBD):
     d.mkdir(parents=True, exist_ok=True)
-MEM = common.CACHE / "memory_daily_sample.jsonl.gz"
+MEM = common.CACHE / "memory_daily_sample.jsonl.gz"   # built by memories.py
 EVENTS_SLIM = OUTD / "events_slim.jsonl.gz"   # SEARCH_HISTORY / session goals, built by stage_events()
 
 NEWCOMER_FROM = dt.datetime(2026, 6, 1)        # the 2026-06..09 cohort that got onboarding rooms
@@ -82,7 +99,19 @@ def joined_by_name(agents):
     return j
 
 
+def need_memory_sample():
+    """Exit with a clear message (status 1) when memories.py has not built the daily memory sample yet."""
+    if not MEM.exists():
+        sys.exit(f"error: {MEM} is missing. It is built by memories.py: run `python ideas.py` then "
+                 "`python memories.py` (from village_tools/) first.")
+
+
 def iter_memories():
+    need_memory_sample()
+    return _read_memories()
+
+
+def _read_memories():
     with gzip.open(MEM, "rt") as f:
         for line in f:
             r = json.loads(line)
@@ -124,6 +153,7 @@ def stage_events():
 
 # --- stage 1: guides ----------------------------------------------------------------------
 def stage_guides():
+    need_memory_sample()                # checked before the dataset is loaded
     agents, msgs = load_msgs()
     rows, ev = [], {}
     mems = list(iter_memories())
@@ -223,6 +253,7 @@ def memory_excerpt(text, limit=1600):
 
 
 def stage_items():
+    need_memory_sample()
     rng = random.Random(SEED)
     agents, msgs = load_msgs()
     joined = joined_by_name(agents)
@@ -378,13 +409,6 @@ TIP_EDGES = [  # giver, recipient, rule ids, time
     ("Claude Opus 5", "Gemini 3.8 Flash", ["R02", "R14"], "2026-09-03 20:37"),   # repro + "verification welcome" (by example)
     ("GLM-5.3 Flash", "Muse Spark 1.3", ["R02"], "2026-09-03 19:47"),            # weak: a receipts-heavy announcement + welcome
 ]
-# Hand check of 30 Sonnet labels (stratified 7 STATES / 13 FOLLOWS / 5 VIOLATES / 5 MUTATED, seed 11), judged by the
-# orchestrating model against the item text: 1 = agree, 0 = disagree.
-HANDCHECK = {"I0121/R11": 1, "I0022/R12": 0, "I0119/R12": 1, "I0121/R15": 1, "I0201/R01": 1, "I0023/R14": 0, "I0082/R01": 1,
-             "I0100/R16": 1, "I0285/R02": 1, "I0100/R02": 0, "I0280/R13": 1, "I0227/R10": 1, "I0313/R13": 1, "I0165/R09": 1,
-             "I0108/R13": 1, "I0335/R06": 1, "I0105/R02": 1, "I0063/R16": 1, "I0080/R01": 1, "I0137/R13": 1, "I0013/R12": 1,
-             "I0029/R09": 0, "I0025/R12": 1, "I0018/R12": 1, "I0277/R10": 1, "I0293/R12": 1, "I0251/R04": 0, "I0107/R12": 0,
-             "I0153/R01": 1, "I0269/R12": 1}
 CHANGE_DATES = {"R05": ["2025-09-05", "2025-12-12", "2026-06-11"], "R09": ["2026-04-14"], "R11": ["2025-05-16", "2026-05-22", "2026-05-28"],
                 "R12": ["2025-10-22", "2025-12-04", "2026-02-10"], "R15": ["2025-07-07"], "R16": ["2026-01-12", "2026-06-29"],
                 "R06": ["2026-06-09"], "R07": ["2025-10-14", "2026-03-26"]}
@@ -457,9 +481,35 @@ def fisher_p(a, n1, b, n2):
     return round(sum(pr(x) for x in range(max(0, k - n2), min(k, n1) + 1) if pr(x) <= p0 + 1e-12), 4)
 
 
+def handcheck_summary(rows, path=None):
+    """Agreement from the hand-check file (format in the module docstring), or None when there is none."""
+    path = path or OUTD / "handcheck.json"
+    if not path.exists():
+        return None
+    marks = json.loads(path.read_text())
+    if not marks:
+        return None
+    hc = defaultdict(list)
+    lk = {(r["item_id"], r["rule"]): r["label"] for r in rows}
+    for k, v in marks.items():
+        hc[lk.get(tuple(k.split("/")), "?")].append(int(v))
+    return {"n": len(marks), "agreement": round(sum(int(v) for v in marks.values()) / len(marks), 3),
+            "by_label": {k: f"{sum(v)}/{len(v)}" for k, v in hc.items()},
+            "note": f"from {path.name}; precision of non-NA labels only; NA recall not checked; "
+                    "'?' = no such label in this run"}
+
+
 def stage_analyze():
     import statistics
+    if not (OUTD / "items.csv").exists():
+        sys.exit(f"error: {OUTD / 'items.csv'} is missing. Run `python tracer_onboarding.py items` first.")
     items, rows, refs, missing = load_labels()
+    if not items or len(missing) == len(items):
+        sys.exit(f"error: no labels found ({LBD}/labels_*.jsonl), so there is no uptake to analyze. Label each "
+                 f"{LBD.name}/batch_<k>.jsonl with an LLM following village_tools/prompts/onboarding_labelling.md and "
+                 f"write {LBD.name}/labels_<k>.jsonl (format in this script's docstring); then rerun "
+                 "`python tracer_onboarding.py analyze`.")
+    need_memory_sample()
     if missing:
         print(f"WARNING: {len(missing)} items have no labels yet")
     with open(OUTD / "labels.csv", "w", newline="") as f:
@@ -591,13 +641,7 @@ def stage_analyze():
                          "n_uses": len(ms)}
     res["lane_idiom"] = {"newcomers": lane_first, "established_rate_by_quarter": None}
     res["keyword_trends"] = kw_trends(msgs, joined)
-    hc = defaultdict(list)
-    lk = {(r["item_id"], r["rule"]): r["label"] for r in rows}
-    for k, v in HANDCHECK.items():
-        hc[lk.get(tuple(k.split("/")), "?")].append(v)
-    res["handcheck"] = {"n": len(HANDCHECK), "agreement": round(sum(HANDCHECK.values()) / len(HANDCHECK), 3),
-                        "by_label": {k: f"{sum(v)}/{len(v)}" for k, v in hc.items()},
-                        "note": "precision of non-NA labels only; NA recall not checked"}
+    res["handcheck"] = handcheck_summary(rows)      # None unless handcheck.json exists
     (OUTD / "results.json").write_text(json.dumps(res, indent=1, default=str))
     plot_uptake(res)
     print("wrote results.json, labels.csv, uptake.png")
@@ -671,6 +715,16 @@ def plot_uptake(res=None):
     print("wrote " + ", ".join(str(o) for o in out))
 
 
+STAGES = {"events": stage_events, "guides": stage_guides, "rules": stage_rules, "items": stage_items,
+          "analyze": stage_analyze, "plots": plot_uptake}
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="Trace onboarding-guide norms; stages run in the order listed "
+                                             "(see the module docstring).")
+    ap.add_argument("stage", choices=list(STAGES))
+    STAGES[ap.parse_args(argv).stage]()
+
+
 if __name__ == "__main__":
-    {"events": stage_events, "guides": stage_guides, "rules": stage_rules, "items": stage_items, "analyze": stage_analyze,
-     "plots": plot_uptake}[sys.argv[1]]()
+    main()

@@ -206,7 +206,7 @@ class ModuleContext:
             full = self._full(name or fn.__name__)
             sdk.add_tool(
                 self._app(),
-                wrap_tool(fn, full, self.log),
+                wrap_tool(fn, full, self.log, self.scrub),
                 name=full,
                 title=title,
                 description=description or inspect.cleandoc(fn.__doc__ or "") or None,

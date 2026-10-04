@@ -102,6 +102,27 @@ def test_rising_term_hand_computed(store_path: Path, tmp_path: Path):
     assert [x["term"] for x in r["rising_terms"]] == ["zorblat"]  # "the" is a stopword: no bigram
 
 
+def test_rising_terms_author_count_paths_agree(store_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """The bitmask author count and its count(DISTINCT) fallback give the same terms; first_id
+    breaks a timestamp tie by evidence id; rows keep the score ranking."""
+    t = datetime(2026, 1, 9, 10, 0)
+    rows = [(who, t, "quuxle frobnitz") for who in ["gpt", "opus"]]  # same ts: syncopy0000 is first
+    rows += [(who, t + timedelta(minutes=5 * k), "quuxle") for k, who in enumerate(["gem", "opus", "gpt"])]
+    rows += [(who, t + timedelta(hours=1, minutes=k), "frobnitz") for k, who in enumerate(["gem", "gpt"])]
+    copy = _copy_with(store_path, tmp_path, rows)
+
+    def run() -> list[dict]:
+        with db.connect(copy) as s:
+            return recap.window_recap(s, "2026-01-08", "2026-01-14", min_term_msgs=3, min_term_agents=2)["rising_terms"]
+
+    masked = run()
+    monkeypatch.setattr(recap, "_MASK_AGENTS", 0)
+    assert run() == masked
+    got = {r["term"]: (r["n"], r["agents"], r["first_id"][-11:]) for r in masked}
+    assert got["quuxle"] == (5, 3, "syncopy0000") and got["frobnitz"] == (4, 3, "syncopy0000")
+    assert [r["score"] for r in masked] == sorted((r["score"] for r in masked), reverse=True)
+
+
 def test_bursts_are_runs_with_small_gaps(store_path: Path):
     with db.connect(store_path) as s:
         r = recap.window_recap(s, "2026-01-19", "2026-01-22", baseline=None)
@@ -164,7 +185,7 @@ def test_novel_terms_and_agent_arc(store_path: Path, tmp_path: Path):
     copy = _copy_with(store_path, tmp_path, _term_rows())
     with db.connect(copy) as s:
         nt = recap.novel_terms(s)
-        assert nt["min_msgs"] == 5  # max(5, agent messages / 20,000)
+        assert nt["min_msgs"] == 2
         g = nt["terms"]["glimmerfax"]
         assert (g["n"], g["agents"], g["adopters"], g["adopters_fast"]) == (5, 3, 2, 2)
         assert {"claude", "opus", "gpt-5", "gemini"} <= recap._name_tokens(s)  # terms made only of these are left out
@@ -189,6 +210,42 @@ def test_novel_terms_and_agent_arc(store_path: Path, tmp_path: Path):
     assert any("novel term" in n for n in opus["notes"])
     with db.connect(copy) as s, pytest.raises(ToolInputError):
         recap.agent_arc(s, "nobody-by-that-name")
+
+
+def test_novel_terms_count_single_uses_and_skip_ordinary_words(store_path: Path, tmp_path: Path):
+    """A coinage picked up once each by two other agents counts (it used to need two uses each and
+    five messages); an ordinary word that first shows up late does not, and neither does a word a
+    human used first."""
+    d = datetime(2026, 1, 9, 18, 0)
+    rows = [
+        ("gem", d, "trying a quillmesh for the list"),
+        ("opus", d + timedelta(days=1), "the quillmesh helps"),
+        ("gpt", d + timedelta(days=2), "quillmesh, nice"),
+        ("gem", d, "the signup sheet"),
+        ("opus", d + timedelta(days=1), "signup done"),
+        ("gpt", d + timedelta(days=2), "signups open"),
+    ]
+    copy = _copy_with(store_path, tmp_path, rows)
+    con = duckdb.connect(str(copy))
+    try:  # a human says "frobnitzer" before any agent does
+        some = con.execute("SELECT evidence_id FROM messages LIMIT 1").fetchone()[0]
+        con.execute(
+            """INSERT INTO messages (evidence_id, source, channel, author_id, recipient_ids, ts, ts_quality, content, meta)
+               VALUES (?, 'village', 'general', 'human:host', [], ?, 'exact', 'try the frobnitzer', '{}')""",
+            [some[: some.rfind(":") + 1] + "synhuman", d - timedelta(hours=1)],
+        )
+    finally:
+        con.close()
+    more = [(who, d + timedelta(days=k + 1), "frobnitzer works") for k, who in enumerate(["gem", "opus", "gpt"])]
+    copy2 = _copy_with(copy, tmp_path, more, name="copy2")
+    with db.connect(copy2) as s:
+        nt = recap.novel_terms(s)
+        q = nt["terms"]["quillmesh"]
+        assert (q["n"], q["agents"], q["adopters"], q["adopters_fast"]) == (3, 3, 2, 2)
+        assert "signup" not in nt["terms"] and "signups" not in nt["terms"]  # common English
+        assert "frobnitzer" not in nt["terms"]  # a human used it first
+        mm = recap.moments_page(s, kinds=["first_use"], limit=10)["items"]
+    assert [m["term"] for m in mm] == ["quillmesh"] and mm[0]["score"] == 2 and len(mm[0]["ids"]) == 3
 
 
 def test_js_distance():

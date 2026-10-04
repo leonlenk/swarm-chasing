@@ -4,7 +4,7 @@
 - ``reference``: a simple solver that recovers the planted events from the files.
 - ``score``: precision / recall / F1 of tool outputs against ``truth.json``.
 
-Output shapes the scope tools should return are in the ``score`` module docstring.
+Output shapes a solver returns are in the ``score`` module docstring.
 CLI: ``python -m swarm_mcp.bench generate|reference|score``.
 """
 

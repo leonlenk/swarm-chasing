@@ -223,6 +223,7 @@ const TraceData = (function () {
   const VIAS = ['room', 'named', 'search', 'other'];
   const EDGE_KINDS = ['transmission', 'echo', 'tip', 'correction'];
   const ANN_KINDS = ['goal', 'intervention', 'scaffolding', 'artifact', 'note'];
+  const WHERE = ['memory'];
   const LISTS = ['agents', 'events', 'exposures', 'adoptions', 'edges', 'persistence', 'annotations', 'quotes'];
   const PRO = new Set(['originates', 'endorses', 'acts_on', 'uses']);
   const MAX_ERR = 200;
@@ -240,6 +241,22 @@ const TraceData = (function () {
   const q = v => typeof v === 'string' ? "'" + (v.length > 60 ? v.slice(0, 59) + '…' : v) + "'" : JSON.stringify(v);
   const isObj = v => v != null && typeof v === 'object' && !Array.isArray(v);
 
+  /* Mirrors trace.schema.json and swarmtrace.format.validate (swarmtrace/tests/test_validators_agree.py runs one set of
+     fixtures through all three): a field that is present, null included, must have the schema's type, value, pattern
+     and length, and unknown fields are errors. The one leniency: an absent field is a warning when the viewer has a
+     fallback (version, title, start, end, the lists, metrics, lab, snippet, ...), so hand-made partial traces still
+     open. Cross-references the schema can't express (event ids, some agent names) are warnings here. */
+  const ISO_RX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$/;
+  const SLUG_RX = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+  const SNIPPET_MAX = 220, QUOTE_MAX = 160, METRICS_MAX = 10;
+  const TOP = ['version', 'id', 'title', 'kind', 'statement', 'source', 'start', 'end', ...LISTS, 'metrics'];
+  const FIELDS = {
+    agents: ['name', 'lab', 'group', 'joined', 'left'], events: ['id', 't', 'agent', 'channel', 'stance', 'conf', 'room', 'snippet'],
+    exposures: ['t', 'agent', 'source', 'via', 'event'], adoptions: ['agent', 't', 'event', 'independent', 'sources'],
+    edges: ['from', 'to', 't', 'kind', 'evidence'], persistence: ['agent', 'start', 'end', 'where'],
+    annotations: ['t', 'label', 'kind'], quotes: ['t', 'agent', 'text', 'note']
+  };
+
   function validate(raw) {
     const errors = [], warnings = [];
     let extra = 0;
@@ -248,124 +265,146 @@ const TraceData = (function () {
     const done = () => { if (extra) errors.push('… and ' + extra + ' more errors'); return { errors, warnings }; };
     if (!isObj(raw)) { errors.push('The file is not a JSON object. A trace is one object with fields such as id, kind, agents and events.'); return done(); }
     if (Array.isArray(raw.traces) && !('events' in raw)) { errors.push('This is an index file: it lists traces but holds no events. Open the per-trace files it lists instead.'); return done(); }
-    const enumChk = (p, v, list, required) => {
-      if (v == null) { if (required) E(p, 'is missing; expected one of ' + list.join(', ')); return false; }
+    // absent: an error when required, else a warning naming the fallback. Returns true when absent.
+    const absent = (p, v, required, how) => {
+      if (v !== undefined) return false;
+      if (required) E(p, 'is missing'); else Wn(p, 'is missing' + (how ? '; ' + how : ''));
+      return true;
+    };
+    const unknownChk = (p, o, keys) => { for (const k of Object.keys(o)) if (!keys.includes(k)) E(p + k, 'is not a field of trace v0'); };
+    const enumChk = (p, v, list, required = true, how) => {
+      if (absent(p, v, required, how)) return false;
       if (!list.includes(v)) { E(p, q(v) + ' is not one of ' + list.join(', ')); return false; }
       return true;
     };
-    const timeChk = (p, v, nullable) => {
-      if (v == null) { if (!nullable) E(p, 'is missing; expected an ISO time such as 2025-12-03T20:12:13Z'); return; }
-      if (typeof v !== 'string' || !Number.isFinite(parseT(v))) E(p, q(v) + ' is not an ISO time');
+    const timeChk = (p, v, nullable = false, required = true, how) => {
+      if (absent(p, v, required, how)) return;
+      if (v === null) { if (!nullable) E(p, 'is null; expected an ISO time such as 2025-12-03T20:12:13Z'); return; }
+      if (typeof v !== 'string' || !ISO_RX.test(v) || !Number.isFinite(parseT(v))) E(p, q(v) + ' is not an ISO UTC time such as 2025-12-03T20:12:13Z');
     };
-    const strChk = (p, v, nullable, warnOnly) => {
-      if (v == null) { if (!nullable) (warnOnly ? Wn : E)(p, 'is missing'); return; }
-      if (typeof v !== 'string') E(p, 'must be text, got ' + q(v));
+    const strChk = (p, v, { nullable = false, required = true, nonblank = false, max = 0, how } = {}) => {
+      if (absent(p, v, required, how)) return;
+      if (v === null) { if (!nullable) E(p, 'is null; expected text'); return; }
+      if (typeof v !== 'string') { E(p, 'must be text, got ' + q(v)); return; }
+      const n = [...v].length;   // code points, as Python's len() and JSON Schema count them
+      if (nonblank && !v.trim()) E(p, 'is empty');
+      else if (max && n > max) E(p, 'has ' + n + ' characters; at most ' + max);
     };
 
-    if (raw.version == null) Wn('version', 'is missing; reading the file as version 0');
+    unknownChk('', raw, TOP);
+    if (raw.version === undefined) Wn('version', 'is missing; reading the file as version 0');
     else if (raw.version !== 0) E('version', 'is ' + q(raw.version) + '; this viewer reads version 0');
-    if (typeof raw.id !== 'string' || !raw.id.trim()) E('id', 'must be a non-empty string');
-    if (raw.title == null || raw.title === '') Wn('title', 'is missing; the id is shown instead'); else strChk('title', raw.title, true);
-    enumChk('kind', raw.kind, KINDS, true);
-    strChk('statement', raw.statement, true);
-    strChk('source', raw.source, true);
-    if (raw.start == null) Wn('start', 'is missing; using the earliest time in the data'); else timeChk('start', raw.start, true);
-    if (raw.end == null) Wn('end', 'is missing; using the latest time in the data'); else timeChk('end', raw.end, true);
+    if (typeof raw.id !== 'string' || !SLUG_RX.test(raw.id)) E('id', 'must be a lowercase slug such as toy-idea, got ' + q(raw.id));
+    strChk('title', raw.title, { required: false, nonblank: true, how: 'the id is shown instead' });
+    enumChk('kind', raw.kind, KINDS);
+    strChk('statement', raw.statement, { required: false, nonblank: true });
+    strChk('source', raw.source, { required: false, nonblank: true });
+    timeChk('start', raw.start, false, false, 'using the earliest time in the data');
+    timeChk('end', raw.end, false, false, 'using the latest time in the data');
     if (Number.isFinite(parseT(raw.start)) && Number.isFinite(parseT(raw.end)) && parseT(raw.end) < parseT(raw.start)) E('end', 'is before start');
 
     const L = {};
     for (const k of LISTS) {
-      if (raw[k] == null) { Wn(k, 'is missing; treated as empty'); L[k] = []; }
-      else if (!Array.isArray(raw[k])) { E(k, 'must be a list'); L[k] = []; }
-      else L[k] = raw[k];
+      L[k] = [];
+      if (absent(k, raw[k], false, 'treated as empty')) continue;
+      if (!Array.isArray(raw[k])) { E(k, 'must be a list'); continue; }
+      L[k] = raw[k];
     }
-    if (raw.metrics != null && !isObj(raw.metrics)) E('metrics', 'must be an object of name: number or text');
-    else if (raw.metrics) for (const [k, v] of Object.entries(raw.metrics)) if (typeof v !== 'number' && typeof v !== 'string') Wn('metrics.' + k, 'is ' + q(v) + '; only numbers and text are shown');
+    // Each list item must be an object with only its format fields; f(item, path) then checks the fields.
+    const each = (k, f) => L[k].forEach((x, i) => {
+      const p = k + '[' + i + ']';
+      if (!isObj(x)) { E(p, 'must be an object'); return; }
+      unknownChk(p + '.', x, FIELDS[k]);
+      f(x, p);
+    });
+    if (!absent('metrics', raw.metrics, false)) {
+      if (!isObj(raw.metrics)) E('metrics', 'must be an object of name: number or text');
+      else {
+        const m = Object.entries(raw.metrics);
+        if (m.length > METRICS_MAX) E('metrics', 'has ' + m.length + ' entries; at most ' + METRICS_MAX);
+        for (const [k, v] of m) if (typeof v !== 'number' && typeof v !== 'string') E('metrics.' + k, 'is ' + q(v) + '; expected a number or text');
+      }
+    }
 
     const names = new Set();
-    L.agents.forEach((a, i) => {
-      const p = 'agents[' + i + ']';
-      if (!isObj(a)) { E(p, 'must be an object'); return; }
+    each('agents', (a, p) => {
       if (typeof a.name !== 'string' || !a.name.trim()) { E(p + '.name', 'must be a non-empty string'); return; }
       if (names.has(a.name)) E(p + '.name', q(a.name) + ' appears twice in agents');
       names.add(a.name);
-      if (a.lab == null || a.lab === '') Wn(p + '.lab', 'is missing; drawn as an unknown lab'); else strChk(p + '.lab', a.lab, true);
-      strChk(p + '.group', a.group, true);
-      timeChk(p + '.joined', a.joined, true);
-      timeChk(p + '.left', a.left, true);
+      strChk(p + '.lab', a.lab, { required: false, nonblank: true, how: 'drawn as an unknown lab' });
+      if (a.group !== undefined) strChk(p + '.group', a.group);   // optional
+      timeChk(p + '.joined', a.joined, true, false);
+      timeChk(p + '.left', a.left, true, false);
     });
     if (!L.agents.length && (L.events.length || L.adoptions.length)) E('agents', 'is empty, but the trace has events; list every agent that appears');
-    const agentChk = (p, v) => {
-      if (v == null || v === '') { E(p, 'is missing'); return false; }
-      if (!names.has(v)) { E(p, q(v) + ' is not in agents'); return false; }
-      return true;
+    // An agent name: wrong type is always an error; a name missing from agents is an error unless soft (then a warning).
+    const agentChk = (p, v, { nullable = false, required = true, soft = false } = {}) => {
+      if (absent(p, v, required)) return;
+      if (v === null && nullable) return;
+      if (typeof v !== 'string' || !v) { E(p, 'must be an agent name, got ' + q(v)); return; }
+      if (!names.has(v)) (soft ? Wn : E)(p, q(v) + ' is not in agents');
     };
     const ids = new Set();
-    L.events.forEach((e, i) => {
-      const p = 'events[' + i + ']';
-      if (!isObj(e)) { E(p, 'must be an object'); return; }
-      if (e.id == null || e.id === '') E(p + '.id', 'is missing');
-      else if (ids.has(String(e.id))) E(p + '.id', q(String(e.id)) + ' is used by an earlier event');
-      else ids.add(String(e.id));
-      timeChk(p + '.t', e.t, false);
+    each('events', (e, p) => {
+      if (typeof e.id !== 'string' || !e.id.trim()) E(p + '.id', 'must be a non-empty string, got ' + q(e.id));
+      else if (ids.has(e.id)) E(p + '.id', q(e.id) + ' is used by an earlier event');
+      else ids.add(e.id);
+      timeChk(p + '.t', e.t);
       agentChk(p + '.agent', e.agent);
-      enumChk(p + '.channel', e.channel, CHANNELS, true);
-      enumChk(p + '.stance', e.stance, STANCES, true);
-      if (!(e.conf == null || e.conf === 1 || e.conf === 2 || e.conf === 3)) E(p + '.conf', 'is ' + q(e.conf) + '; expected 1, 2, 3 or null');
-      strChk(p + '.room', e.room, true);
-      strChk(p + '.snippet', e.snippet, false, true);
+      enumChk(p + '.channel', e.channel, CHANNELS);
+      enumChk(p + '.stance', e.stance, STANCES);
+      if (e.conf === undefined) Wn(p + '.conf', 'is missing; drawn as unlabelled');
+      else if (!(e.conf === null || e.conf === 1 || e.conf === 2 || e.conf === 3)) E(p + '.conf', 'is ' + q(e.conf) + '; expected 1, 2, 3 or null');
+      strChk(p + '.room', e.room, { nullable: true, required: false });
+      strChk(p + '.snippet', e.snippet, { required: false, max: SNIPPET_MAX });
     });
-    const evRef = (p, v) => { if (v != null && !ids.has(String(v))) Wn(p, q(String(v)) + ' does not match any event id'); };
-    L.exposures.forEach((x, i) => {
-      const p = 'exposures[' + i + ']';
-      if (!isObj(x)) { E(p, 'must be an object'); return; }
-      timeChk(p + '.t', x.t, false);
+    // An event id reference: must be text (or null when nullable); an id with no matching event is a warning.
+    const evRef = (p, v, nullable) => {
+      if (absent(p, v, false)) return;
+      if (v === null && nullable) return;
+      if (typeof v !== 'string' || !v.trim()) { E(p, 'must be an event id, got ' + q(v)); return; }
+      if (!ids.has(v)) Wn(p, q(v) + ' does not match any event id');
+    };
+    each('exposures', (x, p) => {
+      timeChk(p + '.t', x.t);
       agentChk(p + '.agent', x.agent);
-      if (x.source != null && !names.has(x.source)) Wn(p + '.source', q(x.source) + ' is not in agents');
-      enumChk(p + '.via', x.via, VIAS, true);
-      evRef(p + '.event', x.event);
+      agentChk(p + '.source', x.source, { nullable: true, required: false, soft: true });
+      enumChk(p + '.via', x.via, VIAS);
+      evRef(p + '.event', x.event, true);
     });
-    L.adoptions.forEach((x, i) => {
-      const p = 'adoptions[' + i + ']';
-      if (!isObj(x)) { E(p, 'must be an object'); return; }
+    each('adoptions', (x, p) => {
       agentChk(p + '.agent', x.agent);
-      timeChk(p + '.t', x.t, false);
-      evRef(p + '.event', x.event);
+      timeChk(p + '.t', x.t);
+      evRef(p + '.event', x.event, false);
       if (typeof x.independent !== 'boolean') E(p + '.independent', 'must be true or false');
-      if (x.sources != null && !Array.isArray(x.sources)) E(p + '.sources', 'must be a list of agent names');
-      else (x.sources || []).forEach((s, j) => { if (!names.has(s)) Wn(p + '.sources[' + j + ']', q(s) + ' is not in agents'); });
+      if (absent(p + '.sources', x.sources, false)) return;
+      if (!Array.isArray(x.sources)) E(p + '.sources', 'must be a list of agent names');
+      else x.sources.forEach((s, j) => agentChk(p + '.sources[' + j + ']', s, { soft: true }));
     });
-    L.edges.forEach((x, i) => {
-      const p = 'edges[' + i + ']';
-      if (!isObj(x)) { E(p, 'must be an object'); return; }
+    each('edges', (x, p) => {
       agentChk(p + '.from', x.from);
       agentChk(p + '.to', x.to);
-      timeChk(p + '.t', x.t, false);
-      enumChk(p + '.kind', x.kind, EDGE_KINDS, true);
-      strChk(p + '.evidence', x.evidence, true);
+      timeChk(p + '.t', x.t);
+      enumChk(p + '.kind', x.kind, EDGE_KINDS);
+      strChk(p + '.evidence', x.evidence, { nullable: true, required: false });
     });
-    L.persistence.forEach((x, i) => {
-      const p = 'persistence[' + i + ']';
-      if (!isObj(x)) { E(p, 'must be an object'); return; }
+    each('persistence', (x, p) => {
       agentChk(p + '.agent', x.agent);
-      timeChk(p + '.start', x.start, false);
-      timeChk(p + '.end', x.end, false);
+      timeChk(p + '.start', x.start);
+      timeChk(p + '.end', x.end);
       if (parseT(x.end) < parseT(x.start)) E(p + '.end', 'is before start');
+      enumChk(p + '.where', x.where, WHERE, false);
     });
-    L.annotations.forEach((x, i) => {
-      const p = 'annotations[' + i + ']';
-      if (!isObj(x)) { E(p, 'must be an object'); return; }
-      timeChk(p + '.t', x.t, false);
-      strChk(p + '.label', x.label, false);
-      if (x.kind != null && !ANN_KINDS.includes(x.kind)) Wn(p + '.kind', q(x.kind) + ' is not one of ' + ANN_KINDS.join(', ') + '; drawn as a note');
+    each('annotations', (x, p) => {
+      timeChk(p + '.t', x.t);
+      strChk(p + '.label', x.label, { nonblank: true });
+      enumChk(p + '.kind', x.kind, ANN_KINDS, false, 'drawn as a note');
     });
-    L.quotes.forEach((x, i) => {
-      const p = 'quotes[' + i + ']';
-      if (!isObj(x)) { E(p, 'must be an object'); return; }
-      timeChk(p + '.t', x.t, false);
-      if (x.agent != null && !names.has(x.agent)) Wn(p + '.agent', q(x.agent) + ' is not in agents');
-      strChk(p + '.text', x.text, false);
-      strChk(p + '.note', x.note, true);
+    each('quotes', (x, p) => {
+      timeChk(p + '.t', x.t);
+      agentChk(p + '.agent', x.agent, { required: false, soft: true });
+      strChk(p + '.text', x.text, { nonblank: true, max: QUOTE_MAX });
+      strChk(p + '.note', x.note, { nullable: true, required: false });
     });
     return done();
   }
