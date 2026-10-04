@@ -497,6 +497,32 @@ def test_agent_profile_window_and_errors(app):
     assert "Unknown agent" in call_error(app, "scope_agents", name="Nobody")
 
 
+def test_ambiguous_agent_lists_source_and_id(data_dir: Path):
+    """The same display name in two sources: the error names each candidate's source and id."""
+    con = duckdb.connect(str(data_dir / "swarmscope.duckdb"))
+    try:  # same name and same id tail as the village agent, in another source
+        con.execute(
+            "INSERT INTO agents (agent_id, source, display_name, aliases) VALUES (?, 'aaa', 'Claude Opus 4.5', [])",
+            [f"aaa:agent:{A_OPUS}"],
+        )
+        con.execute("INSERT INTO sources (source) VALUES ('aaa')")
+    finally:
+        con.close()
+    app = build_server(config_for(data_dir))
+    for tool, args in [
+        ("scope_search", {"author": "Claude Opus 4.5"}),
+        ("scope_timeline", {"author": "Claude Opus 4.5"}),
+        ("scope_periods", {"agent": "Claude Opus 4.5"}),
+        ("scope_agents", {"name": "Claude Opus 4.5"}),
+    ]:
+        err = call_error(app, tool, **args)
+        assert f"Claude Opus 4.5 (aaa, aaa:agent:{A_OPUS}); Claude Opus 4.5 (village, {OPUS})" in err, (tool, err)
+        assert "source=" in err and "agent_id" in err
+    # either way out works: a full agent_id (even with the same tail) or source=
+    assert call(app, "scope_agents", name=OPUS)["agent_id"] == OPUS
+    assert call(app, "scope_search", author="Claude Opus 4.5", source="village")["total"] == 4
+
+
 # ----------------------------------------------------------------------------- timeline
 
 

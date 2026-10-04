@@ -114,7 +114,9 @@ class Store:
             raise ToolInputError("agent must not be empty")
         rows = self.agents(source)
         key = norm(q)
-        exact = [r for r in rows if r["agent_id"] == q or q.endswith(":" + r["agent_id"].rsplit(":", 1)[-1])]
+        exact = [r for r in rows if r["agent_id"] == q]
+        if not exact:
+            exact = [r for r in rows if q.endswith(":" + r["agent_id"].rsplit(":", 1)[-1])]
         if not exact:
             exact = [r for r in rows if norm(r["display_name"]) == key]
         if not exact:
@@ -124,8 +126,13 @@ class Store:
         if len(exact) == 1:
             return exact[0]
         if len(exact) > 1:
-            names = ", ".join(sorted(r["display_name"] for r in exact))
-            raise ToolInputError(f"agent {query!r} is ambiguous; did you mean one of: {names}?")
+            exact.sort(key=lambda r: (r["display_name"], r["source"], r["agent_id"]))
+            names = "; ".join(f"{r['display_name']} ({r['source']}, {r['agent_id']})" for r in exact[:10])
+            more = f"; and {len(exact) - 10} more" if len(exact) > 10 else ""
+            hint = "pass one of these agent_ids"
+            if len({r["source"] for r in exact}) > 1:
+                hint += " or source= to pick a source"
+            raise ToolInputError(f"agent {query!r} is ambiguous: {names}{more}. {hint.capitalize()}.")
         close = difflib.get_close_matches(q, [r["display_name"] for r in rows], n=5, cutoff=0.4)
         hint = f" Close matches: {', '.join(close)}." if close else ""
         raise ToolInputError(f"Unknown agent {query!r}.{hint} Use scope_agents to list agent names.")
