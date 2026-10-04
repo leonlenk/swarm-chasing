@@ -16,7 +16,7 @@ from swarm_mcp.scope import db
 from swarm_mcp.scope.analysis import graph as graph_analysis
 from swarm_mcp.scope.analysis import timeline as timeline_analysis
 from swarm_mcp.server import build_server
-from swarm_mcp.toolkit import ToolInputError
+from swarm_mcp.toolkit import HARD_MAX_CHARS, MIN_MAX_CHARS, ToolInputError
 
 OPUS = f"village:agent:{A_OPUS}"
 GPT = f"village:agent:{A_GPT}"
@@ -623,3 +623,136 @@ def test_mcp_client_roundtrip(data_dir: Path):
             assert graph.is_error is False and graph.structured_content["totals"]["edges"] > 0
 
     run(go())
+
+
+# ----------------------------------------------------------------------------- scope_periods paging
+
+N_SPRINTS = 5000
+
+
+@pytest.fixture
+def many_periods_app(data_dir: Path):
+    """The synthetic village plus 5,000 hourly 'sprint' periods (after the 3 goals in list order)."""
+    con = duckdb.connect(str(data_dir / "swarmscope.duckdb"))
+    try:
+        con.execute(
+            "INSERT INTO periods SELECT 'village:sprint:s' || lpad(CAST(i AS TEXT), 5, '0'), 'village', 'sprint', "
+            "'Sprint ' || i || ' ' || repeat('x', 200), TIMESTAMP '2026-01-05' + i * INTERVAL 1 HOUR, "
+            "TIMESTAMP '2026-01-05' + (i + 1) * INTERVAL 1 HOUR, '{}' FROM range(?) t(i)",
+            [N_SPRINTS],
+        )
+    finally:
+        con.close()
+    return build_server(config_for(data_dir))
+
+
+def test_periods_list_is_paged(many_periods_app):
+    out = call(many_periods_app, "scope_periods")
+    assert out["total"] == out["count"] == N_SPRINTS + 3
+    assert out["returned"] == len(out["periods"]) == 50 and out["has_more"] is True and out["next_offset"] == 50
+    assert [p["index"] for p in out["periods"]] == list(range(1, 51))
+    assert len(json.dumps(out)) < 40_000  # was ~2.4 MB for the whole list
+
+    nxt = call(many_periods_app, "scope_periods", limit=100, offset=out["next_offset"])
+    assert nxt["returned"] == 100 and nxt["offset"] == 50 and nxt["next_offset"] == 150
+    assert [p["index"] for p in nxt["periods"]] == list(range(51, 151))
+    assert "capped at the maximum of 200" in str(call(many_periods_app, "scope_periods", limit=1000)["notes"])
+
+    last = call(many_periods_app, "scope_periods", limit=10, offset=N_SPRINTS)
+    assert last["returned"] == 3 and last["has_more"] is False and "next_offset" not in last
+    past = call(many_periods_app, "scope_periods", offset=N_SPRINTS + 10)
+    assert past["returned"] == 0 and "past the last period" in str(past["notes"])
+    assert "offset" in call_error(many_periods_app, "scope_periods", offset=-1)
+
+
+def test_periods_kind_filter_keeps_global_index(many_periods_app):
+    goals = call(many_periods_app, "scope_periods", kind="village_goal")
+    assert goals["total"] == 3 and goals["filters"] == {"kind": "village_goal"} and goals["has_more"] is False
+    assert {p["kind"] for p in goals["periods"]} == {"village_goal"}
+
+    sprints = call(many_periods_app, "scope_periods", kind="sprint", source="village", limit=5, offset=100)
+    assert sprints["total"] == N_SPRINTS and sprints["filters"] == {"source": "village", "kind": "sprint"}
+    assert {p["kind"] for p in sprints["periods"]} == {"sprint"}
+    # indexes are those of the unfiltered list, so name=<index> still finds the same period
+    for p in sprints["periods"]:
+        assert call(many_periods_app, "scope_periods", name=str(p["index"]))["evidence_id"] == p["evidence_id"]
+    assert call(many_periods_app, "scope_periods", kind="nope")["total"] == 0
+
+
+def test_periods_counts_match_and_use_few_queries(many_periods_app, store_path: Path, monkeypatch):
+    calls = []
+    for meth in ("all", "scalar"):
+        orig = getattr(db.Store, meth)
+
+        def counted(self, sql, params=None, _orig=orig):
+            calls.append(sql)
+            return _orig(self, sql, params)
+
+        monkeypatch.setattr(db.Store, meth, counted)
+    out = call(many_periods_app, "scope_periods", agent="Opus 4.5", kind="sprint", limit=100)
+    assert out["returned"] == 100 and out["agent"] == "Claude Opus 4.5"
+    assert len(calls) < 15  # one GROUP BY per page, not one query per period
+    monkeypatch.undo()
+
+    con = duckdb.connect(str(store_path), read_only=True)
+    try:
+        for p in out["periods"]:
+            start, end = con.execute(
+                "SELECT start_ts, end_ts FROM periods WHERE evidence_id = ?", [p["evidence_id"]]
+            ).fetchone()
+            win = "ts >= ? AND ts < ?"
+            want_agent = con.execute(
+                f"SELECT count(*) FROM messages WHERE author_id = ? AND {win}", [OPUS, start, end]
+            ).fetchone()[0]
+            want_msgs, want_active = con.execute(
+                f"SELECT count(*), count(DISTINCT author_id) FILTER (WHERE author_id NOT LIKE 'human:%') "
+                f"FROM messages WHERE source = 'village' AND {win}",
+                [start, end],
+            ).fetchone()
+            assert (p["agent_messages"], p["messages"], p["active_agents"]) == (want_agent, want_msgs, want_active)
+    finally:
+        con.close()
+    assert sum(p["agent_messages"] for p in out["periods"]) > 0 and sum(p["messages"] for p in out["periods"]) > 0
+
+
+# ----------------------------------------------------------------------------- one max_chars range for every tool
+
+MAX_CHARS_TOOLS = {
+    "core_get": {"ids": "village:msg:m0007"},
+    "scope_search": {"query": "THE END"},
+    "scope_agents": {"name": "Opus 4.5"},
+    "findings_list": {"sample": 1},
+}
+
+
+def test_max_chars_range_is_shared(app):
+    call(app, "findings_record", claim="m0007 is long", evidence_ids=["village:msg:m0007"])
+    for tool, args in MAX_CHARS_TOOLS.items():
+        for bad in (-5, 0, MIN_MAX_CHARS - 1, HARD_MAX_CHARS + 1, 50000):
+            assert "max_chars" in call_error(app, tool, **args, max_chars=bad), (tool, bad)
+        for ok in (MIN_MAX_CHARS, 80, HARD_MAX_CHARS):
+            call(app, tool, **args, max_chars=ok)
+
+    async def schemas():
+        async with Client(app) as client:
+            return {t.name: t.input_schema for t in (await client.list_tools()).tools}
+
+    tools = run(schemas())
+    for tool in MAX_CHARS_TOOLS:
+        prop = tools[tool]["properties"]["max_chars"]
+        bounds = [b for b in prop.get("anyOf", [prop]) if b.get("type") == "integer"][0]
+        assert (bounds["minimum"], bounds["maximum"]) == (MIN_MAX_CHARS, HARD_MAX_CHARS), tool
+        assert f"{MIN_MAX_CHARS}..{HARD_MAX_CHARS}" in prop["description"], tool
+
+
+def test_findings_sample_max_chars_raises_and_lowers_the_snippet(app):
+    call(app, "findings_record", claim="m0007 is long", evidence_ids=["village:msg:m0007"])
+
+    def snippet(**kw):
+        return call(app, "findings_list", sample=1, **kw)["items"][0]["evidence"][0]["content"]
+
+    assert len(snippet()["content"]) < 260 and snippet()["truncated"] is True  # default 200
+    wide = snippet(max_chars=2000)
+    assert 2000 <= len(wide["content"]) < 2100 and wide["truncated"] is True
+    assert len(snippet(max_chars=MIN_MAX_CHARS)["content"]) < 80
+    assert snippet(max_chars=HARD_MAX_CHARS)["content"].endswith("THE END")

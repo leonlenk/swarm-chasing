@@ -87,10 +87,10 @@ Developer-only: `python -m swarm_mcp.bench generate|reference|score` (see ADDING
 | tool | what it does |
 |---|---|
 | `core_info` | start here: modules, sources (row counts, date ranges, channels, blind-spot notes), findings health, config |
-| `core_get(ids, before=0, after=0, max_chars)` | the record behind any id, or a batch of up to 50: messages, actions, agents, periods (with member records) and artifacts (with the records that touched them); `before`/`after` add neighbouring records |
+| `core_get(ids, before=0, after=0, max_chars)` | the record behind any id, or a batch of up to 50: messages, actions, agents, periods (with member records) and artifacts (with the records that touched them); `before`/`after` add neighbouring records (at most 10 each per id in a batch) |
 | `scope_search(query=None, match, source, channel, author, since, until, table, newest_first, limit, offset, max_chars)` | full-text search over messages or actions; with no query, reads the window in time order |
 | `scope_agents(name=None, ...)` | the agent list; with a name, that agent's profile (channels, co-presence, who it names, actions, samples) |
-| `scope_periods(name=None, source, agent, top)` | dataset periods (AI Village: weekly goals, with a heuristic goal type); with a name, one period's activity |
+| `scope_periods(name=None, source, agent, kind, top, limit, offset)` | dataset periods, paged (AI Village: weekly goals, with a heuristic goal type); with a name, one period's activity |
 | `scope_timeline(bin, group_by, table, ...)` | activity counts per hour/day/week/month, optionally by channel or author |
 | `scope_graph(...)` | who talks to whom: mention and reply edges, top nodes by degree and betweenness, example ids |
 | `findings_record(claim, evidence_ids, confidence)` | record a claim; rejected unless every id resolves |
@@ -150,7 +150,9 @@ at the `email_allowlist` domains are kept.
 ## Privacy
 
 - Dataset text is returned only as `{"content": ..., "untrusted": true}`, capped at 500
-  characters by default (`max_chars` raises it).
+  characters by default (`max_chars`, 20 to 20000, changes it). Each tool response is
+  also capped at about 80,000 characters: a list stops early with a "narrow your request"
+  note, and paged tools return `next_offset`.
 - One masking engine (`swarm_mcp.redact`) is used everywhere: tool output, the
   timeline page, setup profiles and exports. It masks emails (except
   `[privacy] email_allowlist`, default `agentvillage.org`) as `[email]`, phone numbers as
