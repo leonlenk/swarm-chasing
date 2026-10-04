@@ -57,7 +57,9 @@ STANCE = {"for": TOKENS["st-for"], "neutral": TOKENS["st-neutral"], "against": T
 SEQ = [TOKENS[f"seq-{i}"] for i in range(7)]
 DIV = (TOKENS["div-lo"], TOKENS["div-mid"], TOKENS["div-hi"])
 
-SERIF = ["Times New Roman", "Times", "Nimbus Roman", "TeX Gyre Termes", "Liberation Serif", "STIX Two Text", "DejaVu Serif"]
+# Liberation Serif (metric-compatible with Times New Roman) comes before the Nimbus Roman OTF so
+# PDFs embed plain TrueType (pdf.fonttype 42) rather than CFF.
+SERIF = ["Times New Roman", "Times", "Liberation Serif", "TeX Gyre Termes", "Nimbus Roman", "STIX Two Text", "DejaVu Serif"]
 
 
 def rc() -> dict:

@@ -10,8 +10,8 @@ Stages (run in order; everything except the LLM labelling is rerunnable):
     python tracer_hostility.py sample2   # round 2: batch_5-7.json, each non-Gemini agent's earliest proxy-positive items
     (LLM labelling: one Sonnet subagent per batch writes label_batches/labels_<k>.json using label_batches/RUBRIC.md;
      labels_manual.json holds 3 hand labels for origin-critical early Gemini items)
-    uv run --no-project --with matplotlib python tracer_hostility.py analyze
-                                         # labels.csv, adoption/exposure/persistence CSVs, results.json, PNGs
+    python tracer_hostility.py analyze   # labels.csv, adoption/exposure/persistence CSVs, results.json
+                                         # (figures: export the hostility trace from the Idea Spread Viewer)
 
 Outputs go to out/sprint_idea/hostility/ (gitignored).
 """
@@ -726,93 +726,8 @@ def analyze():
                            era(HELP_START, end + D(days=1))]
     res["adoption_summary"]["adopters_with_prior_exposure"] = sum(not r["independent"] for r in adoption)
     (OUT / "results.json").write_text(json.dumps(res, default=str, indent=1))
-    plots(items, sources, expo, adoption, cands)
     print(json.dumps({k: res[k] for k in ("labels", "proxy_validation", "adoption_summary", "hazard", "common_cause")},
                      default=str, indent=1))
-
-
-def plots(items, sources, expo, adoption, cands):
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.dates as mdates
-    import matplotlib.pyplot as plt
-    ink, muted, grid = "#0b0b0b", "#52514e", "#e4e3df"
-    style = {"ENDORSES": ("#eb6834", "o", 46), "ACTS_ON": ("#4a3aa7", "s", 40), "NEUTRAL_MENTION": ("#9a9893", "o", 22),
-             "QUESTIONS": ("#eda100", "D", 30), "REJECTS": ("#2a78d6", "X", 48), "ORDINARY_BUG": ("#1baf7a", "^", 22)}
-    show = [r for r in items if r["label"] in style and r["why"] != "bug_control"]
-    count = collections.Counter(r["agent"] for r in show)
-    ad = {r["agent"]: r["t_adopt"] for r in adoption}
-    lanes = sorted({a for a in count if count[a] >= 2 or a in ad}, key=lambda a: (ad.get(a, dt.datetime(2100, 1, 1)), a))
-    y = {a: i for i, a in enumerate(lanes)}
-    fig, ax = plt.subplots(figsize=(15, 0.42 * len(lanes) + 2.2))
-    for a in lanes:
-        for t, *_ in expo.get(a, []):
-            ax.add_patch(plt.Rectangle((mdates.date2num(t), y[a] - 0.42), 3, 0.84, color="#f3d9cc", lw=0, zorder=0))
-    gx = [s["t"] for s in sources if s["agent"] == GEMINI and s["src_kind"] == "proxy"]
-    if GEMINI in y:
-        ax.scatter(gx, [y[GEMINI]] * len(gx), s=10, c="#f2b49b", marker="|", zorder=1, label="Gemini 2.5 Pro proxy-positive chat (unlabelled)")
-    for lab_, (c, mk, sz) in style.items():
-        pts = [r for r in show if r["label"] == lab_ and r["agent"] in y]
-        ax.scatter([r["t"] for r in pts], [y[r["agent"]] for r in pts], s=sz, c=c, marker=mk, label=lab_.replace("_", " ").lower(),
-                   edgecolors="white", linewidths=0.6, zorder=3)
-    ax.axvline(HELP_START, color=ink, lw=1.2, ls="--", zorder=2)
-    ax.text(HELP_START, len(lanes) - 0.3, " 'Help Gemini 2.5 Pro!' goal", color=ink, fontsize=9, va="bottom")
-    ax.set_yticks(range(len(lanes)))
-    ax.set_yticklabels([a.replace("DeepSeek (reasoner alias, from 24 Apr 2026)", "DeepSeek seat (post-24 Apr 2026)") for a in lanes], fontsize=9, color=ink)
-    ax.set_ylim(-0.7, len(lanes) - 0.1)
-    ax.invert_yaxis()
-    ax.xaxis.set_major_locator(mdates.MonthLocator())
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b\n%Y"))
-    ax.set_xlim(dt.datetime(2025, 10, 15), dt.datetime(2026, 10, 1))
-    ax.tick_params(colors=muted, labelsize=8)
-    for sp in ("top", "right"):
-        ax.spines[sp].set_visible(False)
-    ax.grid(axis="x", color=grid, lw=0.6)
-    from matplotlib.patches import Patch
-    h, l = ax.get_legend_handles_labels()
-    h.append(Patch(color="#f3d9cc"))
-    l.append("exposed (3 days after each exposure event)")
-    ax.legend(h, l, loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=4, frameon=False, fontsize=8)
-    ax.set_title("Who said the environment is hostile, and when (labelled items, all channels; lanes ordered by adoption)",
-                 loc="left", fontsize=11, color=ink)
-    fig.tight_layout()
-    fig.savefig(OUT / "swimlane.png", dpi=150)
-    plt.close(fig)
-
-    # Transmission tree: adopters at their adoption time, edge from the probable source.
-    fig, ax = plt.subplots(figsize=(12, 0.5 * len(adoption) + 1.8))
-    yy = {r["agent"]: i for i, r in enumerate(adoption)}
-    xx = {r["agent"]: r["t_adopt"] for r in adoption}
-    for r in adoption:
-        src = r["probable_source"]
-        if src and src in xx:
-            ax.annotate("", xy=(mdates.date2num(r["t_adopt"]), yy[r["agent"]]),
-                        xytext=(mdates.date2num(xx[src]), yy[src]),
-                        arrowprops=dict(arrowstyle="-|>", color="#9a9893", lw=1.0, shrinkA=6, shrinkB=6,
-                                        connectionstyle="arc3,rad=-0.15"))
-        elif src == "search_history":
-            ax.text(mdates.date2num(r["t_adopt"]) - 4, yy[r["agent"]], "search ", ha="right", va="center", fontsize=7, color=muted)
-    for r in adoption:
-        c = "#eb6834" if r["independent"] else ("#4a3aa7" if r["max_conf"] >= 2 else "#b7b1e0")
-        ax.scatter([r["t_adopt"]], [yy[r["agent"]]], s=70, c=c, edgecolors="white", linewidths=1, zorder=3)
-        lag = "no prior exposure" if r["independent"] else f"{r['n_prior_exposures']} prior exp., src {r['probable_source']}"
-        ax.text(mdates.date2num(r["t_adopt"]) + 4, yy[r["agent"]], f"{r['agent']}  ({r['channel'].replace('event:', '')}; {lag})",
-                va="center", fontsize=8, color=ink)
-    ax.set_yticks([])
-    ax.invert_yaxis()
-    ax.xaxis.set_major_locator(mdates.MonthLocator())
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b\n%Y"))
-    ax.set_xlim(dt.datetime(2025, 11, 1), dt.datetime(2026, 9, 30))
-    ax.tick_params(colors=muted, labelsize=8)
-    for sp in ("top", "right", "left"):
-        ax.spines[sp].set_visible(False)
-    ax.grid(axis="x", color=grid, lw=0.6)
-    ax.set_title("Probable transmission tree: first ENDORSES/ACTS_ON per agent; arrow from the agent behind most prior exposures "
-                 "(orange = no prior exposure)", loc="left", fontsize=10, color=ink)
-    fig.tight_layout()
-    fig.savefig(OUT / "transmission_tree.png", dpi=150)
-    plt.close(fig)
-
 
 
 if __name__ == "__main__":

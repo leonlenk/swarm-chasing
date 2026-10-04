@@ -7,8 +7,9 @@ Stages (each rerunnable; the LLM steps in between are done by Sonnet subagents):
   python tracer_onboarding.py rules     -> rules.csv, label_batches/RULES.txt (canonical list hand-merged in RULES below)
   python tracer_onboarding.py items     -> items.csv, label_batches/batch_*.jsonl     (for labelling)
   [LLM] labelling -> label_batches/labels_*.jsonl
-  python tracer_onboarding.py analyze   -> labels.csv, results.json, heatmap.png, timeline.png  (needs matplotlib:
+  python tracer_onboarding.py analyze   -> labels.csv, results.json, uptake.png/.pdf  (needs matplotlib:
                                            uv run --no-project --with matplotlib python tracer_onboarding.py analyze)
+  python tracer_onboarding.py plots     -> uptake.png/.pdf redrawn from results.json
 
 Outputs live in out/sprint_idea/onboarding/.
 """
@@ -598,111 +599,78 @@ def stage_analyze():
                         "by_label": {k: f"{sum(v)}/{len(v)}" for k, v in hc.items()},
                         "note": "precision of non-NA labels only; NA recall not checked"}
     (OUTD / "results.json").write_text(json.dumps(res, indent=1, default=str))
-    plot_heatmap(item_rate, agent_rate, res)
-    plot_timeline(res, items, lab, joined, msgs)
-    print("wrote results.json, labels.csv, heatmap.png, timeline.png")
+    plot_uptake(res)
+    print("wrote results.json, labels.csv, uptake.png")
     for rid in rule_ids:
         d = res["rules"][rid]
         print(rid, f"{d['short']:13s}", {g[:4]: d["agent_uptake_share"][g] for g in GROUPS},
               "after/before", d["joined_after"]["uptake_share"], d["joined_before"]["uptake_share"], "fid", d["fidelity_states_share"])
 
 
-def plot_heatmap(item_rate, agent_rate, res):
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from matplotlib.colors import LinearSegmentedColormap
-    ramp = ["#fcfcfb", "#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"]
-    cmap = LinearSegmentedColormap.from_list("seq_blue", ramp)
-    rows = [r for r in RULES]
-    data = [[agent_rate[(g, r[0])] for g in GROUPS] for r in rows]
-    fig, ax = plt.subplots(figsize=(8.6, 9.2), facecolor="#fcfcfb")
-    ax.set_facecolor("#fcfcfb")
-    im = ax.imshow(data, cmap=cmap, vmin=0, vmax=1, aspect="auto")
-    for i, r in enumerate(rows):
-        for j, g in enumerate(GROUPS):
-            v = data[i][j]
-            ax.text(j, i, f"{v:.0%}", ha="center", va="center", fontsize=9, color="#ffffff" if v > 0.5 else "#0b0b0b")
-    ax.set_xticks(range(len(GROUPS)), [f"{GROUP_LABEL[g]}\n(n={res['groups'][g]['n_agents']})" for g in GROUPS], fontsize=8.5, color="#52514e")
-    ax.set_yticks(range(len(rows)), [f"{r[0]} {r[1]}{'  †' if r[5] else ''}" for r in rows], fontsize=9, color="#0b0b0b")
-    ax.tick_params(length=0)
-    for s in ax.spines.values():
-        s.set_visible(False)
-    ax.set_xticks([x - 0.5 for x in range(1, len(GROUPS))], minor=True)
-    ax.set_yticks([y - 0.5 for y in range(1, len(rows))], minor=True)
-    ax.grid(which="minor", color="#fcfcfb", linewidth=2)
-    ax.xaxis.tick_top()
-    cb = fig.colorbar(im, ax=ax, fraction=0.035, pad=0.02)
-    cb.outline.set_visible(False)
-    cb.ax.tick_params(labelsize=8, colors="#52514e")
-    cb.set_label("share of agents who state, follow or mutate the rule", fontsize=8.5, color="#52514e")
-    fig.suptitle("Onboarding-guide rules: uptake by group (agent level, ≤4 chat + 2 memory items each)",
-                 fontsize=11, color="#0b0b0b", x=0.02, ha="left")
-    fig.text(0.02, 0.01, "† rule also appears in CHANGELOG scaffolding / operator worksheet (seeded, not only guide-transmitted). "
-             "Sonnet labels; small n per cell.", fontsize=7.5, color="#52514e")
-    fig.tight_layout(rect=(0, 0.02, 1, 0.97))
-    fig.savefig(OUTD / "heatmap.png", dpi=150, facecolor=fig.get_facecolor())
-    plt.close(fig)
+def _wilson(k, n, z=1.96):
+    if n == 0:
+        return (0.0, 1.0)
+    p = k / n
+    d = 1 + z * z / n
+    c = (p + z * z / (2 * n)) / d
+    h = z * ((p * (1 - p) / n + z * z / (4 * n * n)) ** 0.5) / d
+    return (max(0.0, c - h), min(1.0, c + h))
 
 
-def plot_timeline(res, items, lab, joined, msgs):
-    import matplotlib
-    matplotlib.use("Agg")
+def plot_uptake(res=None):
+    """Dot plot of agent-level rule uptake by group, from results.json: one row per rule, x = share of
+    the group's agents who state, follow or mutate the rule; Wilson 95% CIs on the two groups that are
+    compared (newcomers and established agents in the same weeks). Writes uptake.png (300 dpi) + .pdf."""
+    import paperfig
+
+    paperfig.use()
     import matplotlib.pyplot as plt
-    import matplotlib.dates as mdates
-    C = {"guide": "#2a78d6", "join": "#eb6834", "uptake": "#1baf7a", "scaff": "#8a8984", "tip": "#4a3aa7"}
-    gd = list(csv.DictReader(open(OUTD / "guides.csv")))
-    fig, (ax, ax2) = plt.subplots(2, 1, figsize=(12, 7.5), sharex=True, facecolor="#fcfcfb",
-                                  gridspec_kw={"height_ratios": [1.15, 1]})
-    for a in (ax, ax2):
-        a.set_facecolor("#fcfcfb")
-        for s in ("top", "right"):
-            a.spines[s].set_visible(False)
-        a.spines["left"].set_color("#c3c2b7"); a.spines["bottom"].set_color("#c3c2b7")
-        a.tick_params(colors="#52514e", labelsize=8)
-    # lane 3: guides; lane 2: joins; lane 1: scaffolding changes; lane 0: tips
-    for k, g in enumerate(gd):
-        t = common.ts(g["first_mention"])
-        ax.scatter([t], [3], s=48, color=C["guide"], zorder=3, edgecolor="#fcfcfb", linewidth=1.5)
-        ax.annotate(g["guide_id"], (t, 3), xytext=(0, 7 + 9 * (k % 3)), textcoords="offset points", ha="center", fontsize=7, color="#52514e")
-    for n, j in sorted(joined.items(), key=lambda kv: kv[1]):
-        if j >= dt.datetime(2025, 4, 3):
-            new = j >= NEWCOMER_FROM
-            ax.scatter([j], [2], s=34 if new else 26, color=C["join"] if new else "#fcfcfb", zorder=3,
-                       edgecolor="#fcfcfb" if new else "#8a8984", linewidth=1.2)
-    ax.annotate("15 newcomers (2026-06..09)", (dt.datetime(2026, 7, 20), 2), xytext=(0, 12), textcoords="offset points",
-                ha="center", fontsize=7.5, color="#52514e")
-    for rid, ds in CHANGE_DATES.items():
-        for d_ in ds:
-            ax.scatter([common.ts(d_)], [1], marker="|", s=160, color=C["scaff"], zorder=3)
-            ax.annotate(rid, (common.ts(d_), 1), xytext=(0, 8), textcoords="offset points", ha="center", fontsize=6, color="#52514e")
-    for giver, rec, rids, t in TIP_EDGES:
-        ax.scatter([common.ts(t)], [0], marker="D", s=26, color=C["tip"], zorder=3)
-    ax.annotate("tips to newcomers\n(Fable 5, Grok 4.5 → Opus 5; Fable 5, Opus 5, GLM-5.3 → Sept cohort)", (common.ts("2026-07-24"), 0),
-                xytext=(-250, -3), textcoords="offset points", fontsize=7, color="#52514e", va="center")
-    ax.set_yticks([0, 1, 2, 3], ["tips in #general", "scaffolding change\n(rule-related)", "agent joins\n(hollow = pre-2026-06)", "guide first\nmentioned"], fontsize=8)
-    ax.set_ylim(-0.7, 3.8)
-    ax.set_title("Guides, joins, scaffolding changes and tips", fontsize=10, color="#0b0b0b", loc="left")
-    # bottom: labelled uptake events (any rule) for sampled items, newcomers vs others, by rule
-    rule_ids = [r[0] for r in RULES]
-    for i, it in items.items():
-        for rid, l in lab[i].items():
-            if l in UPTAKE:
-                y = rule_ids.index(rid)
-                col = C["join"] if it["group"] == "newcomer" else C["uptake"]
-                ax2.scatter([common.ts(it["t"])], [y], s=14, color=col, alpha=0.8, zorder=3, linewidth=0)
-    ax2.set_yticks(range(len(rule_ids)), [f"{r[0]} {r[1]}" for r in RULES], fontsize=7)
-    ax2.set_title("Labelled uptake events (STATES / FOLLOWS / MUTATED) in sampled items", fontsize=10, color="#0b0b0b", loc="left")
-    ax2.scatter([], [], s=14, color=C["join"], label="newcomer (2026-06+) item")
-    ax2.scatter([], [], s=14, color=C["uptake"], label="other agents' item")
-    ax2.legend(fontsize=7.5, frameon=False, loc="upper left")
-    ax2.grid(axis="y", color="#ebeae6", linewidth=0.6)
-    ax2.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
-    ax2.set_xlim(dt.datetime(2025, 4, 1), dt.datetime(2026, 10, 1))
-    fig.tight_layout()
-    fig.savefig(OUTD / "timeline.png", dpi=150, facecolor=fig.get_facecolor())
+    from matplotlib.lines import Line2D
+
+    res = res or json.loads((OUTD / "results.json").read_text())
+    n = {g: res["groups"][g]["n_agents"] for g in GROUPS}
+    style = {  # group -> (label, colour, marker, filled, y offset within the row)
+        "pre_guide": (f"joined before the guides (n = {n['pre_guide']})", paperfig.CAT[2], "^", False, -0.3),
+        "mid": (f"joined Feb\u2013May 2026 (n = {n['mid']})", paperfig.CAT[3], "D", False, -0.1),
+        "newcomer": (f"newcomers, Jun\u2013Sep 2026 (n = {n['newcomer']})", paperfig.CAT[1], "o", True, 0.1),
+        "established": (f"established, same weeks (n = {n['established']})", paperfig.CAT[0], "s", True, 0.3),
+    }
+    rules = sorted(res["rules"].items(), key=lambda kv: (-kv[1]["agent_uptake_share"]["newcomer"],
+                                                         -kv[1]["agent_uptake_share"]["established"], kv[0]))
+    fig, ax = plt.subplots(figsize=paperfig.size(1.0, height_in=0.75 + 0.215 * len(rules)))
+    for x in (0.25, 0.5, 0.75):
+        ax.axvline(x, color=paperfig.HAIR, lw=0.4, zorder=0)
+    for i, (rid, d) in enumerate(rules):
+        for g in GROUPS:
+            label, col, mk, filled, off = style[g]
+            share = d["agent_uptake_share"][g]
+            y = i + off
+            if g in ("newcomer", "established"):
+                lo, hi = _wilson(round(share * n[g]), n[g])
+                ax.plot([lo, hi], [y, y], color=col, lw=0.7, solid_capstyle="butt", zorder=2)
+            ax.plot([share], [y], marker=mk, ms=3.4 if filled else 3.2, mfc=col if filled else "white", mec=col,
+                    mew=0.8, ls="", zorder=3)
+    dagger = " \u2020"
+    ax.set_yticks(range(len(rules)), [f"{rid} {d['short'].replace('_', ' ')}{dagger if d['scaffolding'] else ''}"
+                                      for rid, d in rules])
+    ax.set_ylim(len(rules) - 0.45, -0.6)
+    ax.tick_params(axis="y", length=0, pad=3)
+    ax.spines["left"].set_visible(False)
+    ax.set_xlim(-0.01, 1.01)
+    ax.set_xticks([0, 0.25, 0.5, 0.75, 1.0], ["0%", "25%", "50%", "75%", "100%"])
+    ax.set_xlabel("Agents in the group who state, follow or adapt the rule")
+    handles = [Line2D([], [], color=style[g][1], marker=style[g][2], ms=3.4, mfc=style[g][1] if style[g][3] else "white",
+                      mec=style[g][1], mew=0.8, lw=0.7 if g in ("newcomer", "established") else 0, label=style[g][0])
+               for g in ("newcomer", "established", "pre_guide", "mid")]
+    fig.legend(handles=handles, loc="outside upper left", ncol=2, handlelength=1.5, columnspacing=1.2)
+    ax.annotate("\u2020 also seeded by a scaffolding change or the operator worksheet. Whiskers: Wilson 95% CI.",
+                xy=(0, 0), xycoords=("figure fraction", ax.xaxis.label), xytext=(2, -3), textcoords="offset points",
+                ha="left", va="top", fontsize=7, color=paperfig.INK3)
+    out = paperfig.save(fig, OUTD / "uptake")
     plt.close(fig)
+    print("wrote " + ", ".join(str(o) for o in out))
 
 
 if __name__ == "__main__":
-    {"events": stage_events, "guides": stage_guides, "rules": stage_rules, "items": stage_items, "analyze": stage_analyze}[sys.argv[1]]()
+    {"events": stage_events, "guides": stage_guides, "rules": stage_rules, "items": stage_items, "analyze": stage_analyze,
+     "plots": plot_uptake}[sys.argv[1]]()

@@ -17,7 +17,7 @@
 | prosocial | ECI | +0.29 [+0.20, +0.38] | 0.015 (0.09) | +0.31 / +0.30 | +0.24 (p 0.013) | +0.14 (p 0.17) |
 | prosocial | release | +0.17 | 0.20 | +0.24 / +0.24 | +0.25 (p 0.010) | +0.28 (p 0.0015) |
 
-Effect sizes are small. On the per-period-demeaned per-agent scatter, every one of the six has |ρ| ≤ 0.27 and R² ≤ 0.05.
+Effect sizes are small. On per-period-demeaned per-agent values, every one of the six has |ρ| ≤ 0.27 and R² ≤ 0.05. `scaling_scatter.png` shows (a) the six tests and (b) the demeaned addressing rate against ECI, one point per agent.
 
 **Reading.**
 - No scaling law survives correction. The two nominal ECI effects have Holm p = 0.09.
@@ -37,4 +37,4 @@ Effect sizes are small. On the per-period-demeaned per-agent scatter, every one 
 - leave-one-agent-out checks
 - more agents per lab
 
-**Files.** `village_tools/scaling.py` (rerun: `uv run --with numpy --with scipy --with matplotlib python scaling.py`, about 2.5 min), `village_tools/model_metadata.csv`, and in `out/scaling/`: `results.json`, `per_agent.csv`, `per_agent_period.csv`, `scaling_scatter.png`.
+**Files.** `village_tools/scaling.py` (rerun: `uv run --with numpy --with scipy --with matplotlib python scaling.py`, about 2.5 min; add `--plot-only` to redraw the figure from the saved outputs), `village_tools/model_metadata.csv`, and in `out/scaling/`: `results.json`, `per_agent.csv`, `per_agent_period.csv`, `scaling_scatter.png`.

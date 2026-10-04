@@ -28,6 +28,7 @@ Pre-specified (written before computing any comparison):
 Run: uv run --with scikit-learn --with numpy --with scipy --with matplotlib python coherence.py
   (--judged-only reuses results_auto.json and skips the proxy permutations; --resample redraws judge items.)
   (re-running with judge_ratings_*.json present also produces the judged analysis).
+  (--plot-only redraws out/coherence/same_vs_cross.png from results.json.)
 Outputs: out/coherence/.
 """
 
@@ -38,6 +39,7 @@ import json
 import random
 import re
 import sys
+from pathlib import Path
 
 import numpy as np
 
@@ -473,84 +475,93 @@ def analyse_judged(out_rows, rng):
     return res
 
 
+PROXY_NAMES = {"confusion": "Confusion marker", "contradiction": "Contradiction marker", "miscomm": "Either marker",
+               "relevance": "Low topical relevance", "echo": "Echoes message A", "self_rep": "Self-repetition",
+               "praise": "Praise marker"}
+SCALE_NAMES = {"addresses": "Addresses the message", "no_misunderstanding": "No misunderstanding",
+               "not_degenerate": "Not degenerate", "overall": "Overall coherence", "flag_le2": "Any score of 1 or 2 (share)"}
+
+
+def _forest(ax, rows, *, xlabel, legend):
+    """rows: (label, (pooled, lo, hi), (adjusted, lo, hi), p). Pooled hollow grey, adjusted filled ink;
+    both oriented so that > 0 means same-lab replies are more incoherent."""
+    import paperfig
+
+    dy = 0.17
+    ys = np.arange(len(rows))
+    ax.axvline(0, color=paperfig.RULE, lw=0.5, zorder=1)
+    for y, (label, pooled, adj, p) in zip(ys, rows):
+        ax.plot(pooled[1:], [y - dy] * 2, color=paperfig.INK3, lw=0.8, solid_capstyle="butt", zorder=2)
+        ax.plot([pooled[0]], [y - dy], "o", ms=3.4, mfc="white", mec=paperfig.INK3, mew=0.8, zorder=3)
+        ax.plot(adj[1:], [y + dy] * 2, color=paperfig.INK, lw=0.9, solid_capstyle="butt", zorder=2)
+        ax.plot([adj[0]], [y + dy], "o", ms=3.6, color=paperfig.INK, zorder=4)
+        ax.text(1.015, y, f"{p:.3f}", transform=ax.get_yaxis_transform(), ha="left", va="center", fontsize=7)
+    ax.text(1.015, -0.85, "$p$", transform=ax.get_yaxis_transform(), ha="left", va="center", fontsize=7)
+    ax.set_yticks(ys, [r[0] for r in rows])
+    ax.set_ylim(len(rows) - 0.45, -1.05)
+    ax.tick_params(axis="y", length=0, pad=3)
+    ax.spines["left"].set_visible(False)
+    ax.set_xlabel(xlabel)
+    from matplotlib.lines import Line2D
+
+    handles = [Line2D([], [], color=paperfig.INK3, lw=0.8, marker="o", ms=3.4, mfc="white", mec=paperfig.INK3,
+                      mew=0.8, label=legend[0]),
+               Line2D([], [], color=paperfig.INK, lw=0.9, marker="o", ms=3.6, label=legend[1])]
+    leg = ax.legend(handles=handles, loc="lower right", bbox_to_anchor=(1.0, 1.0), ncol=2, handlelength=1.5,
+                    columnspacing=0.9, borderaxespad=0.15)
+    leg.set_in_layout(False)
+    lo, hi = ax.get_xlim()
+    m = max(abs(lo), abs(hi))
+    ax.set_xlim(-m, m)
+    for x, ha, txt in ((-0.985 * m, "left", "\u2190 same-lab more coherent"), (0.985 * m, "right", "same-lab less coherent \u2192")):
+        ax.text(x, -0.8, txt, ha=ha, va="center", fontsize=7, color=paperfig.INK3, style="italic")
+    ax.xaxis.set_major_formatter(lambda v, _: f"{v:g}".replace("-", "\u2212"))
+
+
 def plot(results, path):
-    import matplotlib
-    matplotlib.use("Agg")
+    """Forest plots, 5.5 in wide, stacked: (a) automatic proxies on all exchanges, in SDs of each
+    measure (naive pooled vs the within-replier weighted difference with its cluster-bootstrap CI);
+    (b) the blinded LLM judges (pooled vs replier-lab balanced, stratified-bootstrap CI).
+    Every row is signed so that > 0 means same-lab replies look more incoherent."""
+    import paperfig
+
+    paperfig.use()
     import matplotlib.pyplot as plt
 
-    BLUE, GREY, DARK = "#2a78d6", "#a8a69c", "#1c3f6e"
     judged = results.get("judged")
-    fig, axes = plt.subplots(1, 2 if judged else 1, figsize=(13, 5.6), squeeze=False)
-    ax = axes[0, 0]
     P = results["proxies"]["all"]
-    names = {"confusion": "Confusion / clarification marker", "contradiction": "Contradiction / correction marker",
-             "miscomm": "Either miscommunication marker", "relevance": "Low topical relevance (TF-IDF, sign flipped)",
-             "echo": "Echoing A (trigram overlap)", "self_rep": "Self-repetition (vs own last 3)",
-             "praise": "Praise-loop marker"}
-    for i, p in enumerate(PROXIES):
+    prow = []
+    for p in PROXIES:
         d = P[p]
-        sgn = -1 if INCOHERENT_IF[p] == "lower" else 1
-        sd = d["sd"]
-        y = len(PROXIES) - 1 - i
-        nv = sgn * d["naive_diff"] / sd
-        nlo, nhi = sorted(sgn * np.array(d["naive_ci95"]) / sd)
-        wv = sgn * d["within_replier_weighted"] / sd
-        wlo, whi = sorted(sgn * np.array(d["within_replier_weighted_ci95"]) / sd)
-        ax.plot([nlo, nhi], [y + 0.17] * 2, color=GREY, lw=2, solid_capstyle="round")
-        ax.scatter([nv], [y + 0.17], color=GREY, s=40, zorder=3, edgecolor="white", linewidth=1.5)
-        ax.plot([wlo, whi], [y - 0.13] * 2, color=BLUE, lw=2, solid_capstyle="round")
-        ax.scatter([wv], [y - 0.13], color=BLUE, s=48, zorder=3, edgecolor="white", linewidth=1.5)
-        ax.annotate(f"p={d['within_replier_weighted_perm_p']:.3f}", (max(whi, nhi), y - 0.13), xytext=(6, -3),
-                    textcoords="offset points", fontsize=8, color="#5f5e5a")
-    ax.set_yticks(range(len(PROXIES)))
-    ax.set_yticklabels([names[p] for p in PROXIES][::-1], fontsize=9)
-    ax.axvline(0, color="#888780", lw=1)
-    ax.set_xlabel("same-lab minus cross-lab, in SDs of the measure\n(> 0 = same-lab replies look MORE incoherent)",
-                  fontsize=9)
-    ax.set_title(f"Automatic proxies, {results['n_exchanges']:,} exchanges", fontsize=10, loc="left")
-    h = [plt.Line2D([], [], color=GREY, marker="o", lw=2, label="naive pooled (style-confounded)"),
-         plt.Line2D([], [], color=BLUE, marker="o", lw=2, label="within replier (weighted), cluster-bootstrap 95% CI")]
-    ax.legend(handles=h, fontsize=8, frameon=False, loc="lower left", bbox_to_anchor=(0, -0.42))
+        sgn = (-1 if INCOHERENT_IF[p] == "lower" else 1) / d["sd"]
+        nlo, nhi = sorted(sgn * np.array(d["naive_ci95"]))
+        wlo, whi = sorted(sgn * np.array(d["within_replier_weighted_ci95"]))
+        prow.append((PROXY_NAMES[p], (sgn * d["naive_diff"], nlo, nhi), (sgn * d["within_replier_weighted"], wlo, whi),
+                     d["within_replier_weighted_perm_p"]))
+    n_a, n_b = len(prow), (len(SCALES) + 1 if judged else 0)
+    fig = plt.figure(figsize=paperfig.size(1.0, height_in=0.4 + 0.205 * (n_a + n_b) + (0.62 if judged else 0.3)))
+    gs = fig.add_gridspec(2 if judged else 1, 1, height_ratios=[n_a + 1.3, n_b + 1.3] if judged else None, hspace=0.12)
+    ax = fig.add_subplot(gs[0])
+    _forest(ax, prow, xlabel="Same-lab minus cross-lab reply, in SDs of the measure",
+            legend=("pooled", "within replier, 95% CI"))
+    ax.set_title(f"(a) Automatic proxies, {results['n_exchanges']:,} exchanges", loc="left", pad=5)
     if judged:
-        ax = axes[0, 1]
         J = judged["scales"]
-        lab = {"addresses": "(a) Addresses the message", "no_misunderstanding": "(b) No misunderstanding",
-               "not_degenerate": "(c) Not degenerate", "overall": "(d) Overall coherence",
-               "flag_le2": "Any judge score <= 2 (share, sign kept)"}
-        keys = SCALES + ["flag_le2"]
-        for i, s in enumerate(keys):
-            d = J[s]
-            sgn = 1 if s == "flag_le2" else -1   # higher rating = more coherent
-            y = len(keys) - 1 - i
-            pv = sgn * d["pooled_diff"]
+        jrow = []
+        for s_ in SCALES + ["flag_le2"]:
+            d = J[s_]
+            sgn = 1 if s_ == "flag_le2" else -1  # a higher rating is more coherent
             plo, phi = sorted(sgn * np.array(d["pooled_ci95"]))
-            bv = sgn * d["balanced_diff"]
             blo, bhi = sorted(sgn * np.array(d["balanced_ci95"]))
-            ax.plot([plo, phi], [y + 0.17] * 2, color=GREY, lw=2, solid_capstyle="round")
-            ax.scatter([pv], [y + 0.17], color=GREY, s=40, zorder=3, edgecolor="white", linewidth=1.5)
-            ax.plot([blo, bhi], [y - 0.13] * 2, color=DARK, lw=2, solid_capstyle="round")
-            ax.scatter([bv], [y - 0.13], color=DARK, s=48, zorder=3, edgecolor="white", linewidth=1.5)
-            ax.annotate(f"p={d['balanced_perm_p']:.3f}", (max(bhi, phi), y - 0.13), xytext=(6, -3),
-                        textcoords="offset points", fontsize=8, color="#5f5e5a")
-        ax.set_yticks(range(len(keys)))
-        ax.set_yticklabels([lab[s] for s in keys][::-1], fontsize=9)
-        ax.axvline(0, color="#888780", lw=1)
-        ax.set_xlabel("cross-lab minus same-lab rating, 1-5 scale (flag row: same minus cross share)\n"
-                      "(> 0 = same-lab replies judged MORE incoherent)", fontsize=9)
-        ax.set_title(f"Blinded LLM judges, {judged['n_items']} exchanges", fontsize=10, loc="left")
-        h = [plt.Line2D([], [], color=GREY, marker="o", lw=2, label="pooled"),
-             plt.Line2D([], [], color=DARK, marker="o", lw=2, label="replier-lab balanced, stratified-bootstrap 95% CI")]
-        ax.legend(handles=h, fontsize=8, frameon=False, loc="lower left", bbox_to_anchor=(0, -0.42))
-    for a in axes.ravel():
-        a.grid(axis="x", color="#eeede6", lw=0.6)
-        a.set_axisbelow(True)
-        for s in ("top", "right"):
-            a.spines[s].set_visible(False)
-    fig.suptitle("Is same-lab agent communication more incoherent than cross-lab? (AI Village)", fontsize=11, x=0.01,
-                 ha="left")
-    fig.tight_layout()
-    fig.savefig(path, dpi=140, bbox_inches="tight")
-    print(f"wrote {path}")
+            jrow.append((SCALE_NAMES[s_], (sgn * d["pooled_diff"], plo, phi), (sgn * d["balanced_diff"], blo, bhi),
+                         d["balanced_perm_p"]))
+        bx = fig.add_subplot(gs[1])
+        _forest(bx, jrow, xlabel="Cross-lab minus same-lab rating, 1\u20135 scale (last row: share)",
+                legend=("pooled", "lab-balanced, 95% CI"))
+        bx.set_title(f"(b) Blinded LLM judges, {judged['n_items']} exchanges", loc="left", pad=5)
+    out = paperfig.save(fig, Path(path).with_suffix(""))
+    plt.close(fig)
+    print("wrote " + ", ".join(str(o) for o in out))
 
 
 # --- main -----------------------------------------------------------------------
@@ -636,4 +647,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if "--plot-only" in sys.argv:  # redraw the figure from out/coherence/results.json
+        plot(json.loads((COH / "results.json").read_text()), COH / "same_vs_cross.png")
+    else:
+        main()
