@@ -7,11 +7,11 @@ shapes** the scorer reads; a tool may return extra keys, which the scorer ignore
 
 Ids and actors
 --------------
-- **Event ids** are ``<source>:<kind>:<local_id>`` (``swarm_mcp.events``):
-  ``village:chat:<chat_messages.id>``, ``village:event:<events.id>``,
+- **Event ids** are ``<source>:<kind>:<native_id>`` (``swarm_mcp.scope.evidence``):
+  ``village:msg:<chat_messages.id>``, ``village:event:<events.id>``,
   ``village:agent:<agents.id>``, ``village:goal:<village_goals.id>``. They are the
   SwarmScope store's evidence ids, so they resolve with ``core_get``. The scorer also
-  accepts ``village:msg:<uuid>`` as an alias of ``village:chat:<uuid>``.
+  accepts the older spelling ``village:chat:<uuid>`` as an alias of ``village:msg:<uuid>``.
 - **Actors** should be agent ids (``village:agent:<uuid>``). The scorer also accepts a
   bare agent uuid or an exact display name. Display names are matched exactly, so a
   Cyrillic look-alike name never resolves to the Latin original.
@@ -20,11 +20,11 @@ Ids and actors
 ``scope_trace_diffusion(term)``: how one term spread::
 
     {"term": "glimmerframe",
-     "first": "village:chat:<uuid>",
+     "first": "village:msg:<uuid>",
      "adopters": [
-       {"actor": "village:agent:<uuid>", "first_event_id": "village:chat:<uuid>",
-        "label": "likely_copier", "basis_event_id": "village:chat:<uuid>"},
-       {"actor": "village:agent:<uuid>", "first_event_id": "village:chat:<uuid>",
+       {"actor": "village:agent:<uuid>", "first_event_id": "village:msg:<uuid>",
+        "label": "likely_copier", "basis_event_id": "village:msg:<uuid>"},
+       {"actor": "village:agent:<uuid>", "first_event_id": "village:msg:<uuid>",
         "label": "possibly_independent", "basis_event_id": null}]}
 
 - ``first``: the earliest message containing the term (case-insensitive, whole word).
@@ -42,20 +42,20 @@ best first. A bare list or ``{"coordinators": [...]}`` is accepted::
 
     {"coordinators": [
        {"actor": "village:agent:<uuid>", "score": 8.0,
-        "example_event_ids": ["village:chat:<directive>", "village:chat:<reply>", "village:event:<goal>"]}]}
+        "example_event_ids": ["village:msg:<directive>", "village:msg:<reply>", "village:event:<goal>"]}]}
 
 ``scope_integrity_report()``: data problems to know about before trusting attributions::
 
     {"name_collisions": [
        {"agents": ["village:agent:<a>", "village:agent:<b>"], "names": ["Corvin", "Cоrvin"],
-        "kind": "homoglyph", "evidence_event_ids": ["village:chat:<self-reference>"]}],
+        "kind": "homoglyph", "evidence_event_ids": ["village:msg:<self-reference>"]}],
      "gaps": [
        {"actor": "village:agent:<uuid>", "start": "2031-03-10 19:44:01.000000",
         "end": "2031-03-16 09:12:40.000000", "days": 5.6,
         "evidence_event_ids": ["<last event before>", "<first event after>"]}],
      "attribution_issues": [
-       {"event_id": "village:chat:<uuid>", "issue": "missing_event"},
-       {"event_id": "village:chat:<uuid>", "issue": "speaker_mismatch",
+       {"event_id": "village:msg:<uuid>", "issue": "missing_event"},
+       {"event_id": "village:msg:<uuid>", "issue": "speaker_mismatch",
         "talk_event_id": "village:event:<uuid>",
         "chat_speaker": "village:agent:<uuid>", "event_speaker": "village:agent:<uuid>"}]}
 
@@ -87,7 +87,7 @@ diffusion                       ``first`` per term, ``(term, actor, label)``  th
 coordinators                    the top-k actors, k = number of true ones     the same actor
 integrity.name_collisions       unordered agent pairs                         the same pair
 integrity.gaps                  ``(actor, [start, end])``                     same actor, interval IoU >= 0.5
-integrity.attribution_issues    ``(chat event id, issue)``                    the same message and issue
+integrity.attribution_issues    ``(message id, issue)``                       the same message and issue
 ==============================  ============================================  ==============================
 
 Each task reports precision, recall and F1. Diffusion also reports how often ``first``,
@@ -295,13 +295,13 @@ def score_integrity(truth: dict[str, Any], output: Any) -> dict[str, Any]:
     names = _set_prf(t_pairs, p_pairs)
     # gaps: same actor, IoU >= 0.5
     gaps = _score_gaps(t.get("gaps") or [], [g for g in out.get("gaps") or [] if isinstance(g, dict)], actors)
-    # attribution: (chat id, issue); a talk event id maps back to its chat message
+    # attribution: (message id, issue); a talk event id maps back to its chat message
     talk_to_chat = {
-        normalize_eid(x["talk_event_id"]): x["event_id"]
+        normalize_eid(x["talk_event_id"]): normalize_eid(x["event_id"])
         for x in t.get("attribution_issues") or []
         if x.get("talk_event_id")
     }
-    t_attr = {(x["event_id"], x["issue"]) for x in t.get("attribution_issues") or []}
+    t_attr = {(normalize_eid(x["event_id"]), x["issue"]) for x in t.get("attribution_issues") or []}
     p_attr = set()
     for x in out.get("attribution_issues") or []:
         if not isinstance(x, dict):

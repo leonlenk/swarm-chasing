@@ -13,14 +13,14 @@ from typing import Any, Iterable, Iterator
 
 SOURCE = "village"
 
-# Evidence/event ids: ``<source>:<kind>:<local_id>`` (origin/main events.py; PR #1).
-# Chat messages use ``chat``; the SwarmScope adapter on leon/mcp spells it ``msg``,
-# so the scorer treats ``msg`` as an alias of ``chat``.
-KIND_ALIASES = {"msg": "chat"}
+# Evidence ids: ``<source>:<kind>:<native_id>``, the SwarmScope store's ids
+# (``swarm_mcp.scope.evidence``, schema v2). Chat messages are ``msg``; older bench
+# outputs spelled them ``chat``, so the scorer treats ``chat`` as an alias of ``msg``.
+KIND_ALIASES = {"chat": "msg"}
 
 
 def chat_eid(uuid: str) -> str:
-    return f"{SOURCE}:chat:{uuid}"
+    return f"{SOURCE}:msg:{uuid}"
 
 
 def event_eid(uuid: str) -> str:
@@ -36,7 +36,7 @@ def goal_eid(uuid: str) -> str:
 
 
 def normalize_eid(value: Any) -> str | None:
-    """Canonical form of an event id (``msg`` kind -> ``chat``); None for empty input."""
+    """Canonical form of an evidence id (``chat`` kind -> ``msg``); None for empty input."""
     if value is None:
         return None
     s = str(value).strip()

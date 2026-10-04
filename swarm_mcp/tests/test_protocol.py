@@ -32,16 +32,16 @@ def test_in_process_protocol_roundtrip(data_dir: Path):
             out = res.structured_content
             assert out["total"] == 2 and out["returned"] == 1
             hit = out["results"][0]
-            assert hit["evidence_id"].startswith("village:chat:") and hit["text"]["untrusted"] is True
+            assert hit["evidence_id"].startswith("village:msg:") and hit["text"]["untrusted"] is True
 
             bad = await client.call_tool("scope_search", {"query": "x", "author": "nobody"})
             assert bad.is_error is True
             assert "Unknown agent" in bad.content[0].text and "Traceback" not in bad.content[0].text
 
             fake = await client.call_tool(
-                "findings_record", {"claim": "c", "evidence_ids": ["village:chat:does-not-exist"]}
+                "findings_record", {"claim": "c", "evidence_ids": ["village:msg:does-not-exist"]}
             )
-            assert fake.is_error is True and "village:chat:does-not-exist" in fake.content[0].text
+            assert fake.is_error is True and "village:msg:does-not-exist" in fake.content[0].text
 
             resources = {str(r.uri) for r in (await client.list_resources()).resources}
             assert "village://schema" in resources

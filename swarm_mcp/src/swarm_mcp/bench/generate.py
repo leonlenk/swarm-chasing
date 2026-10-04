@@ -52,7 +52,7 @@ from swarm_mcp.bench._common import (
     write_jsonl_gz,
 )
 
-TRUTH_VERSION = 1
+TRUTH_VERSION = 2  # 2: chat message ids are ``village:msg:`` (store ids), ``village:chat:`` an alias
 DATASET_DIRNAME = "ai-village"
 TRUTH_FILENAME = "truth.json"
 
@@ -654,8 +654,8 @@ def _truth(g: _Gen, params: dict[str, Any]) -> dict[str, Any]:
         "seed": g.seed,
         "params": params,
         "dataset_dir": DATASET_DIRNAME,
-        "id_format": "<source>:<kind>:<local_id>; kinds: chat (chat_messages.id), event (events.id), agent (agents.id), goal (village_goals.id)",
-        "kind_aliases": {"msg": "chat"},
+        "id_format": "<source>:<kind>:<native_id>; kinds: msg (chat_messages.id), event (events.id), agent (agents.id), goal (village_goals.id)",
+        "kind_aliases": {"chat": "msg"},
         "agents": {
             agent_eid(a.id): {"name": a.name, "native_id": a.id, "home_room": a.home, "roles": a.roles}
             for a in g.agents
