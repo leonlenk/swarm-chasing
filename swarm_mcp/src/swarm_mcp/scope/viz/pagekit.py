@@ -68,11 +68,13 @@ def day_spec(day_one: str | date, tz: str = VILLAGE_TZ, basis: str = "") -> dict
     return {"day_one": d.isoformat(), "tz": tz, "basis": basis}
 
 
-def village_days(store: Any, day_one: str | bool | None = None, tz: str = VILLAGE_TZ) -> dict[str, str] | None:
-    """The day-axis spec for a store, or None.
+def village_days(
+    store: Any, day_one: str | bool | None = None, tz: str = VILLAGE_TZ, source: str | None = None
+) -> dict[str, str] | None:
+    """The day-axis spec for a store (or one ``source`` in it), or None.
 
-    ``day_one``: None derives it from the store (earliest village goal, Pacific date);
-    an ISO date sets it; False turns the day axis off.
+    ``day_one``: None derives it from the store (earliest village goal, Pacific date), so only
+    sources with village goals get Village days; an ISO date sets it; False turns the axis off.
     """
     if day_one is False:
         return None
@@ -80,7 +82,9 @@ def village_days(store: Any, day_one: str | bool | None = None, tz: str = VILLAG
         return day_spec(str(day_one), tz, "given")
     try:
         row = store.one(
-            "SELECT min(start_ts) AS t FROM periods WHERE kind = ? AND start_ts IS NOT NULL", [VILLAGE_PERIOD_KIND]
+            "SELECT min(start_ts) AS t FROM periods WHERE kind = ? AND start_ts IS NOT NULL"
+            " AND (CAST(? AS TEXT) IS NULL OR source = ?)",
+            [VILLAGE_PERIOD_KIND, source, source],
         )
     except Exception:  # noqa: BLE001 - a store without periods simply has no day axis
         return None

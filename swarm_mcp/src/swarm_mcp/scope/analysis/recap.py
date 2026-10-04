@@ -36,8 +36,11 @@ import math
 import os
 import re
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta, timezone
+from collections.abc import Callable
+from datetime import date, datetime, timedelta, timezone
+from functools import partial
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from swarm_mcp.scope.analysis.timeline import ts_iso
 from swarm_mcp.scope.db import Store, label_for
@@ -141,8 +144,8 @@ def _terms_cte(src: str, cols: str) -> str:
               ANTI JOIN stop s2 ON split_part(tt.term, ' ', 2) = s2.w)"""
 
 
-def _days(store: Store, day_one: Any = None) -> dict[str, str] | None:
-    return village_days(store, day_one)
+def _days(store: Store, day_one: Any = None, source: str | None = None) -> dict[str, str] | None:
+    return village_days(store, day_one, source=source)
 
 
 def _local_date_sql(col: str, spec: dict[str, str] | None) -> str:
@@ -479,7 +482,7 @@ def window_recap(
         min_term_msgs=min_term_msgs,
         min_term_agents=min_term_agents,
     )[target]
-    spec = _days(store, day_one)
+    spec = _days(store, day_one, source)
     win = {
         "since": _iso(t0),
         "until": _iso(t1),
@@ -551,7 +554,7 @@ def period_recaps(
         min_term_msgs=min_term_msgs,
         min_term_agents=min_term_agents,
     )
-    spec = _days(store, day_one)
+    spec = _days(store, day_one, source)
     out = []
     for i, (p, (s, e)) in enumerate(zip(periods, segs, strict=True)):
         rec = recs.get(i)
@@ -779,7 +782,7 @@ def agent_arc(
     a = _resolve(store, agent_id)
     aid = a["agent_id"]
     names = store.display_names()
-    spec = _days(store, day_one)
+    spec = _days(store, day_one, source)
     meta = a.get("meta") or {}
     if isinstance(meta, str):
         meta = json.loads(meta)
@@ -978,8 +981,7 @@ def _bursts(
     z_min: float,
     lo: datetime | None,
     hi: datetime | None,
-    limit: int,
-) -> list[dict[str, Any]]:
+) -> list[Callable[[], dict[str, Any]]]:
     where, params = _filters("messages", source, None)
     all_days = sorted(
         r["d"]
@@ -1017,15 +1019,9 @@ def _bursts(
         if any(k["entity"] == f["entity"] and k["e"] == f["e"] and abs(pos[k["d"]] - pos[f["d"]]) <= 2 for k in kept):
             continue
         kept.append(f)
-    out = []
     dsql = _local_date_sql("ts", spec)
-    d_lo = (lo - timedelta(days=1)).date() if lo is not None else None
-    d_hi = (hi + timedelta(days=1)).date() if hi is not None else None
-    for f in kept:
-        if len(out) >= limit:
-            break
-        if (d_lo is not None and f["d"] < d_lo) or (d_hi is not None and f["d"] > d_hi):
-            continue
+
+    def make(f: dict[str, Any]) -> dict[str, Any]:
         col = "author_id" if f["entity"] == "agent" else "channel"
         r = (
             store.one(
@@ -1037,28 +1033,25 @@ def _bursts(
             )
             or {}
         )
-        if lo is not None and r.get("t0") is not None and (r["t0"] < lo or (hi is not None and r["t0"] >= hi)):
-            continue
         when = f"Day {day_number(r['t0'], spec)}" if spec and r.get("t0") else str(f["d"])
         who = label_for(f["e"], names) if f["entity"] == "agent" else f"#{f['e']}"
-        out.append(
-            {
-                "kind": "burst",
-                "t": _iso(r.get("t0")),
-                "end": _iso(r.get("t1")),
-                "agent": label_for(f["e"], names) if f["entity"] == "agent" else None,
-                "agent_id": f["e"] if f["entity"] == "agent" else None,
-                "channel": f["e"] if f["entity"] == "channel" else r.get("ch"),
-                "score": round(f["z"], 2),
-                "why": (
-                    f"{who}: {f['x']} msgs on {when} vs {f['mean']:.0f} ± {f['sd']:.0f} in the prior "
-                    f"{f['k']} active days (z = {f['z']:.1f})"
-                ),
-                "ids": list(r.get("ids") or []),
-                **_day_fields(r.get("t0"), spec),
-            }
-        )
-    return out
+        return {
+            "kind": "burst",
+            "t": _iso(r.get("t0")),
+            "end": _iso(r.get("t1")),
+            "agent": label_for(f["e"], names) if f["entity"] == "agent" else None,
+            "agent_id": f["e"] if f["entity"] == "agent" else None,
+            "channel": f["e"] if f["entity"] == "channel" else r.get("ch"),
+            "score": round(f["z"], 2),
+            "why": (
+                f"{who}: {f['x']} msgs on {when} vs {f['mean']:.0f} ± {f['sd']:.0f} in the prior "
+                f"{f['k']} active days (z = {f['z']:.1f})"
+            ),
+            "ids": list(r.get("ids") or []),
+            **_day_fields(r.get("t0"), spec),
+        }
+
+    return [partial(make, f) for f in kept if _day_overlaps(f["d"], spec, lo, hi)]
 
 
 def _silences(
@@ -1071,8 +1064,7 @@ def _silences(
     min_rate: float,
     lo: datetime | None,
     hi: datetime | None,
-    limit: int,
-) -> list[dict[str, Any]]:
+) -> list[Callable[[], dict[str, Any]]]:
     """An agent that posted on most recent active days goes quiet for >= min_days consecutive
     active days and then posts again (a departure without return is not a silence)."""
     where, params = _filters("messages", source, None)
@@ -1100,13 +1092,9 @@ def _silences(
                 continue
             found.append({"e": e, "a": a, "b": b, "gap": gap, "rate": rate, "k": len(prior), "expected": rate * gap})
     found.sort(key=lambda f: (-f["expected"], f["e"]))
-    out = []
-    for f in found:
-        if len(out) >= limit:
-            break
+
+    def make(f: dict[str, Any]) -> dict[str, Any]:
         d0, d1 = all_days[f["a"] + 1], all_days[f["b"] - 1]
-        if (lo is not None and d1 < lo.date()) or (hi is not None and d0 > hi.date()):
-            continue
         last = (
             store.one(
                 f"""SELECT max(ts) AS t_last FROM messages WHERE {where} AND author_id = ? AND {_local_date_sql("ts", spec)} = ?""",
@@ -1129,25 +1117,28 @@ def _silences(
             span = f"Day {a_day}" if a_day == b_day else f"Days {a_day}\u2013{b_day}"
         else:
             span = f"{d0} to {d1}"
-        out.append(
-            {
-                "kind": "silence",
-                "t": _iso(last.get("t_last")),
-                "end": _iso(nxt.get("t_next")),
-                "agent": who,
-                "agent_id": f["e"],
-                "channel": None,
-                "score": round(f["expected"], 1),
-                "why": (
-                    f"{who}: no messages on {f['gap']} consecutive active days ({span}) after "
-                    f"{f['rate']:.1f}/day in the prior {f['k']} active days (~{f['expected']:.0f} expected); "
-                    "ids are its first messages after the silence"
-                ),
-                "ids": list(nxt.get("ids") or []),
-                **_day_fields(last.get("t_last"), spec),
-            }
-        )
-    return out
+        return {
+            "kind": "silence",
+            "t": _iso(last.get("t_last")),
+            "end": _iso(nxt.get("t_next")),
+            "agent": who,
+            "agent_id": f["e"],
+            "channel": None,
+            "score": round(f["expected"], 1),
+            "why": (
+                f"{who}: no messages on {f['gap']} consecutive active days ({span}) after "
+                f"{f['rate']:.1f}/day in the prior {f['k']} active days (~{f['expected']:.0f} expected); "
+                "ids are its first messages after the silence"
+            ),
+            "ids": list(nxt.get("ids") or []),
+            **_day_fields(last.get("t_last"), spec),
+        }
+
+    def in_window(f: dict[str, Any]) -> bool:  # the silent days overlap [lo, hi)
+        d0, d1 = all_days[f["a"] + 1], all_days[f["b"] - 1]
+        return _day_overlaps(d0, spec, lo, hi, last=d1)
+
+    return [partial(make, f) for f in found if in_window(f)]
 
 
 def _partner_shifts(
@@ -1158,8 +1149,7 @@ def _partner_shifts(
     min_mentions: int,
     lo: datetime | None,
     hi: datetime | None,
-    limit: int,
-) -> list[dict[str, Any]]:
+) -> list[Callable[[], dict[str, Any]]]:
     segs = _period_segments(store, source)
     unit = "goal"
     if not segs:
@@ -1195,13 +1185,9 @@ def _partner_shifts(
                     found.append((js, src, prev_i, i))
             prev_i = i
     found.sort(key=lambda f: (-f[0], f[1], f[3]))
-    out = []
-    for js, src, a, b in found:
-        if len(out) >= limit:
-            break
+
+    def make(js: float, src: str, a: int, b: int) -> dict[str, Any]:
         sa, sb = segs[a], segs[b]
-        if (lo is not None and sb["start"] < lo) or (hi is not None and sb["start"] >= hi):
-            continue
         pa, pb = dist[src][a], dist[src][b]
         ta, tb = pa.most_common(1)[0], pb.most_common(1)[0]
         share = lambda c, k: c[k] / sum(c.values())  # noqa: E731
@@ -1217,25 +1203,28 @@ def _partner_shifts(
         la = (sa["label"] or _iso(sa["start"]) or "")[:60]
         lb = (sb["label"] or _iso(sb["start"]) or "")[:60]
         who = label_for(src, names)
-        out.append(
-            {
-                "kind": "partner_shift",
-                "t": _iso(ids.get("t0") or sb["start"]),
-                "end": _iso(sb["end"]),
-                "agent": who,
-                "agent_id": src,
-                "channel": None,
-                "score": round(js, 3),
-                "why": (
-                    f"{who}'s mentions changed between {unit}s (Jensen-Shannon distance {js:.2f}): top partner "
-                    f"{label_for(ta[0], names)} {share(pa, ta[0]):.0%} of {sum(pa.values())} in “{la}” → "
-                    f"{label_for(tb[0], names)} {share(pb, tb[0]):.0%} of {sum(pb.values())} in “{lb}”"
-                ),
-                "ids": list(ids.get("ids") or []),
-                **_day_fields(ids.get("t0") or sb["start"], spec),
-            }
-        )
-    return out
+        return {
+            "kind": "partner_shift",
+            "t": _iso(ids.get("t0") or sb["start"]),
+            "end": _iso(sb["end"]),
+            "agent": who,
+            "agent_id": src,
+            "channel": None,
+            "score": round(js, 3),
+            "why": (
+                f"{who}'s mentions changed between {unit}s (Jensen-Shannon distance {js:.2f}): top partner "
+                f"{label_for(ta[0], names)} {share(pa, ta[0]):.0%} of {sum(pa.values())} in “{la}” → "
+                f"{label_for(tb[0], names)} {share(pb, tb[0]):.0%} of {sum(pb.values())} in “{lb}”"
+            ),
+            "ids": list(ids.get("ids") or []),
+            **_day_fields(ids.get("t0") or sb["start"], spec),
+        }
+
+    def in_window(b: int) -> bool:  # the later period starts in [lo, hi)
+        st = segs[b]["start"]
+        return not ((lo is not None and st < lo) or (hi is not None and st >= hi))
+
+    return [partial(make, *f) for f in found if in_window(f[3])]
 
 
 def _first_uses(
@@ -1247,50 +1236,125 @@ def _first_uses(
     min_agents: int,
     lo: datetime | None,
     hi: datetime | None,
-    limit: int,
-) -> list[dict[str, Any]]:
+) -> list[Callable[[], dict[str, Any]]]:
     nt = novel_terms(store, min_msgs=min_msgs, min_agents=min_agents, source=source)
     names = store.display_names()
     items = [t for t in nt["terms"].values() if t["adopters_fast"] >= 2]
     items.sort(key=lambda t: (-t["adopters_fast"], -t["adopters"], -t["n"], t["term"]))
     # one moment per first message: "claude haiku" and "haiku" introduced together count once
-    out, seen = [], set()
+    keep, seen = [], set()
     for t in items:
-        if len(out) >= limit:
-            break
         if (lo is not None and t["first_ts"] < lo) or (hi is not None and t["first_ts"] >= hi):
             continue
-        k = t["first_id"]
-        if k in seen:
+        if t["first_id"] in seen:
             continue
-        seen.add(k)
+        seen.add(t["first_id"])
+        keep.append(t)
+
+    def make(t: dict[str, Any]) -> dict[str, Any]:
         when = f"Day {day_number(t['first_ts'], spec)}" if spec else _iso(t["first_ts"])
-        out.append(
-            {
-                "kind": "first_use",
-                "t": _iso(t["first_ts"]),
-                "end": None,
-                "agent": label_for(t["coiner"], names),
-                "agent_id": t["coiner"],
-                "channel": None,
-                "term": t["term"],
-                "score": t["adopters_fast"],
-                "why": (
-                    f"“{t['term']}” first used by {label_for(t['coiner'], names)} on {when}; "
-                    f"{t['adopters_fast']} other agents used it in >= 2 messages within {FAST_DAYS} days "
-                    f"({t['adopters']} in all; {t['n']:,} messages by {t['agents']} agents)"
-                ),
-                "ids": [],
-                **_day_fields(t["first_ts"], spec),
-            }
+        return {
+            "kind": "first_use",
+            "t": _iso(t["first_ts"]),
+            "end": None,
+            "agent": label_for(t["coiner"], names),
+            "agent_id": t["coiner"],
+            "channel": None,
+            "term": t["term"],
+            "score": t["adopters_fast"],
+            "why": (
+                f"“{t['term']}” first used by {label_for(t['coiner'], names)} on {when}; "
+                f"{t['adopters_fast']} other agents used it in >= 2 messages within {FAST_DAYS} days "
+                f"({t['adopters']} in all; {t['n']:,} messages by {t['agents']} agents)"
+            ),
+            "ids": _term_ids(store, t["term"], source),
+            **_day_fields(t["first_ts"], spec),
+        }
+
+    return [partial(make, t) for t in keep]
+
+
+MOMENT_KINDS = ("burst", "silence", "partner_shift", "first_use")
+
+
+def _day_overlaps(
+    d: date, spec: dict[str, str] | None, lo: datetime | None, hi: datetime | None, last: date | None = None
+) -> bool:
+    """Whether the (local) days d..last overlap the naive-UTC window [lo, hi)."""
+    if lo is None and hi is None:
+        return True
+    tz = ZoneInfo(spec["tz"]) if spec else timezone.utc
+    start = datetime(d.year, d.month, d.day, tzinfo=tz).astimezone(timezone.utc).replace(tzinfo=None)
+    e = (last or d) + timedelta(days=1)
+    end = datetime(e.year, e.month, e.day, tzinfo=tz).astimezone(timezone.utc).replace(tzinfo=None)
+    return (hi is None or start < hi) and (lo is None or end > lo)
+
+
+def _moment_candidates(
+    store: Store,
+    *,
+    kinds: Any,
+    spec: dict[str, str] | None,
+    source: str | None,
+    lo: datetime | None,
+    hi: datetime | None,
+    baseline_days: int,
+    min_burst_msgs: int,
+    z_min: float,
+    min_shift_mentions: int,
+    min_term_msgs: int | None,
+    min_term_agents: int,
+    min_silent_days: int,
+    min_prior_rate: float,
+) -> dict[str, list[Callable[[], dict[str, Any]]]]:
+    """Per kind, the moments in [lo, hi) in rank order, each a callable that builds the item (and runs
+    the one query that fetches its evidence ids) only when called."""
+    wanted = _check_kinds(kinds)
+    out: dict[str, list[Callable[[], dict[str, Any]]]] = {}
+    if "burst" in wanted:
+        out["burst"] = _bursts(
+            store, spec, source, baseline_days=baseline_days, min_msgs=min_burst_msgs, z_min=z_min, lo=lo, hi=hi
+        )
+    if "silence" in wanted:
+        out["silence"] = _silences(
+            store,
+            spec,
+            source,
+            baseline_days=baseline_days,
+            min_days=min_silent_days,
+            min_rate=min_prior_rate,
+            lo=lo,
+            hi=hi,
+        )
+    if "partner_shift" in wanted:
+        out["partner_shift"] = _partner_shifts(store, spec, source, min_mentions=min_shift_mentions, lo=lo, hi=hi)
+    if "first_use" in wanted:
+        out["first_use"] = _first_uses(
+            store, spec, source, min_msgs=min_term_msgs, min_agents=min_term_agents, lo=lo, hi=hi
         )
     return out
 
 
-def _fill_term_ids(store: Store, items: list[dict[str, Any]], source: str | None) -> None:
-    for it in items:
-        if it["kind"] == "first_use" and not it["ids"]:
-            it["ids"] = _term_ids(store, it["term"], source)
+def _check_kinds(kinds: Any) -> tuple[str, ...]:
+    if kinds is None:
+        return MOMENT_KINDS
+    ks = [kinds] if isinstance(kinds, str) else list(kinds)
+    bad = [k for k in ks if k not in MOMENT_KINDS]
+    if bad or not ks:
+        raise ToolInputError(f"kinds must be a non-empty subset of {', '.join(MOMENT_KINDS)}; got {ks!r}")
+    return tuple(k for k in MOMENT_KINDS if k in ks)
+
+
+def _interleave(cands: dict[str, list[Any]]) -> list[tuple[str, int, Any]]:
+    """(kind, rank, candidate) with the best of each kind first: rank 1 of every kind, then rank 2, ..."""
+    out = []
+    depth = 0
+    while any(depth < len(v) for v in cands.values()):
+        for k in MOMENT_KINDS:
+            if k in cands and depth < len(cands[k]):
+                out.append((k, depth + 1, cands[k][depth]))
+        depth += 1
+    return out
 
 
 def notable_moments(
@@ -1300,6 +1364,7 @@ def notable_moments(
     since: Any = None,
     until: Any = None,
     source: str | None = None,
+    kinds: Any = None,
     baseline_days: int = 14,
     min_burst_msgs: int = 20,
     z_min: float = 4.0,
@@ -1310,64 +1375,107 @@ def notable_moments(
     min_prior_rate: float = 3.0,
     day_one: Any = None,
 ) -> list[dict[str, Any]]:
-    """Explainable moments worth opening, newest last.
+    """Explainable moments worth opening, newest last (see ``moments_page`` for the definitions).
+
+    Kinds are interleaved by rank (the best of each kind first) up to ``top`` and then sorted by time."""
+    page = moments_page(
+        store,
+        limit=top,
+        offset=0,
+        since=since,
+        until=until,
+        source=source,
+        kinds=kinds,
+        baseline_days=baseline_days,
+        min_burst_msgs=min_burst_msgs,
+        z_min=z_min,
+        min_shift_mentions=min_shift_mentions,
+        min_term_msgs=min_term_msgs,
+        min_term_agents=min_term_agents,
+        min_silent_days=min_silent_days,
+        min_prior_rate=min_prior_rate,
+        day_one=day_one,
+    )
+    picked = page["items"]
+    picked.sort(key=lambda m: (m["t"] or "", m["kind"], -float(m["score"])))
+    return picked
+
+
+def moments_page(
+    store: Store,
+    *,
+    limit: int = 20,
+    offset: int = 0,
+    since: Any = None,
+    until: Any = None,
+    source: str | None = None,
+    kinds: Any = None,
+    baseline_days: int = 14,
+    min_burst_msgs: int = 20,
+    z_min: float = 4.0,
+    min_shift_mentions: int = 20,
+    min_term_msgs: int | None = None,
+    min_term_agents: int = 3,
+    min_silent_days: int = 3,
+    min_prior_rate: float = 3.0,
+    day_one: Any = None,
+) -> dict[str, Any]:
+    """One page of notable moments in rank order: {"total", "by_kind", "offset", "items", "notes"}.
 
     - ``burst``: an agent's or channel's messages on one day against the prior ``baseline_days``
       active days (days with any message; for an agent, only days since its first message):
-      z = (x - mean) / max(sd, sqrt(mean), 1); kept when x >= min_burst_msgs and z >= z_min.
-    - ``partner_shift``: Jensen-Shannon distance between an agent's out-mention distributions in
-      consecutive periods (village goals, else 14-day bins) with >= min_shift_mentions each.
+      z = (x - mean) / max(sd, sqrt(mean), 1); kept when x >= min_burst_msgs and z >= z_min; one per
+      agent or channel per run of adjacent days.
     - ``silence``: an agent with >= min_prior_rate messages per active day over the prior
       ``baseline_days`` active days posts nothing for >= min_silent_days consecutive active days,
       then posts again; scored by the messages it would have sent at its prior rate.
+    - ``partner_shift``: Jensen-Shannon distance between an agent's out-mention distributions in
+      consecutive periods (village goals, else 14-day bins) with >= min_shift_mentions each.
     - ``first_use``: the first use of a novel term (see ``novel_terms``) that >= 2 other agents used
       in >= 2 messages within 14 days, scored by that number of fast adopters.
 
-    Kinds are interleaved by rank (the best of each kind first) up to ``top`` and then sorted by
-    time; ``score`` is kind-specific (z, expected missing messages, JS distance, fast adopters) and
-    ``rank`` is the rank within its kind. ``ids`` holds up to 30 evidence ids to open (the day's
-    messages, the first messages after a silence, the new partner mentions, or the term's first uses).
+    Scores are not comparable across kinds, so the ranking interleaves them: the strongest moment of
+    each kind first, then the second of each, and so on. ``rank`` is the rank within its kind.
+    ``ids`` holds up to 30 evidence ids to open (the day's messages, the first messages after a
+    silence, the new partner mentions, or the term's first uses). Only the returned page is built:
+    one small query per item for its ids. The window [since, until) keeps moments whose days
+    overlap it (bursts, silences), whose later period starts in it (partner shifts) or whose first
+    use falls in it (first uses).
     """
+    if limit < 1:
+        raise ToolInputError("limit must be >= 1")
+    if offset < 0:
+        raise ToolInputError("offset must be >= 0")
     lo, hi = _as_dt(since, field="since"), _as_dt(until, end=True, field="until")
-    spec = _days(store, day_one)
-    kinds = {
-        "burst": _bursts(
-            store,
-            spec,
-            source,
-            baseline_days=baseline_days,
-            min_msgs=min_burst_msgs,
-            z_min=z_min,
-            lo=lo,
-            hi=hi,
-            limit=top,
-        ),
-        "partner_shift": _partner_shifts(store, spec, source, min_mentions=min_shift_mentions, lo=lo, hi=hi, limit=top),
-        "first_use": _first_uses(
-            store, spec, source, min_msgs=min_term_msgs, min_agents=min_term_agents, lo=lo, hi=hi, limit=top
-        ),
-        "silence": _silences(
-            store,
-            spec,
-            source,
-            baseline_days=baseline_days,
-            min_days=min_silent_days,
-            min_rate=min_prior_rate,
-            lo=lo,
-            hi=hi,
-            limit=top,
-        ),
+    if lo is not None and hi is not None and hi <= lo:
+        raise ToolInputError("until must be after since")
+    spec = _days(store, day_one, source)
+    cands = _moment_candidates(
+        store,
+        kinds=kinds,
+        spec=spec,
+        source=source,
+        lo=lo,
+        hi=hi,
+        baseline_days=baseline_days,
+        min_burst_msgs=min_burst_msgs,
+        z_min=z_min,
+        min_shift_mentions=min_shift_mentions,
+        min_term_msgs=min_term_msgs,
+        min_term_agents=min_term_agents,
+        min_silent_days=min_silent_days,
+        min_prior_rate=min_prior_rate,
+    )
+    ranked = _interleave(cands)
+    items = []
+    for _kind, rank, make in ranked[offset : offset + limit]:
+        it = make()
+        it["rank"] = rank
+        items.append(it)
+    return {
+        "total": len(ranked),
+        "by_kind": {k: len(v) for k, v in cands.items()},
+        "offset": offset,
+        "items": items,
+        "days": spec,
     }
-    for items in kinds.values():
-        for r, it in enumerate(items, 1):
-            it["rank"] = r
-    picked: list[dict[str, Any]] = []
-    depth = 0
-    while len(picked) < top and any(depth < len(v) for v in kinds.values()):
-        for k in ("burst", "silence", "partner_shift", "first_use"):
-            if depth < len(kinds[k]) and len(picked) < top:
-                picked.append(kinds[k][depth])
-        depth += 1
-    _fill_term_ids(store, picked, source)
-    picked.sort(key=lambda m: (m["t"] or "", m["kind"], -float(m["score"])))
-    return picked

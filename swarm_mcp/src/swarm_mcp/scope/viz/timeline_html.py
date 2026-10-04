@@ -284,7 +284,7 @@ def render_timeline(
                 t_hi=t_hi,
                 room_left=max_marks - lane_total if not sampled else 0,
             )
-        day_spec = pagekit.village_days(store, day_one)
+        day_spec = pagekit.village_days(store, day_one, source=source)
         explored: dict[str, Any] = {}
         if lane_ids and explore:
             explored = _explore(

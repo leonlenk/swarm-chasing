@@ -197,7 +197,7 @@ def metric_series(
     top = max(1, min(int(top), MAX_GROUPS))
     t0, t1 = _as_dt(since, field="since"), _as_dt(until, end=True, field="until")
     ch = store.resolve_channel(channel, source) if channel else None
-    spec = _days(store, day_one)
+    spec = _days(store, day_one, source)
     dsql = _local_date_sql("ts", spec)
     kind = "count" if metric == "messages" else "rate"
     agents_meta = {
