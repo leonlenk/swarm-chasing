@@ -432,3 +432,26 @@ def test_add_auto_detects_a_working_tree_and_never_keeps_an_empty_draft(project:
             assert "found no table of timestamped records" in err and "no mapping was written" in err and hint in err
             assert not (mappings / f"{default_name(sub)}.json").exists()
     assert not list(mappings.glob("*.json")) or all(f.name.endswith(".setup.json") for f in mappings.glob("*"))
+
+
+def test_add_reuses_a_drafted_mapping_only_for_its_own_dataset(project: Path, capsys):
+    """Regression: `add <another dataset> --name crew` reused mappings/crew.json (drafted for data/crew), then
+    advised editing it, which would break the dataset it belongs to."""
+    make_nested_jsonl(project / "data" / "crew")
+    make_sqlite_board(project / "data" / "board")
+    make_nested_jsonl(project / "data" / "elsewhere" / "crew")  # same layout, same default name, another folder
+    mapping = project / "mappings" / "crew.json"
+    assert cli("add", "data/crew", "--dry-run") == 0 and mapping.exists()
+    drafted = mapping.read_text()
+    capsys.readouterr()
+    for other in (("data/board", "--name", "crew"), ("data/elsewhere/crew",)):
+        assert cli("add", *other, "--dry-run") == 2
+        err = capsys.readouterr().err
+        assert f"mappings/crew.json belongs to {(project / 'data' / 'crew').resolve()}" in err
+        assert "pick another --name or pass --mapping" in err
+    assert mapping.read_text() == drafted
+    assert cli("add", "data/crew", "--dry-run") == 0  # its own dataset still reuses it
+    assert "using existing mapping mappings/crew.json" in capsys.readouterr().out
+    (project / "mappings" / "crew.setup.json").unlink()  # no record of the dataset (e.g. a committed mapping)
+    assert cli("add", "data/elsewhere/crew", "--dry-run") == 0
+    assert "using existing mapping mappings/crew.json" in capsys.readouterr().out

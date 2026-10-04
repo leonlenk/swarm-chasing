@@ -320,6 +320,11 @@ def _add_mapped(args: argparse.Namespace, config: Config, path: Path, db: Path) 
         if not _SLUG.match(source):
             raise CommandError(f"--name must be a lowercase slug (letters, digits, _ or -), got {source!r}")
         if (mappings_dir / f"{source}.json").is_file():  # never redraft over the user's edits
+            owner = _mapping_owner(mappings_dir, source)
+            if owner is not None and owner != path.resolve():  # another dataset's mapping: editing it breaks that one
+                raise CommandError(
+                    f"mappings/{source}.json belongs to {owner}, not {path}; pick another --name or pass --mapping"
+                )
             mapping_path = mappings_dir / f"{source}.json"
             print(f"using existing mapping mappings/{source}.json (delete it to redraft)")
     if mapping_path is not None:
@@ -361,6 +366,16 @@ def _add_mapped(args: argparse.Namespace, config: Config, path: Path, db: Path) 
     print(f"mapping: {mapping_path} {_replaced_note(res)}")
     print("\n".join(_next_steps(res["source"])))
     return 0
+
+
+def _mapping_owner(mappings_dir: Path, source: str) -> Path | None:
+    """The dataset folder mappings/<source>.json was drafted for, from the (gitignored) <source>.setup.json log;
+    None when unknown (no log: a hand-written, committed or older mapping)."""
+    try:
+        root = json.loads((mappings_dir / f"{source}.setup.json").read_text(encoding="utf-8")).get("root")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return Path(root).resolve() if isinstance(root, str) and root else None
 
 
 def _drop_invalid_draft(res: dict[str, Any], path: Path) -> None:
