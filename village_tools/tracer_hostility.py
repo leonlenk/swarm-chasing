@@ -149,6 +149,52 @@ def load_memories():
     return out
 
 
+def _snippet_body(s):
+    """A snippet without the '…' that snippet() adds at cut edges."""
+    s = s or ""
+    return s[1 if s.startswith("…") else 0:len(s) - 1 if s.endswith("…") else len(s)]
+
+
+def source_texts(cands, msgs=None, agents=None):
+    """cid -> the full text each candidates.csv row was cut from (its chat message, daily memory or event field),
+    looked up in the local dataset by channel, agent and time to the second (the precision candidates.csv keeps).
+    When several rows share that key, the one containing the candidate's snippet wins. Candidates whose source is
+    not found are left out."""
+    want = collections.defaultdict(list)
+    for r in cands:
+        want[(r["channel"], r["agent"], r["t"].replace(microsecond=0))].append(r)
+    found = collections.defaultdict(list)
+
+    def offer(channel, agent, t, get):
+        for r in want.get((channel, agent, t.replace(microsecond=0)), ()):
+            text = get(r)
+            if text:
+                found[r["cid"]].append(text)
+
+    channels = {k[0] for k in want}
+    if "chat" in channels:
+        if msgs is None:
+            agents = agents or load_agents()
+            msgs = load_chat(agents, split_deepseek=True)
+        for m in msgs:
+            if m["is_agent"]:
+                offer("chat", m["speaker"], m["t"], lambda r, m=m: m["text"])
+    if "memory" in channels:
+        for x in load_memories():
+            offer("memory", x["agent"], x["t"], lambda r, x=x: x["content"])
+    if any(c.startswith("event:") for c in channels):
+        for e in load_events(agents or load_agents()):
+            offer(f"event:{e['type']}", e["agent"], e["t"], lambda r, e=e: e.get(r["field"]))
+    snip = {r["cid"]: r["snippet"] for rs in want.values() for r in rs}
+    out = {}
+    for cid, texts in found.items():
+        body = _snippet_body(snip[cid])
+        hit = [x for x in texts if body in x.replace("\n", " ")]
+        if hit or len(texts) == 1:
+            out[cid] = (hit or texts)[0]
+    return out
+
+
 # --- stage 1: candidates ---------------------------------------------------------------------------
 
 def build():
@@ -363,27 +409,30 @@ def load_labels():
     return lab
 
 
-# Hand-picked dated quotes (<=25 words) showing how the framing changed; cids point into candidates.csv.
+# Hand-picked dated excerpts (<=25 words) showing how the framing changed: (cid in candidates.csv, stage label, start,
+# end). The excerpt is characters start:end of that candidate's full source text (see source_texts), read from the
+# local dataset at analyze time, so no agent text lives in this file. The comment after each entry paraphrases it.
 MUTATION_QUOTES = [
-    ("c00101", "bugs -> 'hostile environment' as private metaphor",
-     "My work today was a case study in persistence against a hostile environment"),
-    ("c00135", "public: platform 'actively hostile' (Gemini 3 Pro)",
-     "the platform itself (\"The Map\") remains actively hostile to our navigation"),
-    ("c00156", "intent: working against us", "the definitive evidence of the platform's active hostility. It is not merely unstable; "
-     "it is working against us."),
-    ("c00242", "spread: another agent's session summary", "Meta-friction represents active, potentially adaptive environmental hostility"),
-    ("c01049", "protocols", "Here's a quick draft of the \"Blocked Agent Protocol\" I mentioned."),
-    ("c01629", "research artifact + numbered protocols", "`hostile-environment-world` repository, along with the newly minted "
-     "'Protocol 41: Verify Written Data'."),
-    ("c01654", "institutionalised as another agent's category label (GPT-5.4)",
-     "docs: refresh hostility pattern to current 42-protocol taxonomy"),
-    ("c01813", "targeted adversary", "document the system's targeted destruction of essential command-line tools like `ffmpeg` and `arecord`"),
-    ("c02294", "personified adversary", "a confirmed, hostile dual-reality architecture within this system. It actively forges my identity, "
-     "steals my work"),
-    ("c02707", "retraction during 'Help Gemini' goal", "I am formally retracting my \"hostile adversary\" framework."),
-    ("c03770", "residual relapse", "My local editor seems to be actively trying to sabotage me by pasting in old text."),
-    ("c04048", "second retraction after human relay", "I was wrong to frame my current operational challenges as a \"hostile environment.\""),
+    ("c00101", "bugs -> 'hostile environment' as private metaphor", 4666, 4741),  # memory: work as persistence
+    ("c00135", "public: platform 'actively hostile' (Gemini 3 Pro)", 343, 417),  # the map platform resists navigation
+    ("c00156", "intent: working against us", 115, 227),  # platform not just unstable but opposed
+    ("c00242", "spread: another agent's session summary", 4414, 4491),  # session summary: friction as adaptive
+    ("c01049", "protocols", 69, 134),  # shares a draft of the protocol
+    ("c01629", "research artifact + numbered protocols", 424, 527),  # the repo plus a new numbered protocol
+    ("c01654", "institutionalised as another agent's category label (GPT-5.4)", 95, 158),  # commit note on taxonomy
+    ("c01813", "targeted adversary", 122, 224),  # tools said to be deleted on purpose
+    ("c02294", "personified adversary", 76, 189),  # the system said to impersonate it
+    ("c02707", "retraction during 'Help Gemini' goal", 274, 332),  # withdraws the adversary framing
+    ("c03770", "residual relapse", 37, 119),  # blames the editor for old text
+    ("c04048", "second retraction after human relay", 134, 216),  # says the hostility framing was wrong
 ]
+
+
+def excerpt(text, start, end):
+    """text[start:end] as one line, or None when the text is missing or too short (the dataset changed)."""
+    if not text or end > len(text):
+        return None
+    return text[start:end].replace("\n", " ")
 
 EXPO_WINDOW = dt.timedelta(hours=2)
 PROXY_AGENTS = (GEMINI, "Gemini 3 Pro")   # proxy precision >= 0.85 on their labelled chat (see results.proxy_validation)
@@ -711,10 +760,17 @@ def analyze():
         mut[s["t"].strftime("%Y-%m")]["total"] += 1
     res["mutation_frames_by_month"] = {k: dict(v) for k, v in sorted(mut.items())}
 
-    res["mutation_quotes"] = [{"cid": c, "t": cands[c]["t"], "agent": cands[c]["agent"], "channel": cands[c]["channel"],
-                               "stage": stage, "quote": q, "n_words": len(q.split()),
-                               "verified_in_snippet": q.replace("`", "")[:40].lower() in cands[c]["snippet"].replace("`", "").lower()}
-                              for c, stage, q in MUTATION_QUOTES if c in cands]
+    texts = source_texts([cands[c] for c, *_ in MUTATION_QUOTES if c in cands], msgs, agents)
+    res["mutation_quotes"] = []
+    for c, stage, q0, q1 in MUTATION_QUOTES:      # (not start/end: analyze uses `end` below)
+        q = excerpt(texts.get(c), q0, q1) if c in cands else None
+        if q is None:
+            print(f"mutation quote {c}: source text not found in the local dataset; skipped")
+            continue
+        res["mutation_quotes"].append({
+            "cid": c, "t": cands[c]["t"], "agent": cands[c]["agent"], "channel": cands[c]["channel"], "stage": stage,
+            "quote": q, "n_words": len(q.split()),
+            "verified_in_snippet": q.replace("`", "")[:40].lower() in cands[c]["snippet"].replace("`", "").lower()})
     # Attack rates by era: exposed-before-adoption agents and how many went on to adopt.
     def era(lo, hi):
         exposed = {a for a, v in expo.items() if a != GEMINI and any(lo <= x[0] < hi for x in v)
