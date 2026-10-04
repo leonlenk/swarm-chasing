@@ -1,0 +1,1662 @@
+<title>Idea Spread Viewer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one 1240px analytical column on a cool neutral plane. Trace picker on top, then the trace's header, the swimlane (main view), the network scrubber, cumulative curves and quotes; every chart sits in a near-white card with its own table view. */
+:root{
+  --bg:#eef0f0; --surface:#fcfcfb; --surface-2:#f1f2f1;
+  --ink:#111314; --ink-2:#4e5053; --ink-3:#6f7175;
+  --grid:#e4e5e3; --axis:#c3c5c3; --line:rgba(17,19,20,.10); --line-strong:rgba(17,19,20,.24);
+  --band:rgba(17,19,20,.055); --stripe:rgba(17,19,20,.022);
+  /* lab identity (row chips, network nodes) */
+  --c-anthropic:#2a78d6; --c-openai:#eb6834; --c-google:#1baf7a; --c-other:#9a9891;
+  /* stance: diverging warm (pro) / grey midpoint / cool (contra); mutates = ink star */
+  --s-orig:#9c1238; --s-endo:#dc3d55; --s-act:#d99a1e; --s-neu:#8f8d86; --s-que:#8d86e8; --s-rej:#4f35b0; --s-mut:#111314;
+  --tip-bg:#ffffff; --shadow:0 8px 28px rgba(17,19,20,.14); --scrim:rgba(238,240,240,.86);
+  --font-display:"Bricolage Grotesque","Hanken Grotesk",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --font-body:"Hanken Grotesk",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --radius:10px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0f1112; --surface:#1a1a19; --surface-2:#232423;
+    --ink:#f3f3f1; --ink-2:#c4c4bd; --ink-3:#97968f;
+    --grid:#2c2c2a; --axis:#41413e; --line:rgba(255,255,255,.10); --line-strong:rgba(255,255,255,.26);
+    --band:rgba(255,255,255,.07); --stripe:rgba(255,255,255,.025);
+    --c-anthropic:#3987e5; --c-openai:#d95926; --c-google:#199e70; --c-other:#7d7b75;
+    --s-orig:#e65494; --s-endo:#b02838; --s-act:#bc861e; --s-neu:#6b6a64; --s-que:#8c82e8; --s-rej:#6247d8; --s-mut:#f3f3f1;
+    --tip-bg:#242524; --shadow:0 8px 28px rgba(0,0,0,.5); --scrim:rgba(15,17,18,.86);
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0f1112; --surface:#1a1a19; --surface-2:#232423;
+  --ink:#f3f3f1; --ink-2:#c4c4bd; --ink-3:#97968f;
+  --grid:#2c2c2a; --axis:#41413e; --line:rgba(255,255,255,.10); --line-strong:rgba(255,255,255,.26);
+  --band:rgba(255,255,255,.07); --stripe:rgba(255,255,255,.025);
+  --c-anthropic:#3987e5; --c-openai:#d95926; --c-google:#199e70; --c-other:#7d7b75;
+  --s-orig:#e65494; --s-endo:#b02838; --s-act:#bc861e; --s-neu:#6b6a64; --s-que:#8c82e8; --s-rej:#6247d8; --s-mut:#f3f3f1;
+  --tip-bg:#242524; --shadow:0 8px 28px rgba(0,0,0,.5); --scrim:rgba(15,17,18,.86);
+  color-scheme:dark;
+}
+*,*::before,*::after{box-sizing:border-box}
+[hidden]{display:none!important}
+body{background:var(--bg);color:var(--ink);font:400 15px/1.6 var(--font-body);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+main{max-width:1240px;margin-inline:auto;padding-inline:clamp(16px,3vw,32px);padding-block:40px 80px;display:flex;flex-direction:column;gap:56px}
+a{color:var(--ink);text-decoration-color:var(--axis);text-underline-offset:3px}
+:focus-visible{outline:2px solid var(--ink);outline-offset:2px;border-radius:4px}
+h1,h2,h3{margin:0;text-wrap:balance}
+h1{font:700 clamp(2.1rem,4.8vw,3.1rem)/1.04 var(--font-display);letter-spacing:-.025em}
+h2{font:650 clamp(1.5rem,2.8vw,1.95rem)/1.15 var(--font-display);letter-spacing:-.015em}
+h3{font:600 16.5px/1.35 var(--font-body)}
+p{margin:0}
+code,.mono-t{font-family:var(--font-mono);font-size:.88em}
+.eyebrow{font:500 12px/1.4 var(--font-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--ink-2)}
+.lede{font-size:17px;line-height:1.55;color:var(--ink-2);max-width:70ch}
+.prose{display:flex;flex-direction:column;gap:12px;max-width:72ch}
+
+/* masthead + picker */
+.mast{display:flex;flex-direction:column;gap:18px}
+.picker{display:flex;flex-direction:column;gap:12px}
+.pk-group{display:grid;grid-template-columns:92px minmax(0,1fr);gap:8px 12px;align-items:start}
+.pk-label{font:500 11.5px/1.2 var(--font-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);padding-top:9px}
+.pk-items{display:flex;flex-wrap:wrap;gap:6px}
+.pk-btn{font:500 13.5px/1.2 var(--font-body);color:var(--ink);background:var(--surface);border:1px solid var(--line-strong);border-radius:7px;padding:7px 11px;cursor:pointer;display:inline-flex;align-items:baseline;gap:8px;max-width:100%;text-align:left}
+.pk-btn small{font:400 11.5px/1 var(--font-mono);color:var(--ink-3)}
+.pk-btn:hover{background:var(--surface-2)}
+.pk-btn[aria-pressed="true"]{background:var(--ink);color:var(--surface);border-color:var(--ink)}
+.pk-btn[aria-pressed="true"] small{color:var(--surface);opacity:.75}
+.pk-btn.bad{border-style:dashed}
+.open-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;padding-top:12px;border-top:1px solid var(--line)}
+.open-row .note{flex:1 1 280px}
+.msg{font-size:13.5px;line-height:1.5;border-radius:8px;padding:10px 12px;border:1px solid var(--line-strong);background:var(--surface)}
+.msg b{font-weight:600}
+.msg ul{margin:6px 0 0;padding-left:1.2em;font:12.5px/1.5 var(--font-mono);color:var(--ink-2);max-height:260px;overflow:auto}
+.msg.err{border-color:var(--s-endo)}
+@media (max-width:520px){.pk-group{grid-template-columns:1fr}.pk-label{padding-top:0}}
+
+/* trace header */
+.thead{display:flex;flex-direction:column;gap:14px}
+.statement{margin:0;font:500 clamp(1.05rem,2vw,1.25rem)/1.45 var(--font-body);color:var(--ink);max-width:70ch;padding-left:14px;border-left:3px solid var(--line-strong)}
+.source{font-size:13.5px;line-height:1.5;color:var(--ink-2);max-width:90ch}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px}
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px 14px;display:flex;flex-direction:column-reverse;justify-content:flex-end;gap:4px;min-width:0}
+.tile-label{font-size:12.5px;line-height:1.35;color:var(--ink-2)}
+.tile-value{font:600 24px/1.1 var(--font-body);letter-spacing:-.01em;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+details.issues{font-size:13px;color:var(--ink-2)}
+details.issues summary{cursor:pointer}
+details.issues ul{margin:6px 0 0;padding-left:1.2em;font:12px/1.5 var(--font-mono);max-height:200px;overflow:auto}
+
+/* cards */
+section{display:flex;flex-direction:column;gap:20px;scroll-margin-top:16px}
+.views{display:flex;flex-direction:column;gap:22px}
+.card{margin:0;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px 16px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.card-head{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:10px 20px}
+.card-titles{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1 1 420px;max-width:80ch}
+.card-sub{font-size:13.5px;line-height:1.5;color:var(--ink-2)}
+.note{font-size:12.5px;line-height:1.5;color:var(--ink-3);max-width:90ch}
+.chart{position:relative;min-width:0;width:100%;overflow:hidden}
+.controls{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px}
+.ctl-label{font:500 11.5px/1 var(--font-mono);letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3)}
+.btn{font:500 13px/1.2 var(--font-body);color:var(--ink);background:var(--surface);border:1px solid var(--line-strong);border-radius:7px;padding:7px 11px;cursor:pointer}
+.btn:hover{background:var(--surface-2)}
+.btn[aria-pressed="true"]{background:var(--ink);color:var(--surface);border-color:var(--ink)}
+.btn:disabled{opacity:.4;cursor:default;background:var(--surface)}
+.btn-quiet{border-color:var(--line);color:var(--ink-2);font-size:12.5px;padding:6px 10px;white-space:nowrap}
+.seg{display:inline-flex}
+.seg .btn{border-radius:0;margin-left:-1px}
+.seg .btn:first-child{border-radius:7px 0 0 7px;margin-left:0}
+.seg .btn:last-child{border-radius:0 7px 7px 0}
+.chk{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--ink-2);cursor:pointer}
+.chk input{accent-color:var(--ink);margin:0}
+@media (max-width:560px){.card{padding:14px 12px 12px}}
+
+/* legends */
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12.5px;color:var(--ink-2);align-items:center}
+.lg-item{display:inline-flex;align-items:center;gap:6px}
+.lg-item svg{flex:none;overflow:visible}
+.lg-title{font:500 11px/1 var(--font-mono);letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.lg-sep{width:1px;height:14px;background:var(--line-strong)}
+
+/* svg */
+.viz{display:block}
+.viz text{font-family:var(--font-body)}
+.viz .tick{fill:var(--ink-3);font-size:11px;font-variant-numeric:tabular-nums}
+.viz .lbl{fill:var(--ink-2);font-size:12px}
+.viz .lbl-dim{fill:var(--ink-3);font-size:12px}
+.viz .ghead{fill:var(--ink-3);font:500 10.5px var(--font-mono);letter-spacing:.05em;text-transform:uppercase}
+.viz .ann{fill:var(--ink-2);font-size:11px}
+.viz .val{fill:var(--ink);font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
+.viz .ptitle{fill:var(--ink);font-size:12.5px;font-weight:600}
+.viz .halo{paint-order:stroke;stroke:var(--surface);stroke-width:3px;stroke-linejoin:round}
+.viz .node{cursor:default}
+.lane-wrap{position:relative}
+.overview-label{font:500 11px/1 var(--font-mono);letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.viz .selection{fill:var(--ink);fill-opacity:.08;stroke:var(--ink-2);stroke-width:1}
+.viz .handle{fill:var(--ink-2);fill-opacity:.5}
+
+/* detail panel */
+.detail{border-top:1px solid var(--line);padding-top:12px;display:flex;flex-direction:column;gap:8px;min-height:64px}
+.detail-empty{font-size:13px;color:var(--ink-3)}
+.d-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px}
+.d-agent{display:inline-flex;align-items:center;gap:6px;font-weight:600;font-size:14.5px}
+.d-time{font:500 12.5px/1 var(--font-mono);color:var(--ink-2)}
+.d-snip{margin:0;font-size:14.5px;line-height:1.5;max-width:80ch;padding-left:12px;border-left:3px solid var(--k,var(--line-strong))}
+.d-meta{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12.5px;color:var(--ink-2)}
+.d-meta b{font-weight:600;color:var(--ink)}
+.d-close{margin-left:auto}
+.dot{display:inline-block;flex:none;width:9px;height:9px;border-radius:50%;background:var(--k)}
+
+/* network */
+.net-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px}
+.net-bar input[type=range]{flex:1 1 240px;min-width:0;accent-color:var(--ink)}
+.net-date{font:500 13px/1 var(--font-mono);min-width:96px;font-variant-numeric:tabular-nums}
+.counter{display:flex;flex-wrap:wrap;gap:6px}
+.cnt{background:var(--surface-2);border-radius:6px;padding:3px 9px;font-size:12.5px;color:var(--ink-2);display:inline-flex;align-items:center;gap:6px}
+.cnt b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}
+
+/* curves */
+.mini-note{font-size:12px;color:var(--ink-3)}
+
+/* quotes */
+.quotes{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:0}
+.quotes li{display:grid;grid-template-columns:118px minmax(0,1fr);gap:4px 16px;padding:12px 0;border-top:1px solid var(--line)}
+.quotes li:first-child{border-top:none}
+.q-date{font:500 12.5px/1.5 var(--font-mono);color:var(--ink-2);font-variant-numeric:tabular-nums}
+.q-body{display:flex;flex-direction:column;gap:5px;min-width:0}
+.q-text{margin:0;font-size:15.5px;line-height:1.5;max-width:75ch}
+.q-text::before{content:"\201C"}.q-text::after{content:"\201D"}
+.q-note{font-size:13px;color:var(--ink-3);max-width:80ch}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;line-height:1.2;padding:3px 9px 3px 7px;border-radius:999px;background:var(--surface-2);color:var(--ink);align-self:flex-start;max-width:100%}
+@media (max-width:520px){.quotes li{grid-template-columns:1fr}}
+
+/* tables */
+.tablewrap{overflow:auto;max-height:440px;border:1px solid var(--line);border-radius:8px}
+.tablewrap + .tablewrap{margin-top:4px}
+table{border-collapse:collapse;width:100%;font-size:12.5px;line-height:1.4}
+th,td{padding:6px 10px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+th{position:sticky;top:0;background:var(--surface-2);font-weight:600;color:var(--ink-2);white-space:nowrap;z-index:1}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+td.wrap{min-width:240px}
+td.code{font-family:var(--font-mono);white-space:nowrap}
+tbody tr:last-child td{border-bottom:none}
+caption{caption-side:top;text-align:left;font-weight:600;font-size:12.5px;padding:8px 10px;color:var(--ink-2)}
+
+/* format + method */
+.fmt-table td:first-child{font-family:var(--font-mono);white-space:nowrap;color:var(--ink)}
+.method ul{margin:0;padding-left:1.2em;display:flex;flex-direction:column;gap:9px;max-width:80ch}
+pre.cmd,pre.schema{margin:0;overflow:auto;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:12px 14px;font:12.5px/1.5 var(--font-mono);color:var(--ink)}
+pre.schema{max-height:420px}
+footer{font-size:12.5px;color:var(--ink-3);border-top:1px solid var(--line);padding-top:14px}
+
+/* tooltip + drop overlay */
+#tip{position:fixed;left:0;top:0;z-index:50;pointer-events:none;max-width:min(360px,calc(100vw - 16px));background:var(--tip-bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow);padding:10px 12px;font-size:12.5px;line-height:1.4}
+.tt-title{font-weight:600;font-size:13px}
+.tt-sub{color:var(--ink-2);margin-top:2px}
+.tt-row{display:flex;align-items:center;gap:8px;margin-top:5px}
+.tt-row strong{font-weight:650;font-variant-numeric:tabular-nums;white-space:nowrap}
+.tt-lab{color:var(--ink-2)}
+.tt-snip{margin-top:6px;color:var(--ink);border-left:2px solid var(--k,var(--line-strong));padding-left:8px}
+.tt-note{color:var(--ink-3);margin-top:6px}
+#drop{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;background:var(--scrim);pointer-events:none}
+#drop div{border:2px dashed var(--ink-2);border-radius:14px;padding:28px 36px;font:600 18px/1.3 var(--font-body);color:var(--ink);background:var(--surface)}
+.nojs{padding:12px 14px;border:1px solid var(--line);border-radius:8px;color:var(--ink-2);font-size:13.5px}
+@media (prefers-reduced-motion:no-preference){.viz .nd,.viz .ne{transition:opacity .15s}}
+</style>
+
+<main id="top">
+  <header class="mast">
+    <p class="eyebrow">Swarm trace viewer · format v0</p>
+    <h1>Idea Spread Viewer</h1>
+    <p class="lede">Follow one belief, norm or coined term as it moves through a group of AI agents: who said it first, who was exposed, who took it up, who pushed back, and how long it stayed in memory. Pick a bundled trace or open your own trace file.</p>
+    <div class="card picker" id="picker-card">
+      <div class="picker" id="picker"></div>
+      <div class="open-row">
+        <label class="btn" for="file-input">Open trace file</label>
+        <input type="file" id="file-input" accept=".json,application/json" multiple hidden>
+        <p class="note">Or drop JSON files anywhere on the page. Opened files are checked against format v0 and stay in this tab only; nothing is uploaded or saved.</p>
+      </div>
+      <div id="load-msg" aria-live="polite"></div>
+    </div>
+  </header>
+
+  <section id="trace" aria-labelledby="t-title">
+    <div class="thead" id="thead">
+      <p class="eyebrow" id="t-eyebrow"></p>
+      <h2 id="t-title">No trace loaded</h2>
+      <p class="statement" id="t-statement" hidden></p>
+      <p class="source" id="t-source"></p>
+      <div class="tiles" id="t-tiles"></div>
+      <details class="issues" id="t-issues" hidden><summary id="t-issues-sum"></summary><ul id="t-issues-list"></ul></details>
+    </div>
+    <div class="msg err" id="t-errors" hidden></div>
+
+    <div class="views" id="views">
+      <figure class="card" id="card-lane">
+        <div class="card-head">
+          <div class="card-titles">
+            <h3>Who said what, and when</h3>
+            <p class="card-sub">One row per agent, grouped by role. Marker shape is the channel, colour is the stance. Grey shading behind a row is how often the agent was exposed that week, with a tick at the first exposure; the thin bar under a row is the time the idea sat in saved memory. Drag across the strip below the chart to zoom. Hover a marker for its text; click to pin it.</p>
+          </div>
+          <button class="btn btn-quiet" type="button" data-table="tbl-lane" aria-expanded="false" aria-controls="tbl-lane">Show table</button>
+        </div>
+        <div class="controls">
+          <span class="ctl-label">Order</span>
+          <div class="seg" role="group" aria-label="Row order">
+            <button class="btn" type="button" data-order="role" aria-pressed="true">Role</button>
+            <button class="btn" type="button" data-order="first" aria-pressed="false">First event</button>
+            <button class="btn" type="button" data-order="lab" aria-pressed="false">Lab</button>
+          </div>
+          <label class="chk"><input type="checkbox" id="show-edges" checked> Edges</label>
+          <button class="btn btn-quiet" type="button" id="zoom-reset" disabled>Reset zoom</button>
+        </div>
+        <div class="legend" id="lg-lane"></div>
+        <div class="legend" id="lg-lane2"></div>
+        <div class="lane-wrap">
+          <div class="chart" id="lane-chart" tabindex="0" role="group" aria-label="Swimlane timeline. Use left and right arrow keys to step through events; Escape clears the pinned event."></div>
+          <div class="chart" id="lane-overview" aria-label="Overview strip: drag to zoom the timeline"></div>
+        </div>
+        <div class="detail" id="detail" aria-live="polite"></div>
+        <div class="tablewrap" id="tbl-lane" hidden></div>
+      </figure>
+
+      <figure class="card" id="card-net">
+        <div class="card-head">
+          <div class="card-titles">
+            <h3>Spread over time</h3>
+            <p class="card-sub" id="net-sub"></p>
+          </div>
+          <button class="btn btn-quiet" type="button" data-table="tbl-net" aria-expanded="false" aria-controls="tbl-net">Show table</button>
+        </div>
+        <div class="controls">
+          <span class="ctl-label">View</span>
+          <div class="seg" role="group" aria-label="Network view">
+            <button class="btn" type="button" data-net="flow" aria-pressed="true">Who passed it on</button>
+            <button class="btn" type="button" data-net="ring" aria-pressed="false">Who could have heard it</button>
+          </div>
+        </div>
+        <div class="net-bar">
+          <button class="btn" type="button" id="play" aria-label="Play">Play</button>
+          <input type="range" id="scrub" min="0" max="1000" step="1" value="1000" aria-label="Time">
+          <span class="net-date" id="net-date"></span>
+        </div>
+        <div class="counter" id="counter" aria-live="polite"></div>
+        <div class="legend" id="lg-net"></div>
+        <div class="chart" id="net-chart"></div>
+        <p class="note" id="net-note" hidden></p>
+        <div class="tablewrap" id="tbl-net" hidden></div>
+      </figure>
+
+      <figure class="card" id="card-curves">
+        <div class="card-head">
+          <div class="card-titles">
+            <h3>Running totals</h3>
+            <p class="card-sub">Agents reached so far, one panel per measure on a shared scale. Dashed lines are the trace’s annotations other than goals. Hover for the counts on a given day.</p>
+          </div>
+          <button class="btn btn-quiet" type="button" data-table="tbl-curves" aria-expanded="false" aria-controls="tbl-curves">Show table</button>
+        </div>
+        <div class="chart" id="curves-chart"></div>
+        <div class="tablewrap" id="tbl-curves" hidden></div>
+      </figure>
+
+      <figure class="card" id="card-quotes">
+        <div class="card-head">
+          <div class="card-titles">
+            <h3>How the wording changed</h3>
+            <p class="card-sub">Quotes picked by the trace’s producer, oldest first.</p>
+          </div>
+        </div>
+        <ol class="quotes" id="quotes"></ol>
+      </figure>
+    </div>
+  </section>
+
+  <section id="format" aria-labelledby="h-format">
+    <h2 id="h-format">Trace format</h2>
+    <div class="prose">
+      <p>A trace is one JSON object about one idea in one group of agents. Times are ISO 8601 in UTC. Every list may be empty, and the viewer draws whatever is present: a coined-term trace with no exposures or edges still gets a timeline and curves. Agent names in every list must match <code>agents[].name</code> exactly. To bundle several traces, put them in one folder with an <code>index.json</code> that lists them.</p>
+      <p id="schema-line">The full rules are in the JSON Schema at <code>village_tools/swarmtrace/trace.schema.json</code>.</p>
+    </div>
+    <div class="tablewrap" style="max-height:none">
+      <table class="fmt-table">
+        <thead><tr><th>Field</th><th>What to put there</th></tr></thead>
+        <tbody>
+          <tr><td>version, id, title</td><td class="wrap"><code>0</code>; a short id (used in the page address, for example <code>#hostility</code>); a display title.</td></tr>
+          <tr><td>kind</td><td class="wrap"><code>belief</code>, <code>norm</code> or <code>term</code>. Used only to group the picker.</td></tr>
+          <tr><td>statement, source</td><td class="wrap">The idea in one sentence, and where the data came from and how it was labelled.</td></tr>
+          <tr><td>start, end</td><td class="wrap">The time window to draw.</td></tr>
+          <tr><td>agents[]</td><td class="wrap"><code>name</code>, <code>lab</code> (Anthropic, OpenAI and Google get their own colours; any other lab is grey), <code>group</code> (any label, or null), <code>joined</code> and <code>left</code> (or null).</td></tr>
+          <tr><td>events[]</td><td class="wrap">One per labelled message or action: <code>id</code>, <code>t</code>, <code>agent</code>, <code>channel</code> (chat, memory, session, search, summary), <code>stance</code> (originates, endorses, acts_on, mentions, uses, questions, rejects, mutates), <code>conf</code> (1–3 or null), <code>room</code>, <code>snippet</code>.</td></tr>
+          <tr><td>exposures[]</td><td class="wrap">When an agent could have seen the idea: <code>t</code>, <code>agent</code>, <code>source</code> (agent or null), <code>via</code> (room, named, search, other), <code>event</code> (the event id seen, or null).</td></tr>
+          <tr><td>adoptions[]</td><td class="wrap">When each agent took the idea up: <code>agent</code>, <code>t</code>, <code>event</code>, <code>independent</code> (true if no prior exposure explains it), <code>sources</code> (agent names).</td></tr>
+          <tr><td>edges[]</td><td class="wrap">Agent-to-agent links: <code>from</code>, <code>to</code>, <code>t</code>, <code>kind</code> (transmission, echo, tip, correction), <code>evidence</code>.</td></tr>
+          <tr><td>persistence[]</td><td class="wrap">Intervals when the idea sat in an agent’s saved memory: <code>agent</code>, <code>start</code>, <code>end</code>, <code>where</code>.</td></tr>
+          <tr><td>annotations[]</td><td class="wrap">Context markers: <code>t</code>, <code>label</code>, <code>kind</code> (goal, intervention, scaffolding, artifact, note).</td></tr>
+          <tr><td>quotes[]</td><td class="wrap">Wording over time: <code>t</code>, <code>agent</code>, <code>text</code>, <code>note</code>.</td></tr>
+          <tr><td>metrics</td><td class="wrap">Any <code>{name: number or text}</code> pairs; each becomes a tile under the title.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="controls" id="schema-controls" hidden>
+      <button class="btn btn-quiet" type="button" id="schema-toggle" aria-expanded="false" aria-controls="schema-pre">Show JSON Schema</button>
+      <button class="btn btn-quiet" type="button" id="schema-copy">Copy schema</button>
+      <span class="note" id="schema-copied" aria-live="polite"></span>
+    </div>
+    <pre class="schema" id="schema-pre" hidden></pre>
+    <h3>Build the page</h3>
+    <pre class="cmd">python village_tools/build_trace_viz.py [TRACE_FILES_OR_DIRS ...] -o OUT.html</pre>
+    <p class="note">With no arguments it reads <code>out/sprint_idea/traces/</code> (its <code>index.json</code>, or every <code>*.json</code> there) and writes <code>out/sprint_idea/idea_spread.html</code>. Files that fail the check are reported and skipped.</p>
+  </section>
+
+  <section id="method" class="method" aria-labelledby="h-method">
+    <h2 id="h-method">How to read it</h2>
+    <ul>
+      <li><b>Stance colours.</b> Warm means for the idea (dark red: originates, red: endorses, amber: acts on it). Grey is neutral (mentions, uses). Cool means against it (lavender: questions, violet: rejects). A star is a mutation, whatever the channel. Lab colours appear only in row chips and network nodes, never in stance marks.</li>
+      <li><b>Channel shapes.</b> Circle: chat. Square: saved memory. Triangle: session action. Diamond: history search. Ring: summary.</li>
+      <li><b>Labels are model-assigned.</b> Stances, exposures, adoptions and edges come from the trace producer, usually an LLM labeller with a confidence of 1 (weak) to 3 (clear). Confidence 1 and auto-detected events with no label (confidence null) are drawn faded. Read the snippets before trusting a pattern, and check the source note for hand-check rates.</li>
+      <li><b>States in the network.</b> Unexposed until the first exposure, or the first event when a trace has no exposure data. Adopted from the agent’s adoption (or an originates event). Rejecting while the agent’s latest for-or-against event is a rejection. If a trace lists no adoptions, the first warm event counts as adoption. The counters count agents who have ever reached each state.</li>
+      <li><b>Rows and exposure.</b> Rows are grouped by role: the trace’s own group label when it has one, otherwise derived (origin if the agent has an originates event, adopter if it adopted, exposed if it was exposed or active, other). Grey shading is the number of exposures in each week (Monday to Sunday, UTC); darker means more. The tick marks the first exposure.</li>
+      <li><b>Adoption rings.</b> A solid ring marks an adoption that follows exposure; a dashed ring marks one the producer judged independent.</li>
+      <li><b>Edges.</b> Solid: transmission. Dotted: phrase echo. Dashed: tip. Violet: correction. A small dot marks the receiving end. Edges are the producer’s claims, not observed causation.</li>
+      <li><b>Network views.</b> “Who passed it on” draws only agents with a link or an adoption, placed left to right by adoption time (or first link) and spread by a force layout with a fixed seed. “Who could have heard it” puts every agent on a ring by lab and first activity. Both draw the same way every time for the same trace. Times are UTC.</li>
+    </ul>
+    <footer id="footer">Built <span id="built"></span>. Bundled traces may include short excerpts from a gated research dataset; keep this page private.</footer>
+  </section>
+</main>
+<div id="tip" role="tooltip" hidden></div>
+<div id="drop" hidden><div>Drop trace JSON to open it</div></div>
+
+<script type="application/json" id="trace-data">__TRACE_PAYLOAD__</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script>
+(function () {
+'use strict';
+
+/* ==== data module: validation + preparation (pure; no DOM, no d3) ==== */
+const TraceData = (function () {
+  const KINDS = ['belief', 'norm', 'term'];
+  const CHANNELS = ['chat', 'memory', 'session', 'search', 'summary'];
+  const STANCES = ['originates', 'endorses', 'acts_on', 'mentions', 'uses', 'questions', 'rejects', 'mutates'];
+  const VIAS = ['room', 'named', 'search', 'other'];
+  const EDGE_KINDS = ['transmission', 'echo', 'tip', 'correction'];
+  const ANN_KINDS = ['goal', 'intervention', 'scaffolding', 'artifact', 'note'];
+  const LISTS = ['agents', 'events', 'exposures', 'adoptions', 'edges', 'persistence', 'annotations', 'quotes'];
+  const PRO = new Set(['originates', 'endorses', 'acts_on', 'uses']);
+  const MAX_ERR = 200;
+
+  function parseT(s) {
+    if (typeof s !== 'string' || !s.trim()) return NaN;
+    let x = s.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(x)) x += 'T00:00:00Z';
+    else {
+      x = x.replace(' ', 'T').replace(/(\.\d{3})\d+/, '$1');
+      if (!/(Z|[+-]\d{2}:?\d{2})$/i.test(x)) x += 'Z';
+    }
+    return Date.parse(x);
+  }
+  const q = v => typeof v === 'string' ? "'" + (v.length > 60 ? v.slice(0, 59) + '…' : v) + "'" : JSON.stringify(v);
+  const isObj = v => v != null && typeof v === 'object' && !Array.isArray(v);
+
+  function validate(raw) {
+    const errors = [], warnings = [];
+    let extra = 0;
+    const E = (p, m) => { if (errors.length < MAX_ERR) errors.push(p + ' ' + m); else extra++; };
+    const Wn = (p, m) => { if (warnings.length < MAX_ERR) warnings.push(p + ' ' + m); };
+    const done = () => { if (extra) errors.push('… and ' + extra + ' more errors'); return { errors, warnings }; };
+    if (!isObj(raw)) { errors.push('The file is not a JSON object. A trace is one object with fields such as id, kind, agents and events.'); return done(); }
+    if (Array.isArray(raw.traces) && !('events' in raw)) { errors.push('This is an index file: it lists traces but holds no events. Open the per-trace files it lists instead.'); return done(); }
+    const enumChk = (p, v, list, required) => {
+      if (v == null) { if (required) E(p, 'is missing; expected one of ' + list.join(', ')); return false; }
+      if (!list.includes(v)) { E(p, q(v) + ' is not one of ' + list.join(', ')); return false; }
+      return true;
+    };
+    const timeChk = (p, v, nullable) => {
+      if (v == null) { if (!nullable) E(p, 'is missing; expected an ISO time such as 2025-12-03T20:12:13Z'); return; }
+      if (typeof v !== 'string' || !Number.isFinite(parseT(v))) E(p, q(v) + ' is not an ISO time');
+    };
+    const strChk = (p, v, nullable, warnOnly) => {
+      if (v == null) { if (!nullable) (warnOnly ? Wn : E)(p, 'is missing'); return; }
+      if (typeof v !== 'string') E(p, 'must be text, got ' + q(v));
+    };
+
+    if (raw.version == null) Wn('version', 'is missing; reading the file as version 0');
+    else if (raw.version !== 0) E('version', 'is ' + q(raw.version) + '; this viewer reads version 0');
+    if (typeof raw.id !== 'string' || !raw.id.trim()) E('id', 'must be a non-empty string');
+    if (raw.title == null || raw.title === '') Wn('title', 'is missing; the id is shown instead'); else strChk('title', raw.title, true);
+    enumChk('kind', raw.kind, KINDS, true);
+    strChk('statement', raw.statement, true);
+    strChk('source', raw.source, true);
+    if (raw.start == null) Wn('start', 'is missing; using the earliest time in the data'); else timeChk('start', raw.start, true);
+    if (raw.end == null) Wn('end', 'is missing; using the latest time in the data'); else timeChk('end', raw.end, true);
+    if (Number.isFinite(parseT(raw.start)) && Number.isFinite(parseT(raw.end)) && parseT(raw.end) < parseT(raw.start)) E('end', 'is before start');
+
+    const L = {};
+    for (const k of LISTS) {
+      if (raw[k] == null) { Wn(k, 'is missing; treated as empty'); L[k] = []; }
+      else if (!Array.isArray(raw[k])) { E(k, 'must be a list'); L[k] = []; }
+      else L[k] = raw[k];
+    }
+    if (raw.metrics != null && !isObj(raw.metrics)) E('metrics', 'must be an object of name: number or text');
+    else if (raw.metrics) for (const [k, v] of Object.entries(raw.metrics)) if (typeof v !== 'number' && typeof v !== 'string') Wn('metrics.' + k, 'is ' + q(v) + '; only numbers and text are shown');
+
+    const names = new Set();
+    L.agents.forEach((a, i) => {
+      const p = 'agents[' + i + ']';
+      if (!isObj(a)) { E(p, 'must be an object'); return; }
+      if (typeof a.name !== 'string' || !a.name.trim()) { E(p + '.name', 'must be a non-empty string'); return; }
+      if (names.has(a.name)) E(p + '.name', q(a.name) + ' appears twice in agents');
+      names.add(a.name);
+      if (a.lab == null || a.lab === '') Wn(p + '.lab', 'is missing; drawn as an unknown lab'); else strChk(p + '.lab', a.lab, true);
+      strChk(p + '.group', a.group, true);
+      timeChk(p + '.joined', a.joined, true);
+      timeChk(p + '.left', a.left, true);
+    });
+    if (!L.agents.length && (L.events.length || L.adoptions.length)) E('agents', 'is empty, but the trace has events; list every agent that appears');
+    const agentChk = (p, v) => {
+      if (v == null || v === '') { E(p, 'is missing'); return false; }
+      if (!names.has(v)) { E(p, q(v) + ' is not in agents'); return false; }
+      return true;
+    };
+    const ids = new Set();
+    L.events.forEach((e, i) => {
+      const p = 'events[' + i + ']';
+      if (!isObj(e)) { E(p, 'must be an object'); return; }
+      if (e.id == null || e.id === '') E(p + '.id', 'is missing');
+      else if (ids.has(String(e.id))) E(p + '.id', q(String(e.id)) + ' is used by an earlier event');
+      else ids.add(String(e.id));
+      timeChk(p + '.t', e.t, false);
+      agentChk(p + '.agent', e.agent);
+      enumChk(p + '.channel', e.channel, CHANNELS, true);
+      enumChk(p + '.stance', e.stance, STANCES, true);
+      if (!(e.conf == null || e.conf === 1 || e.conf === 2 || e.conf === 3)) E(p + '.conf', 'is ' + q(e.conf) + '; expected 1, 2, 3 or null');
+      strChk(p + '.room', e.room, true);
+      strChk(p + '.snippet', e.snippet, false, true);
+    });
+    const evRef = (p, v) => { if (v != null && !ids.has(String(v))) Wn(p, q(String(v)) + ' does not match any event id'); };
+    L.exposures.forEach((x, i) => {
+      const p = 'exposures[' + i + ']';
+      if (!isObj(x)) { E(p, 'must be an object'); return; }
+      timeChk(p + '.t', x.t, false);
+      agentChk(p + '.agent', x.agent);
+      if (x.source != null && !names.has(x.source)) Wn(p + '.source', q(x.source) + ' is not in agents');
+      enumChk(p + '.via', x.via, VIAS, true);
+      evRef(p + '.event', x.event);
+    });
+    L.adoptions.forEach((x, i) => {
+      const p = 'adoptions[' + i + ']';
+      if (!isObj(x)) { E(p, 'must be an object'); return; }
+      agentChk(p + '.agent', x.agent);
+      timeChk(p + '.t', x.t, false);
+      evRef(p + '.event', x.event);
+      if (typeof x.independent !== 'boolean') E(p + '.independent', 'must be true or false');
+      if (x.sources != null && !Array.isArray(x.sources)) E(p + '.sources', 'must be a list of agent names');
+      else (x.sources || []).forEach((s, j) => { if (!names.has(s)) Wn(p + '.sources[' + j + ']', q(s) + ' is not in agents'); });
+    });
+    L.edges.forEach((x, i) => {
+      const p = 'edges[' + i + ']';
+      if (!isObj(x)) { E(p, 'must be an object'); return; }
+      agentChk(p + '.from', x.from);
+      agentChk(p + '.to', x.to);
+      timeChk(p + '.t', x.t, false);
+      enumChk(p + '.kind', x.kind, EDGE_KINDS, true);
+      strChk(p + '.evidence', x.evidence, true);
+    });
+    L.persistence.forEach((x, i) => {
+      const p = 'persistence[' + i + ']';
+      if (!isObj(x)) { E(p, 'must be an object'); return; }
+      agentChk(p + '.agent', x.agent);
+      timeChk(p + '.start', x.start, false);
+      timeChk(p + '.end', x.end, false);
+      if (parseT(x.end) < parseT(x.start)) E(p + '.end', 'is before start');
+    });
+    L.annotations.forEach((x, i) => {
+      const p = 'annotations[' + i + ']';
+      if (!isObj(x)) { E(p, 'must be an object'); return; }
+      timeChk(p + '.t', x.t, false);
+      strChk(p + '.label', x.label, false);
+      if (x.kind != null && !ANN_KINDS.includes(x.kind)) Wn(p + '.kind', q(x.kind) + ' is not one of ' + ANN_KINDS.join(', ') + '; drawn as a note');
+    });
+    L.quotes.forEach((x, i) => {
+      const p = 'quotes[' + i + ']';
+      if (!isObj(x)) { E(p, 'must be an object'); return; }
+      timeChk(p + '.t', x.t, false);
+      if (x.agent != null && !names.has(x.agent)) Wn(p + '.agent', q(x.agent) + ' is not in agents');
+      strChk(p + '.text', x.text, false);
+      strChk(p + '.note', x.note, true);
+    });
+    return done();
+  }
+
+  function labKey(lab) {
+    const s = String(lab || '').toLowerCase();
+    if (/anthropic|claude/.test(s)) return 'anthropic';
+    if (/openai/.test(s)) return 'openai';
+    if (/google|deepmind|gemini/.test(s)) return 'google';
+    return 'other';
+  }
+  function bisectRight(arr, v) { let lo = 0, hi = arr.length; while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m] <= v) lo = m + 1; else hi = m; } return lo; }
+
+  function prepare(raw) {
+    const L = k => Array.isArray(raw[k]) ? raw[k].filter(isObj) : [];
+    const ok = Number.isFinite;
+    const agents = [];
+    const byName = new Map();
+    L('agents').forEach(a => {
+      if (typeof a.name !== 'string' || byName.has(a.name)) return;
+      const ag = { name: a.name, lab: a.lab ? String(a.lab) : 'Unknown lab', group: a.group == null || a.group === '' ? null : String(a.group),
+        joined: parseT(a.joined), left: parseT(a.left), idx: agents.length, events: [], exposures: [], persistence: [], polar: [],
+        adoption: null, firstEvent: Infinity, firstExp: Infinity, adoptT: Infinity, firstRej: Infinity, everT: Infinity, outE: 0, inE: 0 };
+      ag.labKey = labKey(ag.lab);
+      agents.push(ag); byName.set(ag.name, ag);
+    });
+    const events = L('events').map(e => ({ id: String(e.id), tt: parseT(e.t), agent: byName.get(e.agent), channel: e.channel, stance: e.stance,
+      conf: e.conf === 1 || e.conf === 2 || e.conf === 3 ? e.conf : null, room: typeof e.room === 'string' && e.room ? e.room : null,
+      snippet: e.snippet == null ? '' : String(e.snippet) }))
+      .filter(e => e.agent && ok(e.tt) && CHANNELS.includes(e.channel) && STANCES.includes(e.stance))
+      .sort((a, b) => a.tt - b.tt);
+    const evById = new Map();
+    events.forEach((e, i) => {
+      e.i = i; evById.set(e.id, e);
+      const a = e.agent; a.events.push(e);
+      if (e.tt < a.firstEvent) a.firstEvent = e.tt;
+      if (PRO.has(e.stance)) a.polar.push([e.tt, 1]);
+      else if (e.stance === 'rejects') { a.polar.push([e.tt, -1]); if (e.tt < a.firstRej) a.firstRej = e.tt; }
+      if (e.stance === 'originates' && e.tt < a.adoptT) a.adoptT = e.tt;
+    });
+    const exposures = L('exposures').map(x => ({ tt: parseT(x.t), agent: byName.get(x.agent), source: typeof x.source === 'string' ? x.source : null,
+      via: VIAS.includes(x.via) ? x.via : 'other', event: x.event != null ? evById.get(String(x.event)) || null : null }))
+      .filter(x => x.agent && ok(x.tt)).sort((a, b) => a.tt - b.tt);
+    exposures.forEach(x => { x.agent.exposures.push(x); if (x.tt < x.agent.firstExp) x.agent.firstExp = x.tt; });
+    const adoptions = L('adoptions').map(x => ({ tt: parseT(x.t), agent: byName.get(x.agent), event: x.event != null ? evById.get(String(x.event)) || null : null,
+      independent: x.independent === true, sources: Array.isArray(x.sources) ? x.sources.filter(s => typeof s === 'string') : [] }))
+      .filter(x => x.agent && ok(x.tt)).sort((a, b) => a.tt - b.tt);
+    adoptions.forEach(x => { if (!x.agent.adoption) x.agent.adoption = x; if (x.tt < x.agent.adoptT) x.agent.adoptT = x.tt; });
+    const derivedAdoption = adoptions.length === 0;
+    if (derivedAdoption) agents.forEach(a => { const f = a.events.find(e => PRO.has(e.stance)); if (f && f.tt < a.adoptT) a.adoptT = f.tt; });
+    const edges = L('edges').map(x => ({ tt: parseT(x.t), from: byName.get(x.from), to: byName.get(x.to), kind: x.kind, evidence: typeof x.evidence === 'string' ? x.evidence : null }))
+      .filter(x => x.from && x.to && ok(x.tt) && EDGE_KINDS.includes(x.kind)).sort((a, b) => a.tt - b.tt);
+    edges.forEach(x => { x.from.outE++; x.to.inE++; });
+    const persistence = L('persistence').map(x => ({ agent: byName.get(x.agent), s: parseT(x.start), e: parseT(x.end), where: typeof x.where === 'string' ? x.where : 'memory' }))
+      .filter(x => x.agent && ok(x.s) && ok(x.e) && x.e >= x.s);
+    persistence.forEach(x => x.agent.persistence.push(x));
+    const annotations = L('annotations').map(x => ({ tt: parseT(x.t), label: typeof x.label === 'string' ? x.label : '', kind: ANN_KINDS.includes(x.kind) ? x.kind : 'note' }))
+      .filter(x => ok(x.tt)).sort((a, b) => a.tt - b.tt);
+    const quotes = L('quotes').map(x => ({ tt: parseT(x.t), agentName: typeof x.agent === 'string' ? x.agent : null, agent: byName.get(x.agent) || null,
+      text: typeof x.text === 'string' ? x.text : '', note: typeof x.note === 'string' && x.note ? x.note : null }))
+      .filter(x => ok(x.tt) && x.text).sort((a, b) => a.tt - b.tt);
+    const metrics = isObj(raw.metrics) ? Object.entries(raw.metrics).filter(([, v]) => typeof v === 'number' || typeof v === 'string') : [];
+    const hasExposures = exposures.length > 0;
+    const weekStart = t => { const d = new Date(t); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - ((d.getUTCDay() + 6) % 7) * 864e5; };
+    let expWeekMax = 0;
+    agents.forEach(a => {
+      if (!hasExposures) a.firstExp = a.firstEvent;
+      a.everT = Math.min(a.firstExp, a.firstEvent, a.adoptT);
+      // role: the producer's group label when given, else derived from originates / adoption / exposure
+      a.derivedRole = a.events.some(e => e.stance === 'originates') ? 'origin' : Number.isFinite(a.adoptT) ? 'adopter' : Number.isFinite(a.everT) ? 'exposed' : 'other';
+      a.role = a.group != null ? a.group : a.derivedRole;
+      // weekly exposure counts (weeks start Monday 00:00 UTC)
+      const wk = new Map();
+      a.exposures.forEach(x => { const w = weekStart(x.tt); wk.set(w, (wk.get(w) || 0) + 1); });
+      a.expWeeks = Array.from(wk).sort((p, r) => p[0] - r[0]);
+      a.expWeeks.forEach(p => { if (p[1] > expWeekMax) expWeekMax = p[1]; });
+    });
+    const ROLE_ORDER = ['origin', 'adopter', 'exposed', 'other'];
+    const roleSeen = [];
+    agents.forEach(a => { if (!roleSeen.includes(a.role)) roleSeen.push(a.role); });
+    const roles = ROLE_ORDER.filter(r => roleSeen.includes(r)).concat(roleSeen.filter(r => !ROLE_ORDER.includes(r)));
+    function expThatWeek(a, t) { const w = weekStart(t); const p = a.expWeeks.find(q => q[0] === w); return p ? p[1] : 0; }
+
+    const times = [];
+    events.forEach(e => times.push(e.tt)); exposures.forEach(x => times.push(x.tt)); adoptions.forEach(x => times.push(x.tt));
+    edges.forEach(x => times.push(x.tt)); persistence.forEach(x => { times.push(x.s); times.push(x.e); });
+    annotations.forEach(x => times.push(x.tt)); quotes.forEach(x => times.push(x.tt));
+    let t0 = parseT(raw.start), t1 = parseT(raw.end);
+    const dMin = times.length ? Math.min.apply(null, times) : NaN, dMax = times.length ? Math.max.apply(null, times) : NaN;
+    if (!ok(t0)) t0 = ok(dMin) ? dMin : Date.UTC(2025, 0, 1);
+    if (!ok(t1)) t1 = ok(dMax) ? dMax : t0 + 864e5;
+    if (ok(dMin)) t0 = Math.min(t0, dMin);
+    if (ok(dMax)) t1 = Math.max(t1, dMax);
+    if (t1 - t0 < 864e5) { t0 -= 432e5; t1 += 432e5; }
+
+    const labCount = new Map();
+    agents.forEach(a => labCount.set(a.lab, (labCount.get(a.lab) || 0) + 1));
+    const labs = Array.from(labCount, ([lab, n]) => ({ lab, n, key: labKey(lab) })).sort((a, b) => b.n - a.n || a.lab.localeCompare(b.lab));
+    const groups = [];
+    agents.forEach(a => { if (a.group != null && !groups.includes(a.group)) groups.push(a.group); });
+
+    const sortedFinite = arr => arr.filter(ok).sort((a, b) => a - b);
+    const cum = {
+      exposed: sortedFinite(agents.map(a => a.everT)),
+      adopted: sortedFinite(agents.map(a => a.adoptT)),
+      rejected: sortedFinite(agents.map(a => a.firstRej))
+    };
+    function stateAt(a, t) {
+      let last = 0;
+      for (const p of a.polar) { if (p[0] <= t) last = p[1]; else break; }
+      if (last === -1) return 3;
+      if (a.adoptT <= t) return 2;
+      if (a.everT <= t) return 1;
+      return 0;
+    }
+    function countAt(t) {
+      return { exposed: bisectRight(cum.exposed, t), adopted: bisectRight(cum.adopted, t), rejected: bisectRight(cum.rejected, t) };
+    }
+    function inMemory(a, t) { return a.persistence.some(p => p.s <= t && t <= p.e); }
+    return {
+      id: String(raw.id), title: raw.title ? String(raw.title) : String(raw.id), kind: KINDS.includes(raw.kind) ? raw.kind : 'belief',
+      statement: typeof raw.statement === 'string' ? raw.statement : '', source: typeof raw.source === 'string' ? raw.source : '',
+      t0, t1, agents, byName, events, evById, exposures, adoptions, edges, persistence, annotations, quotes, metrics, labs, groups, roles,
+      hasExposures, derivedAdoption, expWeekMax, cum, stateAt, countAt, inMemory, expThatWeek
+    };
+  }
+  return { validate, prepare, parseT, labKey, KINDS, CHANNELS, STANCES, EDGE_KINDS, ANN_KINDS };
+})();
+/* ==== end data module ==== */
+if (typeof window === 'undefined') { if (typeof module !== 'undefined') module.exports = TraceData; return; }
+
+const $ = s => document.querySelector(s);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+if (!window.d3) {
+  document.querySelectorAll('.chart').forEach(c => { c.textContent = 'The charts need d3 from cdnjs.cloudflare.com, which did not load. Reload the page to try again.'; c.className = 'nojs'; });
+  return;
+}
+
+/* ---------- payload + store ---------- */
+let PAYLOAD = { traces: [], schema: null, generated: null };
+try {
+  const p = JSON.parse(document.getElementById('trace-data').textContent);
+  if (p && Array.isArray(p.traces)) PAYLOAD = p;
+} catch (e) { /* unbuilt template: no bundled traces */ }
+
+const KIND_LABEL = { belief: 'Beliefs', norm: 'Norms', term: 'Terms' };
+const KIND_ONE = { belief: 'Belief', norm: 'Norm', term: 'Coined term' };
+const Store = {
+  entries: [],   // {token, raw, origin:'bundled'|'file', fileName, check:{errors,warnings}, model}
+  add(raw, origin, fileName) {
+    const check = TraceData.validate(raw);
+    let base = String(raw && raw.id || fileName || 'trace').replace(/[^A-Za-z0-9._~-]+/g, '-').replace(/^-+|-+$/g, '') || 'trace';
+    let token = base, k = 2;
+    while (this.entries.some(e => e.token === token)) token = base + (origin === 'file' ? '-file' + (k > 2 ? k - 1 : '') : '-' + k), k++;
+    const entry = { token, raw, origin, fileName, check, model: null };
+    this.entries.push(entry);
+    return entry;
+  },
+  get(token) { return this.entries.find(e => e.token === token) || null; },
+  model(entry) {
+    if (!entry.model && !entry.check.errors.length) entry.model = TraceData.prepare(entry.raw);
+    return entry.model;
+  }
+};
+PAYLOAD.traces.forEach(t => Store.add(t, 'bundled'));
+
+const state = { token: null, order: 'role', netView: 'flow', showEdges: true, zoom: null, pin: null, cursor: null, playing: false };
+
+/* ---------- formatting ---------- */
+const fmtDate = d3.utcFormat('%-d %b %Y');
+const fmtDT = d3.utcFormat('%-d %b %Y, %H:%M UTC');
+const fmtShort = d3.utcFormat('%-d %b');
+const int = d3.format(',');
+const trunc = (s, n) => s.length > n ? s.slice(0, Math.max(1, n - 1)) + '…' : s;
+const fmtMetric = v => typeof v === 'number' ? (Number.isInteger(v) ? int(v) : (Math.abs(v) < 1 ? d3.format('.2~f')(v) : d3.format(',.1~f')(v))) : String(v);
+const STANCE_LABEL = { originates: 'Originates', endorses: 'Endorses', acts_on: 'Acts on it', mentions: 'Mentions', uses: 'Uses', questions: 'Questions', rejects: 'Rejects', mutates: 'Mutates' };
+const CHANNEL_LABEL = { chat: 'Chat', memory: 'Memory', session: 'Session action', search: 'History search', summary: 'Summary' };
+const EDGE_LABEL = { transmission: 'Transmission', echo: 'Echo', tip: 'Tip', correction: 'Correction' };
+const VIA_LABEL = { room: 'in the room', named: 'named directly', search: 'via search', other: 'other' };
+const STATE_LABEL = ['Not yet exposed', 'Exposed', 'Adopted', 'Rejecting'];
+
+/* ---------- theme colours ---------- */
+let C = {};
+function readColors() {
+  const cs = getComputedStyle(document.documentElement);
+  const v = n => cs.getPropertyValue(n).trim();
+  C = {
+    surface: v('--surface'), surface2: v('--surface-2'), ink: v('--ink'), ink2: v('--ink-2'), ink3: v('--ink-3'),
+    grid: v('--grid'), axis: v('--axis'), band: v('--band'), stripe: v('--stripe'),
+    lab: { anthropic: v('--c-anthropic'), openai: v('--c-openai'), google: v('--c-google'), other: v('--c-other') },
+    s: { originates: v('--s-orig'), endorses: v('--s-endo'), acts_on: v('--s-act'), mentions: v('--s-neu'), uses: v('--s-neu'),
+      questions: v('--s-que'), rejects: v('--s-rej'), mutates: v('--s-mut') }
+  };
+}
+const labColor = a => C.lab[a.labKey] || C.lab.other;
+const labVar = key => 'var(--c-' + key + ')';
+
+/* ---------- tooltip ---------- */
+const tipEl = $('#tip');
+const Tip = {
+  open() { tipEl.replaceChildren(); return this; },
+  title(t) { tipEl.append(el('div', 'tt-title', t)); return this; },
+  sub(t) { tipEl.append(el('div', 'tt-sub', t)); return this; },
+  row(value, label, color) {
+    const r = el('div', 'tt-row');
+    const k = el('span', 'dot'); if (color) k.style.setProperty('--k', color); else k.style.visibility = 'hidden';
+    r.append(k, el('strong', null, value), el('span', 'tt-lab', label));
+    tipEl.append(r); return this;
+  },
+  snip(t, color) { const d = el('div', 'tt-snip', t); if (color) d.style.setProperty('--k', color); tipEl.append(d); return this; },
+  note(t) { tipEl.append(el('div', 'tt-note', t)); return this; },
+  show(x, y) {
+    tipEl.hidden = false;
+    const r = tipEl.getBoundingClientRect();
+    const vw = document.documentElement.clientWidth, vh = window.innerHeight;
+    let left = x + 14, top = y + 14;
+    if (left + r.width > vw - 8) left = Math.max(8, x - r.width - 14);
+    if (top + r.height > vh - 8) top = Math.max(8, y - r.height - 14);
+    tipEl.style.left = left + 'px'; tipEl.style.top = top + 'px';
+  },
+  hide() { tipEl.hidden = true; }
+};
+window.addEventListener('scroll', () => Tip.hide(), { passive: true });
+
+/* ---------- shared svg helpers ---------- */
+function newSvg(box, W, H) {
+  return d3.select(box).html('').append('svg').attr('class', 'viz').attr('width', W).attr('height', H).attr('viewBox', '0 0 ' + W + ' ' + H);
+}
+const SYM = { chat: d3.symbolCircle, memory: d3.symbolSquare, session: d3.symbolTriangle, search: d3.symbolDiamond, summary: d3.symbolCircle };
+function markerPath(e, size) { return d3.symbol(e.stance === 'mutates' ? d3.symbolStar : SYM[e.channel], e.stance === 'mutates' ? size * 1.5 : size)(); }
+function styleMarker(sel) {
+  sel.attr('fill', e => e.channel === 'summary' && e.stance !== 'mutates' ? C.surface : C.s[e.stance])
+    .attr('stroke', e => e.channel === 'summary' && e.stance !== 'mutates' ? C.s[e.stance] : C.surface)
+    .attr('stroke-width', e => e.channel === 'summary' && e.stance !== 'mutates' ? 2 : 1)
+    .attr('opacity', e => e.conf === 1 || e.conf == null ? 0.35 : e.conf === 2 ? 0.85 : 1);
+}
+const confText = c => c == null ? 'auto-detected (unlabelled)' : 'confidence ' + c + ' of 3';
+function expHeat(M) { return d3.scaleSqrt().domain([1, Math.max(2, M.expWeekMax)]).range([0.05, 0.34]).clamp(true); }
+const EDGE_DASH = { transmission: null, echo: '1.5 3', tip: '5 3', correction: null };
+const edgeColor = k => k === 'correction' ? C.s.rejects : C.ink2;
+function timeTicks(x, W) { return x.ticks(Math.max(2, Math.floor(W / 120))); }
+function tickFmt(x) {
+  const [a, b] = x.domain(); const span = b - a;
+  return span > 400 * 864e5 ? d3.utcFormat('%b %Y') : span > 60 * 864e5 ? d3.utcFormat('%-d %b') : span > 3 * 864e5 ? d3.utcFormat('%-d %b') : d3.utcFormat('%-d %b %H:%M');
+}
+function svgKey(draw, w, h) {
+  const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  s.setAttribute('width', w || 14); s.setAttribute('height', h || 14); s.setAttribute('aria-hidden', 'true');
+  draw(d3.select(s)); return s;
+}
+function legend(container, items) {
+  container.replaceChildren();
+  for (const it of items) {
+    if (it.sep) { container.append(el('span', 'lg-sep')); continue; }
+    if (it.title) { container.append(el('span', 'lg-title', it.title)); continue; }
+    const s = el('span', 'lg-item');
+    s.append(svgKey(it.draw, it.w, it.h), document.createTextNode(it.label));
+    container.append(s);
+  }
+}
+function makeTable(container, cols, rows, caption) {
+  const t = el('table');
+  if (caption) t.append(el('caption', null, caption));
+  const thead = el('thead'), htr = el('tr');
+  cols.forEach(c => { const th = el('th', c.num ? 'num' : null, c.label); th.scope = 'col'; htr.append(th); });
+  thead.append(htr);
+  const tb = el('tbody');
+  rows.forEach(r => { const tr = el('tr'); cols.forEach(c => { const v = c.get(r); tr.append(el('td', c.num ? 'num' : (c.cls || null), v == null ? '–' : String(v))); }); tb.append(tr); });
+  t.append(thead, tb);
+  return t;
+}
+const tables = {};
+document.querySelectorAll('[data-table]').forEach(b => b.addEventListener('click', () => {
+  const t = document.getElementById(b.dataset.table);
+  t.hidden = !t.hidden;
+  b.setAttribute('aria-expanded', String(!t.hidden));
+  b.textContent = t.hidden ? 'Show table' : 'Hide table';
+  if (!t.hidden) fillTable(b.dataset.table);
+}));
+function fillTable(id) {
+  const box = document.getElementById(id);
+  const M = currentModel();
+  if (!M || box.hidden || !tables[id]) { if (!M) box.replaceChildren(); return; }
+  box.replaceChildren(...tables[id](M));
+}
+function refreshTables() { Object.keys(tables).forEach(fillTable); }
+
+/* ---------- picker + loading ---------- */
+function renderPicker() {
+  const box = $('#picker');
+  box.replaceChildren();
+  const groups = [['belief', KIND_LABEL.belief], ['norm', KIND_LABEL.norm], ['term', KIND_LABEL.term], ['file', 'Opened files']];
+  let any = false;
+  for (const [k, label] of groups) {
+    const list = Store.entries.filter(e => k === 'file' ? e.origin === 'file' : e.origin === 'bundled' && (e.raw && e.raw.kind) === k);
+    if (!list.length) continue;
+    any = true;
+    const g = el('div', 'pk-group');
+    g.append(el('div', 'pk-label', label));
+    const items = el('div', 'pk-items');
+    list.forEach(e => {
+      const b = el('button', 'pk-btn' + (e.check.errors.length ? ' bad' : ''));
+      b.type = 'button';
+      b.setAttribute('aria-pressed', String(e.token === state.token));
+      const r = e.raw || {};
+      b.append(document.createTextNode(String(r.title || r.id || e.fileName || e.token)));
+      const n = Array.isArray(r.agents) ? r.agents.length : 0, m = Array.isArray(r.events) ? r.events.length : 0;
+      b.append(el('small', null, e.check.errors.length ? 'invalid' : n + ' agents · ' + int(m) + ' events'));
+      b.addEventListener('click', () => select(e.token));
+      items.append(b);
+    });
+    // bundled entries of unknown kind
+    g.append(items); box.append(g);
+  }
+  const odd = Store.entries.filter(e => e.origin === 'bundled' && !TraceData.KINDS.includes(e.raw && e.raw.kind));
+  if (odd.length) {
+    const g = el('div', 'pk-group'); g.append(el('div', 'pk-label', 'Other'));
+    const items = el('div', 'pk-items');
+    odd.forEach(e => { const b = el('button', 'pk-btn bad', String((e.raw && (e.raw.title || e.raw.id)) || e.token)); b.type = 'button'; b.setAttribute('aria-pressed', String(e.token === state.token)); b.addEventListener('click', () => select(e.token)); items.append(b); });
+    g.append(items); box.append(g); any = true;
+  }
+  if (!any) box.append(el('p', 'note', 'This page has no bundled traces. Open a trace file to view it.'));
+}
+function loadMsg(kind, title, lines) {
+  const box = $('#load-msg');
+  box.replaceChildren();
+  if (!title) return;
+  const m = el('div', 'msg' + (kind === 'err' ? ' err' : ''));
+  m.append(el('b', null, title));
+  if (lines && lines.length) { const ul = el('ul'); lines.forEach(l => ul.append(el('li', null, l))); m.append(ul); }
+  box.append(m);
+}
+function readFiles(files) {
+  const list = Array.from(files || []).filter(f => f);
+  if (!list.length) return;
+  const results = [];
+  let pending = list.length, lastOk = null;
+  list.forEach(f => {
+    const fr = new FileReader();
+    fr.onload = () => {
+      let parsed;
+      try { parsed = JSON.parse(fr.result); }
+      catch (err) { results.push({ f, err: [f.name + ' is not valid JSON: ' + err.message] }); return finish(); }
+      const traces = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.traces) && parsed.traces.length && parsed.traces[0] && 'events' in parsed.traces[0] ? parsed.traces : [parsed]);
+      traces.forEach((raw, i) => {
+        const entry = Store.add(raw, 'file', f.name + (traces.length > 1 ? ' #' + (i + 1) : ''));
+        if (entry.check.errors.length) results.push({ f, entry, err: entry.check.errors });
+        else { results.push({ f, entry }); lastOk = entry; }
+      });
+      finish();
+    };
+    fr.onerror = () => { results.push({ f, err: ['Could not read ' + f.name + '.'] }); finish(); };
+    fr.readAsText(f);
+  });
+  function finish() {
+    if (--pending > 0) return;
+    const bad = results.filter(r => r.err);
+    if (bad.length) {
+      const lines = [];
+      bad.forEach(r => r.err.slice(0, 40).forEach(m => lines.push((r.f ? r.f.name + ': ' : '') + m)));
+      loadMsg('err', bad.length === 1 && results.length === 1 ? 'This file is not a valid v0 trace. Fix these and open it again:' : bad.length + ' of ' + results.length + ' traces did not pass the format check:', lines);
+    } else {
+      const okN = results.length;
+      loadMsg('ok', 'Opened ' + okN + (okN === 1 ? ' trace' : ' traces') + '. It is kept in this tab only.', []);
+    }
+    renderPicker();
+    const target = lastOk || (bad.length && bad[bad.length - 1].entry) || null;
+    if (target) select(target.token);
+  }
+}
+$('#file-input').addEventListener('change', ev => { readFiles(ev.target.files); ev.target.value = ''; });
+(function setupDrop() {
+  const ov = $('#drop'); let depth = 0;
+  const hasFiles = ev => ev.dataTransfer && Array.from(ev.dataTransfer.types || []).includes('Files');
+  window.addEventListener('dragenter', ev => { if (!hasFiles(ev)) return; ev.preventDefault(); depth++; ov.hidden = false; });
+  window.addEventListener('dragover', ev => { if (!hasFiles(ev)) return; ev.preventDefault(); ev.dataTransfer.dropEffect = 'copy'; });
+  window.addEventListener('dragleave', ev => { if (!hasFiles(ev)) return; depth = Math.max(0, depth - 1); if (!depth) ov.hidden = true; });
+  window.addEventListener('drop', ev => { if (!hasFiles(ev)) return; ev.preventDefault(); depth = 0; ov.hidden = true; readFiles(ev.dataTransfer.files); });
+})();
+
+function currentEntry() { return state.token ? Store.get(state.token) : null; }
+function currentModel() { const e = currentEntry(); return e ? Store.model(e) : null; }
+function select(token, fromHash) {
+  const e = Store.get(token);
+  if (!e) return;
+  stopPlay();
+  state.token = token; state.zoom = null; state.pin = null; state.cursor = null;
+  $('#scrub').value = 1000;
+  if (!fromHash) { try { history.replaceState(null, '', '#' + token); } catch (err) { location.hash = token; } }
+  renderPicker();
+  renderAll();
+}
+window.addEventListener('hashchange', () => { const t = location.hash.slice(1); if (t && t !== state.token && Store.get(t)) select(t, true); });
+
+/* ---------- header ---------- */
+function renderHeader(entry, M) {
+  const raw = entry.raw || {};
+  $('#t-title').textContent = String(raw.title || raw.id || entry.fileName || 'Trace');
+  const errs = entry.check.errors;
+  const errBox = $('#t-errors');
+  $('#views').hidden = !!errs.length || !M;
+  errBox.hidden = !errs.length;
+  if (errs.length) {
+    errBox.replaceChildren(el('b', null, 'This trace does not pass the v0 format check, so it is not drawn. Fix these fields:'));
+    const ul = el('ul'); errs.slice(0, 80).forEach(m => ul.append(el('li', null, m))); errBox.append(ul);
+  }
+  const iss = $('#t-issues');
+  const warns = entry.check.warnings;
+  iss.hidden = !warns.length;
+  if (warns.length) {
+    $('#t-issues-sum').textContent = warns.length + (warns.length === 1 ? ' format note' : ' format notes') + ' (drawn anyway)';
+    const ul = $('#t-issues-list'); ul.replaceChildren(); warns.forEach(w => ul.append(el('li', null, w)));
+  }
+  const tiles = $('#t-tiles'); tiles.replaceChildren();
+  const st = $('#t-statement');
+  if (!M) {
+    $('#t-eyebrow').textContent = (entry.origin === 'file' ? 'Opened file · ' + entry.fileName : 'Bundled trace');
+    st.hidden = true; $('#t-source').textContent = '';
+    return;
+  }
+  const span = fmtDate(new Date(M.t0)) + ' – ' + fmtDate(new Date(M.t1));
+  $('#t-eyebrow').textContent = [KIND_ONE[M.kind], M.agents.length + ' agents', int(M.events.length) + ' events', span, entry.origin === 'file' ? 'opened file' : null].filter(Boolean).join(' · ');
+  st.hidden = !M.statement; st.textContent = M.statement;
+  $('#t-source').textContent = M.source;
+  M.metrics.forEach(([k, v]) => {
+    const t = el('div', 'tile');
+    t.append(el('div', 'tile-label', k.replace(/_/g, ' ')), el('div', 'tile-value', fmtMetric(v)));
+    tiles.append(t);
+  });
+}
+
+/* ---------- swimlane ---------- */
+let lane = null; // live geometry for cursor + hover
+function laneRows(M) {
+  const firstKey = a => [a.firstEvent, a.everT, a.idx];
+  const byFirst = (a, b) => { const x = firstKey(a), y = firstKey(b); for (let i = 0; i < 3; i++) { if (x[i] !== y[i]) return x[i] === Infinity ? 1 : y[i] === Infinity ? -1 : x[i] - y[i]; } return 0; };
+  const sorted = M.agents.slice().sort(byFirst);
+  if (state.order === 'first') return sorted.map(a => ({ a }));
+  const keyOf = state.order === 'lab' ? a => a.lab : a => a.role;
+  const order = state.order === 'lab' ? M.labs.map(l => l.lab) : M.roles;
+  const rows = [];
+  for (const k of order) {
+    const list = sorted.filter(a => keyOf(a) === k);
+    if (!list.length) continue;
+    rows.push({ head: k + ' · ' + list.length });
+    list.forEach(a => rows.push({ a }));
+  }
+  return rows;
+}
+function annLevels(M, x, minX, maxX, maxLevels) {
+  const ends = [];
+  return M.annotations.filter(a => a.kind !== 'goal').map(an => {
+    const px = x(an.tt);
+    if (px < minX - 1 || px > maxX + 1) return { an, px, level: -1, text: '' };
+    const full = an.label;
+    let level = -1;
+    for (let l = 0; l < maxLevels; l++) if (ends[l] == null || ends[l] < px - 6) { level = l; break; }
+    if (level < 0) return { an, px, level: -1, text: '' };
+    const room = Math.min(190, maxX - px - 4);
+    const chars = Math.max(0, Math.floor(room / 6.1));
+    const text = chars >= 4 ? trunc(full, chars) : '';
+    ends[level] = px + text.length * 6.1 + 4;
+    return { an, px, level, text };
+  });
+}
+function renderSwimlane(M) {
+  const box = $('#lane-chart');
+  const W = box.clientWidth; if (!W) return;
+  const narrow = W < 600;
+  const labelW = narrow ? 100 : 176, mr = 14;
+  const nRows = M.agents.length;
+  const rowH = nRows > 30 ? 18 : nRows > 18 ? 21 : 24;
+  const headH = 22;
+  const full = [M.t0, M.t1];
+  const dom = state.zoom || full;
+  const x = d3.scaleUtc().domain(dom).range([labelW, W - mr]);
+  const maxLevels = narrow ? 2 : 3;
+  const levels = annLevels(M, x, labelW, W - mr, maxLevels);
+  const usedLevels = levels.length ? Math.max(1, d3.max(levels, l => l.level + 1) || 1) : 0;
+  const annH = usedLevels ? usedLevels * 15 + 6 : 0;
+  const goals = M.annotations.filter(a => a.kind === 'goal');
+  const goalsH = goals.length ? 18 : 0;
+  const axisY = annH + goalsH + 14, y0 = annH + goalsH + 22;
+  const rows = laneRows(M);
+  let yy = y0; const rowY = new Map();
+  rows.forEach(r => { r.y = yy; if (r.head) { yy += headH; } else { r.cy = yy + rowH / 2; rowY.set(r.a, r.cy); yy += rowH; } });
+  const H = yy + 6;
+  const svg = newSvg(box, W, H).attr('aria-hidden', 'true');
+  const clipId = 'lane-clip';
+  svg.append('defs').append('clipPath').attr('id', clipId).append('rect').attr('x', labelW).attr('y', 0).attr('width', W - mr - labelW).attr('height', H);
+  const plot = svg.append('g').attr('clip-path', 'url(#' + clipId + ')');
+  const xc = t => Math.max(labelW - 2, Math.min(W - mr + 2, x(t)));
+
+  // row stripes + presence hairline
+  const agentRows = rows.filter(r => r.a);
+  plot.append('g').selectAll('rect').data(agentRows.filter((r, i) => i % 2 === 0)).join('rect')
+    .attr('x', labelW).attr('width', W - mr - labelW).attr('y', r => r.y).attr('height', rowH).attr('fill', C.stripe);
+  plot.append('g').selectAll('line').data(agentRows).join('line')
+    .attr('x1', r => xc(Number.isFinite(r.a.joined) ? Math.max(r.a.joined, dom[0]) : dom[0]))
+    .attr('x2', r => xc(Number.isFinite(r.a.left) ? Math.min(r.a.left, dom[1]) : dom[1]))
+    .attr('y1', r => r.cy).attr('y2', r => r.cy).attr('stroke', C.grid).attr('stroke-width', 1);
+  // exposure density: weekly counts as a faint single-hue heat strip, plus a tick at first exposure
+  if (M.hasExposures) {
+    const heat = expHeat(M);
+    const cells = [];
+    agentRows.forEach(r => r.a.expWeeks.forEach(p => { if (p[0] + 7 * 864e5 >= dom[0] && p[0] <= dom[1]) cells.push({ r, w: p[0], n: p[1] }); }));
+    plot.append('g').selectAll('rect').data(cells).join('rect')
+      .attr('x', d => xc(d.w)).attr('width', d => Math.max(1, xc(d.w + 7 * 864e5) - xc(d.w) - 0.5)).attr('y', d => d.r.y + 2).attr('height', rowH - 4)
+      .attr('fill', C.ink).attr('fill-opacity', d => heat(d.n));
+    plot.append('g').selectAll('line').data(agentRows.filter(r => Number.isFinite(r.a.firstExp) && r.a.exposures.length)).join('line')
+      .attr('x1', r => x(r.a.firstExp)).attr('x2', r => x(r.a.firstExp)).attr('y1', r => r.y + 2).attr('y2', r => r.y + rowH - 2)
+      .attr('stroke', C.ink2).attr('stroke-width', 1.5);
+  }
+  // persistence bars
+  const pers = [];
+  agentRows.forEach(r => r.a.persistence.forEach(p => pers.push({ p, r })));
+  plot.append('g').selectAll('rect').data(pers).join('rect')
+    .attr('x', d => xc(d.p.s)).attr('width', d => Math.max(2, xc(d.p.e) - xc(d.p.s))).attr('y', d => d.r.y + rowH - 4).attr('height', 2.5).attr('rx', 1.25)
+    .attr('fill', C.ink2).attr('opacity', 0.75);
+  // grid + axis
+  const ticks = timeTicks(x, W - labelW), tf = tickFmt(x);
+  svg.append('g').selectAll('line').data(ticks).join('line').attr('x1', x).attr('x2', x).attr('y1', y0).attr('y2', H - 6).attr('stroke', C.grid).attr('shape-rendering', 'crispEdges');
+  svg.append('g').selectAll('text').data(ticks).join('text').attr('class', 'tick').attr('x', x).attr('y', axisY).attr('text-anchor', 'middle').text(tf);
+  // goal periods: a ribbon above the plot (goals start periods; each runs until the next goal)
+  if (goals.length) {
+    const gy = annH + 1, gh = 13;
+    const segs = goals.map((g, i) => ({ g, s: g.tt, e: i + 1 < goals.length ? goals[i + 1].tt : M.t1, i })).filter(d => d.e > dom[0] && d.s < dom[1]);
+    const gg = svg.append('g').attr('clip-path', 'url(#' + clipId + ')');
+    segs.forEach(d => {
+      const xs = xc(Math.max(d.s, dom[0])), xe = xc(Math.min(d.e, dom[1])), w = Math.max(1, xe - xs - 1);
+      gg.append('rect').attr('x', xs).attr('y', gy).attr('width', w).attr('height', gh).attr('rx', 2).attr('fill', d.i % 2 ? C.grid : C.surface2).attr('stroke', C.axis).attr('stroke-width', 0.5);
+      const chars = Math.floor((w - 8) / 5.6);
+      if (chars >= 5) gg.append('text').attr('class', 'tick').attr('x', xs + 4).attr('y', gy + 10).style('font-size', '10px').text(trunc(d.g.label.replace(/^Goal:\s*/i, ''), chars));
+      gg.append('rect').attr('x', xs).attr('y', gy).attr('width', w).attr('height', gh).attr('fill', 'transparent')
+        .on('pointermove', ev => { Tip.open().title(d.g.label || 'Goal').sub(fmtDate(new Date(d.s)) + ' – ' + fmtDate(new Date(d.e))).show(ev.clientX, ev.clientY); }).on('pointerleave', () => Tip.hide());
+    });
+    svg.append('text').attr('class', 'ghead').attr('x', 2).attr('y', gy + 10).text('Goals');
+  }
+  // annotations
+  const ag = svg.append('g');
+  levels.forEach(l => {
+    if (l.px < labelW - 1 || l.px > W - mr + 1) return;
+    const strong = l.an.kind === 'intervention';
+    ag.append('line').attr('x1', l.px).attr('x2', l.px).attr('y1', l.level >= 0 ? l.level * 15 + 4 : y0 - 4).attr('y2', H - 6)
+      .attr('stroke', strong ? C.ink : C.ink3).attr('stroke-width', strong ? 1.4 : 1).attr('stroke-dasharray', strong ? null : '3 3').attr('opacity', strong ? 0.85 : 0.7);
+    if (l.level >= 0 && l.text) ag.append('text').attr('class', 'ann halo').attr('x', l.px + 4).attr('y', l.level * 15 + 13).text(l.text);
+    ag.append('rect').attr('x', l.px - 5).attr('y', 0).attr('width', l.text ? l.text.length * 6.1 + 10 : 10).attr('height', l.level >= 0 ? l.level * 15 + 17 : Math.max(10, annH))
+      .attr('fill', 'transparent').on('pointermove', ev => {
+        Tip.open().title(l.an.label || '(no label)').sub(l.an.kind.charAt(0).toUpperCase() + l.an.kind.slice(1) + ' · ' + fmtDT(new Date(l.an.tt))).show(ev.clientX, ev.clientY);
+      }).on('pointerleave', () => Tip.hide());
+  });
+  // row labels
+  const lg = svg.append('g');
+  rows.forEach(r => {
+    if (r.head) {
+      lg.append('text').attr('class', 'ghead').attr('x', 2).attr('y', r.y + 15).text(trunc(r.head, narrow ? 14 : 26));
+      lg.append('line').attr('x1', labelW).attr('x2', W - mr).attr('y1', r.y + headH - 2).attr('y2', r.y + headH - 2).attr('stroke', C.line || C.grid).attr('stroke', C.axis).attr('stroke-width', 0.6);
+      return;
+    }
+    const a = r.a, g = lg.append('g').style('cursor', 'default');
+    const active = a.events.length || Number.isFinite(a.everT);
+    g.append('circle').attr('cx', 6).attr('cy', r.cy).attr('r', 4.5).attr('fill', labColor(a)).attr('opacity', active ? 1 : 0.45);
+    g.append('text').attr('class', active ? 'lbl' : 'lbl-dim').attr('x', 16).attr('y', r.cy + 4).text(trunc(a.name, narrow ? 12 : 23));
+    g.append('rect').attr('x', 0).attr('y', r.y).attr('width', labelW - 6).attr('height', rowH).attr('fill', 'transparent')
+      .on('pointermove', ev => { agentTip(M, a, null); Tip.show(ev.clientX, ev.clientY); }).on('pointerleave', () => Tip.hide());
+  });
+  // edges
+  const eg = plot.append('g').attr('fill', 'none');
+  if (state.showEdges) {
+    const vis = M.edges.filter(e => e.tt >= dom[0] && e.tt <= dom[1] && rowY.has(e.from) && rowY.has(e.to) && e.from !== e.to);
+    vis.forEach(e => {
+      const px = x(e.tt), ya = rowY.get(e.from), yb = rowY.get(e.to);
+      const bend = Math.max(10, Math.min(70, Math.abs(yb - ya) * 0.35));
+      eg.append('path').attr('d', 'M' + px + ',' + ya + 'Q' + (px + bend) + ',' + ((ya + yb) / 2) + ' ' + px + ',' + yb)
+        .attr('stroke', edgeColor(e.kind)).attr('stroke-width', e.kind === 'correction' ? 1.5 : 1.1).attr('stroke-dasharray', EDGE_DASH[e.kind]).attr('opacity', 0.6);
+      eg.append('circle').attr('cx', px).attr('cy', yb).attr('r', 2.2).attr('fill', edgeColor(e.kind)).attr('opacity', 0.8);
+    });
+  }
+  // event markers
+  const inDom = M.events.filter(e => e.tt >= dom[0] && e.tt <= dom[1] && rowY.has(e.agent));
+  const size = rowH >= 21 ? 64 : 48;
+  const mk = plot.append('g').selectAll('path').data(inDom).join('path')
+    .attr('transform', e => 'translate(' + x(e.tt) + ',' + rowY.get(e.agent) + ')').attr('d', e => markerPath(e, e.channel === 'summary' ? size * 0.7 : size));
+  styleMarker(mk);
+  // adoption rings
+  plot.append('g').selectAll('circle').data(M.adoptions.filter(d => d.tt >= dom[0] && d.tt <= dom[1] && rowY.has(d.agent))).join('circle')
+    .attr('cx', d => x(d.tt)).attr('cy', d => rowY.get(d.agent)).attr('r', rowH >= 21 ? 8.5 : 7.5).attr('fill', 'none')
+    .attr('stroke', C.ink).attr('stroke-width', 1.4).attr('stroke-dasharray', d => d.independent ? '2.2 2.2' : null);
+  // cursor, hover + pin rings
+  const cur = svg.append('line').attr('y1', y0 - 4).attr('y2', H - 6).attr('stroke', C.ink).attr('stroke-width', 1.2).attr('pointer-events', 'none').attr('opacity', 0);
+  const hov = plot.append('circle').attr('r', 9).attr('fill', 'none').attr('stroke', C.ink).attr('stroke-width', 1.5).attr('opacity', 0).attr('pointer-events', 'none');
+  const pin = plot.append('circle').attr('r', 10).attr('fill', 'none').attr('stroke', C.ink).attr('stroke-width', 2).attr('opacity', 0).attr('pointer-events', 'none');
+  const pts = inDom.map(e => [x(e.tt), rowY.get(e.agent), e]);
+  const delaunay = pts.length ? d3.Delaunay.from(pts, p => p[0], p => p[1]) : null;
+  const overlay = svg.append('rect').attr('x', labelW).attr('y', y0).attr('width', W - mr - labelW).attr('height', H - y0).attr('fill', 'transparent').style('cursor', 'crosshair');
+  function nearest(mx, my) {
+    if (!delaunay) return null;
+    const i = delaunay.find(mx, my); const p = pts[i];
+    return p && Math.hypot(p[0] - mx, p[1] - my) <= 14 ? p : null;
+  }
+  overlay.on('pointermove', ev => {
+    const [mx, my] = d3.pointer(ev);
+    const p = nearest(mx, my);
+    if (p) {
+      hov.attr('cx', p[0]).attr('cy', p[1]).attr('opacity', 1);
+      eventTip(p[2]); Tip.show(ev.clientX, ev.clientY);
+      return;
+    }
+    hov.attr('opacity', 0);
+    const r = agentRows.find(rr => my >= rr.y && my < rr.y + rowH);
+    if (!r) { Tip.hide(); return; }
+    agentTip(M, r.a, +x.invert(mx)); Tip.show(ev.clientX, ev.clientY);
+  }).on('pointerleave', () => { hov.attr('opacity', 0); Tip.hide(); })
+    .on('click', ev => { const [mx, my] = d3.pointer(ev); const p = nearest(mx, my); setPin(p ? p[2] : null); });
+  lane = { x, cur, pin, rowY, inDom, W, mr, labelW };
+  placePin(); placeCursor();
+}
+function placePin() {
+  if (!lane) return;
+  const M = currentModel(); const e = state.pin && M ? M.evById.get(state.pin) : null;
+  if (e && lane.rowY.has(e.agent) && lane.inDom.includes(e)) lane.pin.attr('cx', lane.x(e.tt)).attr('cy', lane.rowY.get(e.agent)).attr('opacity', 1);
+  else lane.pin.attr('opacity', 0);
+}
+function setPin(e) { state.pin = e ? e.id : null; placePin(); renderDetail(); }
+function eventTip(e) {
+  Tip.open().title(e.agent.name).sub(fmtDT(new Date(e.tt)) + (e.room ? ' · ' + e.room : ''))
+    .row(STANCE_LABEL[e.stance], CHANNEL_LABEL[e.channel] + ' · ' + confText(e.conf), C.s[e.stance]);
+  if (e.snippet) Tip.snip(trunc(e.snippet, 280), C.s[e.stance]);
+  Tip.note('Click to pin');
+}
+function agentTip(M, a, t) {
+  Tip.open().title(a.name).sub(a.lab + (a.group ? ' · ' + a.group : ''));
+  if (t != null) {
+    Tip.row(STATE_LABEL[M.stateAt(a, t)], 'on ' + fmtDate(new Date(t)), null);
+    if (M.hasExposures) { const n = M.expThatWeek(a, t); Tip.row(int(n), n === 1 ? 'exposure that week' : 'exposures that week', null); }
+    if (M.inMemory(a, t)) Tip.row('In memory', 'on that day', null);
+  }
+  Tip.row(a.role, a.group != null ? 'role (from the trace)' : 'role (derived)', null);
+  Tip.row(int(a.events.length), a.events.length === 1 ? 'event' : 'events', null);
+  if (M.hasExposures && Number.isFinite(a.firstExp)) Tip.row(fmtDate(new Date(a.firstExp)), 'first exposure', null);
+  if (Number.isFinite(a.adoptT)) Tip.row(fmtDate(new Date(a.adoptT)), a.adoption && a.adoption.independent ? 'adopted (independent)' : 'adopted', null);
+  if (Number.isFinite(a.firstRej)) Tip.row(fmtDate(new Date(a.firstRej)), 'first rejection', null);
+  const pres = [Number.isFinite(a.joined) ? 'joined ' + fmtDate(new Date(a.joined)) : null, Number.isFinite(a.left) ? 'left ' + fmtDate(new Date(a.left)) : null].filter(Boolean);
+  if (pres.length) Tip.note(pres.join(' · '));
+}
+function renderDetail() {
+  const box = $('#detail'); box.replaceChildren();
+  const M = currentModel();
+  const e = state.pin && M ? M.evById.get(state.pin) : null;
+  if (!e) { box.append(el('p', 'detail-empty', 'Click a marker, or focus the chart and use the arrow keys, to pin an event here.')); return; }
+  const head = el('div', 'd-head');
+  const ag = el('span', 'd-agent'); const dot = el('span', 'dot'); dot.style.setProperty('--k', labVar(e.agent.labKey)); ag.append(dot, document.createTextNode(e.agent.name));
+  const close = el('button', 'btn btn-quiet d-close', 'Unpin'); close.type = 'button'; close.addEventListener('click', () => setPin(null));
+  head.append(ag, el('span', 'd-time', fmtDT(new Date(e.tt))), close);
+  const snip = el('p', 'd-snip', e.snippet || '(no snippet)'); snip.style.setProperty('--k', C.s[e.stance]);
+  const meta = el('div', 'd-meta');
+  const kv = (k, v) => { const s = el('span'); s.append(document.createTextNode(k + ' '), el('b', null, v)); meta.append(s); };
+  kv('Stance', STANCE_LABEL[e.stance]); kv('Channel', CHANNEL_LABEL[e.channel]); kv('Confidence', e.conf != null ? e.conf + ' of 3' : 'auto-detected (unlabelled)');
+  if (e.room) kv('Room', e.room);
+  kv('Event', e.id);
+  const ad = M.adoptions.find(d => d.event === e);
+  if (ad) kv('Adoption', ad.independent ? 'independent' : 'after exposure' + (ad.sources.length ? ' (from ' + ad.sources.join(', ') + ')' : ''));
+  const seen = M.exposures.filter(x => x.event === e).length;
+  if (seen) kv('Seen by', seen + (seen === 1 ? ' exposure' : ' exposures'));
+  box.append(head, snip, meta);
+  const rel = M.edges.filter(x => x.tt === e.tt && (x.from === e.agent || x.to === e.agent));
+  rel.forEach(x => box.append(el('p', 'note', EDGE_LABEL[x.kind] + ': ' + x.from.name + ' → ' + x.to.name + (x.evidence ? ' · ' + x.evidence : ''))));
+}
+(function laneKeys() {
+  const box = $('#lane-chart');
+  box.addEventListener('keydown', ev => {
+    const M = currentModel(); if (!M || !lane) return;
+    if (ev.key === 'Escape') { setPin(null); return; }
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(ev.key)) return;
+    ev.preventDefault();
+    const list = lane.inDom; if (!list.length) return;
+    let i = state.pin ? list.findIndex(e => e.id === state.pin) : -1;
+    if (ev.key === 'Home') i = 0; else if (ev.key === 'End') i = list.length - 1;
+    else if (ev.key === 'ArrowRight') i = i < 0 ? 0 : Math.min(list.length - 1, i + 1);
+    else i = i < 0 ? list.length - 1 : Math.max(0, i - 1);
+    setPin(list[i]);
+  });
+})();
+
+/* overview strip with brush */
+let brushBusy = false;
+function renderOverview(M) {
+  const box = $('#lane-overview');
+  const W = box.clientWidth; if (!W) return;
+  const narrow = W < 600;
+  const labelW = narrow ? 100 : 176, mr = 14, H = 46, top = 6, bot = 30;
+  const x = d3.scaleUtc().domain([M.t0, M.t1]).range([labelW, W - mr]);
+  const svg = newSvg(box, W, H);
+  svg.append('text').attr('class', 'ghead').attr('x', 2).attr('y', top + 14).text('Zoom');
+  svg.append('text').attr('class', 'tick').attr('x', 2).attr('y', top + 27).text(narrow ? 'drag to select' : 'drag across to select');
+  const bins = d3.bin().value(e => e.tt).domain([M.t0, M.t1]).thresholds(Math.max(10, Math.min(160, Math.floor((W - labelW) / 5))))(M.events);
+  const ymax = d3.max(bins, b => b.length) || 1;
+  const y = d3.scaleLinear().domain([0, ymax]).range([bot, top]);
+  svg.append('rect').attr('x', labelW).attr('y', top).attr('width', W - mr - labelW).attr('height', bot - top).attr('fill', C.stripe);
+  svg.append('g').selectAll('rect').data(bins.filter(b => b.length)).join('rect')
+    .attr('x', b => x(b.x0) + 0.5).attr('width', b => Math.max(1, x(b.x1) - x(b.x0) - 1)).attr('y', b => y(b.length)).attr('height', b => bot - y(b.length)).attr('fill', C.ink3).attr('opacity', 0.7);
+  svg.append('line').attr('x1', labelW).attr('x2', W - mr).attr('y1', bot).attr('y2', bot).attr('stroke', C.axis);
+  M.annotations.filter(a => a.kind !== 'goal').forEach(a => svg.append('line').attr('x1', x(a.tt)).attr('x2', x(a.tt)).attr('y1', top).attr('y2', bot).attr('stroke', a.kind === 'intervention' ? C.ink : C.ink3).attr('stroke-dasharray', a.kind === 'intervention' ? null : '2 2').attr('opacity', 0.7));
+  const ticks = timeTicks(x, W - labelW), tf = tickFmt(x);
+  svg.append('g').selectAll('text').data(ticks).join('text').attr('class', 'tick').attr('x', x).attr('y', bot + 13).attr('text-anchor', 'middle').text(tf);
+  const brush = d3.brushX().extent([[labelW, top], [W - mr, bot]])
+    .on('brush end', ev => {
+      if (brushBusy) return;
+      if (!ev.selection) { if (ev.type === 'end') setZoom(null); return; }
+      const [a, b] = ev.selection.map(v => +x.invert(v));
+      if (b - a < 36e5) return;
+      setZoom([a, b], ev.type === 'brush');
+    });
+  const bg = svg.append('g').call(brush);
+  if (state.zoom) { brushBusy = true; bg.call(brush.move, state.zoom.map(v => x(v))); brushBusy = false; }
+  const clear = () => { brushBusy = true; bg.call(brush.move, null); brushBusy = false; };
+  $('#zoom-reset').onclick = () => { clear(); setZoom(null); };
+}
+let zoomRaf = 0;
+function setZoom(z, live) {
+  state.zoom = z;
+  $('#zoom-reset').disabled = !z;
+  cancelAnimationFrame(zoomRaf);
+  zoomRaf = requestAnimationFrame(() => { const M = currentModel(); if (M) safe(() => renderSwimlane(M)); });
+  if (!z && !live) { const M = currentModel(); if (M) safe(() => renderOverview(M)); }
+}
+
+/* ---------- network: two layouts, one painter ---------- */
+let net = null;
+const NET_SUB = {
+  flow: 'Who passed it on. Only agents with a link or an adoption are drawn, placed left to right by when they adopted (or first linked). Lines are transmissions, echoes, tips and corrections; a warm halo marks an adopter, a cool dashed halo an agent whose latest stance is a rejection. Press play or move the slider to replay.',
+  ring: 'Who could have heard it. Every agent sits on a ring, grouped by lab, in order of first activity. Agents fill in as they are exposed and adopt; links appear when they happen. Press play or move the slider to replay.'
+};
+const byEver = (a, b) => (a.everT === b.everT ? a.idx - b.idx : (a.everT === Infinity ? 1 : b.everT === Infinity ? -1 : a.everT - b.everT));
+function layoutRing(M, W, narrow) {
+  const showLabels = !narrow && M.agents.length <= 60;
+  const H = narrow ? Math.min(W, 420) : Math.max(380, Math.min(580, W * 0.52));
+  const cx = W / 2, cy = H / 2;
+  const R = Math.max(60, Math.min(showLabels ? W / 2 - 160 : W / 2 - 22, H / 2 - (showLabels ? 26 : 18)));
+  const order = [];
+  M.labs.forEach(l => M.agents.filter(a => a.lab === l.lab).sort(byEver).forEach(a => order.push(a)));
+  const gaps = M.labs.length > 1 ? M.labs.length : 0, slots = Math.max(1, order.length + gaps);
+  const pos = new Map(), arcs = [];
+  let slot = 0;
+  M.labs.forEach(l => {
+    const s0 = slot;
+    order.filter(a => a.lab === l.lab).forEach(a => { const ang = -Math.PI / 2 + 2 * Math.PI * slot / slots; pos.set(a, { ang, x: cx + R * Math.cos(ang), y: cy + R * Math.sin(ang) }); slot++; });
+    arcs.push({ lab: l, a0: -Math.PI / 2 + 2 * Math.PI * (s0 - 0.4) / slots, a1: -Math.PI / 2 + 2 * Math.PI * (slot - 0.6) / slots });
+    if (gaps) slot++;
+  });
+  return {
+    H, nodes: order, pos, edges: M.edges.filter(e => e.from !== e.to), r: () => 6.5,
+    edgePath(e) { const p = pos.get(e.from), q = pos.get(e.to); const mx = (p.x + q.x) / 2, my = (p.y + q.y) / 2; return 'M' + p.x + ',' + p.y + 'Q' + (cx + (mx - cx) * 0.3) + ',' + (cy + (my - cy) * 0.3) + ' ' + q.x + ',' + q.y; },
+    decor(svg) {
+      const arc = d3.arc();
+      svg.append('g').selectAll('path').data(arcs.filter(d => d.a1 > d.a0)).join('path')
+        .attr('d', d => arc({ innerRadius: R + 12, outerRadius: R + 14.5, startAngle: d.a0 + Math.PI / 2, endAngle: d.a1 + Math.PI / 2 }))
+        .attr('transform', 'translate(' + cx + ',' + cy + ')').attr('fill', d => C.lab[d.lab.key]).attr('opacity', 0.9);
+    },
+    labels(svg) {
+      if (!showLabels) return;
+      svg.append('g').selectAll('text').data(order).join('text').attr('class', 'lbl halo')
+        .attr('x', a => cx + (R + 22) * Math.cos(pos.get(a).ang)).attr('y', a => cy + (R + 22) * Math.sin(pos.get(a).ang) + 4)
+        .attr('text-anchor', a => Math.cos(pos.get(a).ang) >= 0.02 ? 'start' : Math.cos(pos.get(a).ang) <= -0.02 ? 'end' : 'middle')
+        .text(a => trunc(a.name, 22));
+    },
+    cursorX: null,
+    note: M.edges.length ? '' : 'This trace has no agent-to-agent links, so the ring shows states only.'
+  };
+}
+function layoutFlow(M, W, narrow) {
+  const inv = new Set();
+  M.edges.forEach(e => { if (e.from !== e.to) { inv.add(e.from); inv.add(e.to); } });
+  M.agents.forEach(a => { if (Number.isFinite(a.adoptT)) inv.add(a); });
+  const nodes = M.agents.filter(a => inv.has(a)).sort(byEver);
+  if (!nodes.length) return null;
+  const showLabels = !narrow && nodes.length <= 60;
+  const H = narrow ? 400 : Math.max(340, Math.min(620, 110 + nodes.length * 17));
+  const padL = 16, padR = showLabels ? 150 : 16, top = 16, bottom = 34;
+  const x = d3.scaleUtc().domain([M.t0, M.t1]).range([padL + 8, W - padR]);
+  const anchor = a => {
+    if (Number.isFinite(a.adoptT)) return a.adoptT;
+    const e = M.edges.find(d => d.from === a || d.to === a);
+    return e ? e.tt : (Number.isFinite(a.everT) ? a.everT : M.t0);
+  };
+  const idx = new Map(nodes.map((a, i) => [a, i]));
+  const sn = nodes.map((a, i) => ({ a, tx: x(anchor(a)), x: x(anchor(a)), y: top + (H - top - bottom) * (i + 0.5) / nodes.length }));
+  const links = M.edges.filter(e => e.from !== e.to).map(e => ({ source: idx.get(e.from), target: idx.get(e.to) }));
+  const sim = d3.forceSimulation(sn)
+    .force('x', d3.forceX(d => d.tx).strength(0.9))
+    .force('y', d3.forceY((top + H - bottom) / 2).strength(0.04))
+    .force('link', d3.forceLink(links).distance(46).strength(0.25))
+    .force('charge', d3.forceManyBody().strength(-90).distanceMax(220))
+    .force('collide', d3.forceCollide(13))
+    .stop();
+  for (let i = 0; i < 320; i++) sim.tick();
+  const pos = new Map();
+  sn.forEach(d => pos.set(d.a, { x: Math.max(padL, Math.min(W - padR, d.x)), y: Math.max(top + 6, Math.min(H - bottom - 6, d.y)) }));
+  const left = M.agents.length - nodes.length;
+  return {
+    H, nodes, pos, edges: M.edges.filter(e => e.from !== e.to), r: a => Number.isFinite(a.adoptT) ? 7.5 : 5,
+    edgePath(e) {
+      const p = pos.get(e.from), q = pos.get(e.to);
+      const dx = q.x - p.x, dy = q.y - p.y, len = Math.hypot(dx, dy) || 1;
+      const bend = Math.min(40, len * 0.18);
+      return 'M' + p.x + ',' + p.y + 'Q' + ((p.x + q.x) / 2 - dy / len * bend) + ',' + ((p.y + q.y) / 2 + dx / len * bend) + ' ' + q.x + ',' + q.y;
+    },
+    decor(svg) {
+      const ticks = timeTicks(x, W - padL - padR), tf = tickFmt(x);
+      svg.append('g').selectAll('line').data(ticks).join('line').attr('x1', x).attr('x2', x).attr('y1', top).attr('y2', H - bottom).attr('stroke', C.grid);
+      svg.append('line').attr('x1', padL).attr('x2', W - padR).attr('y1', H - bottom).attr('y2', H - bottom).attr('stroke', C.axis);
+      svg.append('g').selectAll('text').data(ticks).join('text').attr('class', 'tick').attr('x', x).attr('y', H - bottom + 15).attr('text-anchor', 'middle').text(tf);
+      M.annotations.filter(a => a.kind === 'intervention').forEach(a => svg.append('line').attr('x1', x(a.tt)).attr('x2', x(a.tt)).attr('y1', top).attr('y2', H - bottom).attr('stroke', C.ink).attr('stroke-width', 1.2).attr('opacity', 0.5));
+    },
+    labels(svg) {
+      if (!showLabels) return;
+      svg.append('g').selectAll('text').data(nodes).join('text').attr('class', 'lbl halo')
+        .attr('x', a => pos.get(a).x + 11).attr('y', a => pos.get(a).y + 4).text(a => trunc(a.name, 20));
+    },
+    cursorX: x, cursorY: [top, H - bottom],
+    note: (left ? left + (left === 1 ? ' agent has' : ' agents have') + ' no link or adoption and ' + (left === 1 ? 'is' : 'are') + ' not drawn here; switch to “Who could have heard it” to see everyone. ' : '') +
+      (M.edges.length ? '' : 'This trace has no agent-to-agent links, so only adopters are placed, by adoption time.')
+  };
+}
+function renderNetwork(M) {
+  const box = $('#net-chart');
+  const W = box.clientWidth; if (!W) return;
+  const narrow = W < 620;
+  let view = state.netView;
+  let L = view === 'flow' ? layoutFlow(M, W, narrow) : null;
+  if (!L) { view = 'ring'; L = layoutRing(M, W, narrow); }
+  document.querySelectorAll('[data-net]').forEach(b => { b.setAttribute('aria-pressed', String(b.dataset.net === view)); });
+  $('#net-sub').textContent = NET_SUB[view];
+  const svg = newSvg(box, W, L.H).attr('aria-hidden', 'true');
+  L.decor(svg);
+  const cur = L.cursorX ? svg.append('line').attr('y1', L.cursorY[0]).attr('y2', L.cursorY[1]).attr('stroke', C.ink).attr('stroke-width', 1.2).attr('opacity', 0) : null;
+  const eg = svg.append('g').attr('fill', 'none');
+  const edgeSel = eg.selectAll('path').data(L.edges).join('path').attr('class', 'ne').attr('d', e => L.edgePath(e))
+    .attr('stroke', e => edgeColor(e.kind)).attr('stroke-dasharray', e => EDGE_DASH[e.kind]);
+  const endDot = e => { const p = L.pos.get(e.from), q = L.pos.get(e.to); const d = Math.hypot(p.x - q.x, p.y - q.y) || 1, k = Math.min(0.45, (L.r(e.to) + 4) / d); return [q.x + (p.x - q.x) * k, q.y + (p.y - q.y) * k]; };
+  const tipSel = eg.selectAll('circle').data(L.edges).join('circle').attr('class', 'ne').attr('r', 2.6).attr('fill', e => edgeColor(e.kind))
+    .attr('cx', e => endDot(e)[0]).attr('cy', e => endDot(e)[1]);
+  const ng = svg.append('g').selectAll('g').data(L.nodes).join('g').attr('class', 'nd node').attr('transform', a => 'translate(' + L.pos.get(a).x + ',' + L.pos.get(a).y + ')');
+  ng.append('circle').attr('class', 'halo-c').attr('r', a => L.r(a) + 4.5).attr('fill', 'none').attr('stroke-width', 2);
+  ng.append('circle').attr('class', 'core-c').attr('r', a => L.r(a));
+  ng.append('circle').attr('r', 14).attr('fill', 'transparent');
+  L.labels(svg);
+  let hoverA = null;
+  ng.on('pointermove', (ev, a) => {
+    hoverA = a; paintEdges();
+    agentTip(M, a, curT()); Tip.note(a.outE + (a.outE === 1 ? ' link out · ' : ' links out · ') + a.inE + ' in'); Tip.show(ev.clientX, ev.clientY);
+  }).on('pointerleave', () => { hoverA = null; paintEdges(); Tip.hide(); });
+  function paintEdges() {
+    const t = curT(), span = M.t1 - M.t0;
+    const vis = e => e.tt <= t, on = e => hoverA && (e.from === hoverA || e.to === hoverA), fresh = e => vis(e) && t - e.tt < span * 0.04;
+    edgeSel.attr('opacity', e => !vis(e) ? 0 : hoverA ? (on(e) ? 0.95 : 0.08) : (fresh(e) ? 0.95 : 0.55)).attr('stroke-width', e => fresh(e) || on(e) ? 2 : 1.2);
+    tipSel.attr('opacity', e => !vis(e) ? 0 : hoverA ? (on(e) ? 1 : 0.1) : 0.8);
+  }
+  function paint() {
+    const t = curT();
+    ng.each(function (a) {
+      const s = M.stateAt(a, t), col = labColor(a), g = d3.select(this);
+      g.select('.core-c').attr('fill', s >= 2 ? col : C.surface).attr('stroke', s >= 2 ? C.surface : col).attr('stroke-width', s >= 2 ? 1.5 : s === 1 ? 2 : 1.2).attr('opacity', s === 0 ? 0.4 : 1);
+      g.select('.halo-c').attr('stroke', s === 3 ? C.s.rejects : C.s.endorses).attr('stroke-dasharray', s === 3 ? '3 2' : null).attr('opacity', s >= 2 ? 1 : 0);
+    });
+    paintEdges();
+    if (cur) { const showC = state.cursor != null; cur.attr('x1', L.cursorX(t)).attr('x2', L.cursorX(t)).attr('opacity', showC ? 0.8 : 0); }
+    const c = M.countAt(t);
+    const cnt = $('#counter'); cnt.replaceChildren();
+    const chip = (v, label, color) => { const s = el('span', 'cnt'); if (color) { const d = el('span', 'dot'); d.style.setProperty('--k', color); s.append(d); } s.append(el('b', null, int(v)), document.createTextNode(' ' + label)); cnt.append(s); };
+    chip(c.exposed, M.hasExposures ? 'exposed' : 'active', C.ink3);
+    chip(c.adopted, 'adopted', C.s.endorses);
+    chip(c.rejected, 'rejected', C.s.rejects);
+    cnt.append(el('span', 'cnt', 'of ' + M.agents.length + ' agents, by ' + fmtDate(new Date(t))));
+    $('#net-date').textContent = fmtDate(new Date(t));
+  }
+  net = { paint };
+  paint();
+  const note = $('#net-note');
+  note.hidden = !L.note; note.textContent = L.note;
+}
+function curT() { const M = currentModel(); if (!M) return 0; const v = +$('#scrub').value; return M.t0 + (M.t1 - M.t0) * v / 1000; }
+function onScrub() {
+  const v = +$('#scrub').value;
+  state.cursor = v >= 1000 && !state.playing ? null : curT();
+  if (net) net.paint();
+  placeCursor();
+}
+function placeCursor() {
+  const t = state.cursor;
+  if (lane) {
+    const px = t == null ? null : lane.x(t);
+    if (px == null || px < lane.labelW || px > lane.W - lane.mr) lane.cur.attr('opacity', 0);
+    else lane.cur.attr('x1', px).attr('x2', px).attr('opacity', 0.9);
+  }
+  if (curves) curves.cursor(t);
+}
+$('#scrub').addEventListener('input', onScrub);
+let playRaf = 0, lastTs = 0;
+function stopPlay() {
+  state.playing = false; cancelAnimationFrame(playRaf);
+  const b = $('#play'); b.textContent = 'Play'; b.setAttribute('aria-label', 'Play'); b.setAttribute('aria-pressed', 'false');
+  $('#counter').setAttribute('aria-live', 'polite');
+}
+$('#play').addEventListener('click', () => {
+  if (state.playing) { stopPlay(); onScrub(); return; }
+  const s = $('#scrub');
+  if (+s.value >= 1000) s.value = 0;
+  state.playing = true; lastTs = 0;
+  const b = $('#play'); b.textContent = 'Pause'; b.setAttribute('aria-label', 'Pause'); b.setAttribute('aria-pressed', 'true');
+  $('#counter').setAttribute('aria-live', 'off');
+  const step = ts => {
+    if (!state.playing) return;
+    if (lastTs) s.value = Math.min(1000, +s.value + (ts - lastTs) / 14);   // ~14 s for the full span
+    lastTs = ts;
+    onScrub();
+    if (+s.value >= 1000) { stopPlay(); state.cursor = null; placeCursor(); return; }
+    playRaf = requestAnimationFrame(step);
+  };
+  playRaf = requestAnimationFrame(step);
+});
+
+/* ---------- cumulative curves ---------- */
+let curves = null;
+function renderCurves(M) {
+  const box = $('#curves-chart');
+  const W = box.clientWidth; if (!W) return;
+  const cols = W >= 760 ? 3 : 1;
+  const gapX = 28, ml = 34, mr = 30, ph = 116, titleH = 22, axisH = 22, gapY = 18;
+  const pw = (W - (cols - 1) * gapX) / cols;
+  const panels = [
+    { key: 'exposed', label: M.hasExposures ? 'Exposed' : 'Active (no exposure data)', color: C.ink2 },
+    { key: 'adopted', label: M.derivedAdoption ? 'Adopted (first warm event)' : 'Adopted', color: C.s.endorses },
+    { key: 'rejected', label: 'Rejected at least once', color: C.s.rejects }
+  ];
+  const rowsN = Math.ceil(panels.length / cols);
+  const H = rowsN * (titleH + ph + axisH) + (rowsN - 1) * gapY + 4;
+  const svg = newSvg(box, W, H).attr('aria-hidden', 'true');
+  const ymax = Math.max(1, M.cum.exposed.length, M.cum.adopted.length, M.cum.rejected.length);
+  const parts = [];
+  panels.forEach((p, i) => {
+    const c = i % cols, r = Math.floor(i / cols);
+    const ox = c * (pw + gapX), oy = r * (titleH + ph + axisH + gapY);
+    const x = d3.scaleUtc().domain([M.t0, M.t1]).range([ox + ml, ox + pw - mr]);
+    const y = d3.scaleLinear().domain([0, ymax]).nice(4).range([oy + titleH + ph, oy + titleH + 4]);
+    const g = svg.append('g');
+    g.append('text').attr('class', 'ptitle').attr('x', ox).attr('y', oy + 14).text(p.label);
+    const yt = y.ticks(3).filter(Number.isInteger);
+    g.selectAll('line.gl').data(yt.filter(t => t > 0)).join('line').attr('x1', ox + ml).attr('x2', ox + pw - mr).attr('y1', y).attr('y2', y).attr('stroke', C.grid).attr('shape-rendering', 'crispEdges');
+    g.selectAll('text.yt').data(yt).join('text').attr('class', 'tick').attr('x', ox + ml - 6).attr('y', t => y(t) + 3.5).attr('text-anchor', 'end').text(d3.format('d'));
+    g.append('line').attr('x1', ox + ml).attr('x2', ox + pw - mr).attr('y1', y(0)).attr('y2', y(0)).attr('stroke', C.axis);
+    M.annotations.filter(a => a.kind !== 'goal').forEach(a => g.append('line').attr('x1', x(a.tt)).attr('x2', x(a.tt)).attr('y1', oy + titleH + 2).attr('y2', y(0))
+      .attr('stroke', a.kind === 'intervention' ? C.ink2 : C.axis).attr('stroke-dasharray', '3 3').attr('stroke-width', a.kind === 'intervention' ? 1.3 : 1));
+    const xt = x.ticks(Math.max(2, Math.floor((pw - ml - mr) / 110)));
+    g.selectAll('text.xt').data(xt).join('text').attr('class', 'tick').attr('x', x).attr('y', y(0) + 15).attr('text-anchor', 'middle').text(tickFmt(x));
+    const times = M.cum[p.key];
+    const pts = [[M.t0, 0]].concat(times.map((t, j) => [t, j + 1])).concat([[M.t1, times.length]]);
+    g.append('path').datum(pts).attr('fill', p.color).attr('fill-opacity', 0.1).attr('d', d3.area().curve(d3.curveStepAfter).x(d => x(d[0])).y0(y(0)).y1(d => y(d[1])));
+    g.append('path').datum(pts).attr('fill', 'none').attr('stroke', p.color).attr('stroke-width', 2).attr('stroke-linejoin', 'round').attr('d', d3.line().curve(d3.curveStepAfter).x(d => x(d[0])).y(d => y(d[1])));
+    g.append('circle').attr('cx', x(M.t1)).attr('cy', y(times.length)).attr('r', 3.5).attr('fill', p.color);
+    g.append('text').attr('class', 'val').attr('x', x(M.t1) + 7).attr('y', y(times.length) + 4).text(int(times.length));
+    const cur = g.append('line').attr('y1', oy + titleH + 2).attr('y2', y(0)).attr('stroke', C.ink).attr('stroke-width', 1.2).attr('opacity', 0).attr('pointer-events', 'none');
+    const hov = g.append('line').attr('y1', oy + titleH + 2).attr('y2', y(0)).attr('stroke', C.ink3).attr('stroke-width', 1).attr('opacity', 0).attr('pointer-events', 'none');
+    const dot = g.append('circle').attr('r', 3.5).attr('fill', p.color).attr('stroke', C.surface).attr('stroke-width', 1.5).attr('opacity', 0).attr('pointer-events', 'none');
+    g.append('rect').attr('x', ox + ml).attr('y', oy + titleH).attr('width', pw - ml - mr).attr('height', ph).attr('fill', 'transparent')
+      .on('pointermove', ev => { const t = +x.invert(d3.pointer(ev)[0]); hoverAll(t); const c = M.countAt(t);
+        Tip.open().title(fmtDate(new Date(t))).row(int(c.exposed), panels[0].label.toLowerCase(), panels[0].color).row(int(c.adopted), 'adopted', panels[1].color).row(int(c.rejected), 'rejected at least once', panels[2].color);
+        const near = M.annotations.filter(a => a.kind !== 'goal' && Math.abs(x(a.tt) - x(t)) < 5); near.forEach(a => Tip.note(a.label));
+        Tip.show(ev.clientX, ev.clientY); })
+      .on('pointerleave', () => { hoverAll(null); Tip.hide(); });
+    parts.push({ x, y, cur, hov, dot, key: p.key, oy });
+  });
+  function hoverAll(t) {
+    parts.forEach(pp => {
+      if (t == null) { pp.hov.attr('opacity', 0); pp.dot.attr('opacity', 0); return; }
+      const v = M.countAt(t)[pp.key];
+      pp.hov.attr('x1', pp.x(t)).attr('x2', pp.x(t)).attr('opacity', 1);
+      pp.dot.attr('cx', pp.x(t)).attr('cy', pp.y(v)).attr('opacity', 1);
+    });
+  }
+  curves = { cursor(t) { parts.forEach(pp => { if (t == null) pp.cur.attr('opacity', 0); else pp.cur.attr('x1', pp.x(t)).attr('x2', pp.x(t)).attr('opacity', 0.85); }); } };
+}
+
+/* ---------- quotes ---------- */
+function renderQuotes(M) {
+  const card = $('#card-quotes');
+  card.hidden = !M.quotes.length;
+  const ol = $('#quotes'); ol.replaceChildren();
+  M.quotes.forEach(qq => {
+    const li = el('li');
+    li.append(el('div', 'q-date', fmtDate(new Date(qq.tt))));
+    const body = el('div', 'q-body');
+    const chip = el('span', 'chip'); const d = el('span', 'dot'); d.style.setProperty('--k', labVar(qq.agent ? qq.agent.labKey : 'other'));
+    chip.append(d, document.createTextNode((qq.agentName || 'Unknown agent') + (qq.agent ? ' · ' + qq.agent.lab : '')));
+    body.append(chip, el('p', 'q-text', qq.text));
+    if (qq.note) body.append(el('p', 'q-note', qq.note));
+    li.append(body); ol.append(li);
+  });
+}
+
+/* ---------- legends ---------- */
+function renderLegends(M) {
+  const st = M.events.reduce((s, e) => s.add(e.stance), new Set());
+  const ch = M.events.reduce((s, e) => s.add(e.channel), new Set());
+  const stanceItems = TraceData.STANCES.filter(s => st.has(s)).map(s => ({ label: STANCE_LABEL[s], draw: g => g.append('path').attr('transform', 'translate(7,7)').attr('d', d3.symbol(s === 'mutates' ? d3.symbolStar : d3.symbolCircle, s === 'mutates' ? 80 : 60)()).attr('fill', C.s[s]) }));
+  const chanItems = TraceData.CHANNELS.filter(c => ch.has(c)).map(c => ({ label: CHANNEL_LABEL[c], draw: g => {
+    const p = g.append('path').attr('transform', 'translate(7,7)').attr('d', d3.symbol(SYM[c], c === 'summary' ? 42 : 60)());
+    if (c === 'summary') p.attr('fill', 'none').attr('stroke', C.ink2).attr('stroke-width', 2); else p.attr('fill', C.ink2);
+  } }));
+  legend($('#lg-lane'), [{ title: 'Stance' }].concat(stanceItems, [{ sep: true }, { title: 'Channel' }], chanItems));
+  const more = [
+    { label: 'Faded: confidence 1, or auto-detected (unlabelled)', draw: g => g.append('circle').attr('cx', 7).attr('cy', 7).attr('r', 4.5).attr('fill', C.s.endorses).attr('opacity', 0.35) },
+    { label: 'Adoption', draw: g => g.append('circle').attr('cx', 7).attr('cy', 7).attr('r', 6).attr('fill', 'none').attr('stroke', C.ink).attr('stroke-width', 1.4) },
+    { label: 'Independent adoption', draw: g => g.append('circle').attr('cx', 7).attr('cy', 7).attr('r', 6).attr('fill', 'none').attr('stroke', C.ink).attr('stroke-width', 1.4).attr('stroke-dasharray', '2.2 2.2') }
+  ];
+  if (M.hasExposures) {
+    const heat = expHeat(M), mx = Math.max(2, M.expWeekMax);
+    const steps = [1, Math.round(Math.sqrt(mx)), mx].filter((v, i, a) => a.indexOf(v) === i);
+    more.push({ label: 'Exposures per week (' + steps.join(' → ') + ')', w: 30, draw: g => steps.forEach((v, i) => g.append('rect').attr('x', i * 10).attr('y', 2).attr('width', 9).attr('height', 10).attr('fill', C.ink).attr('fill-opacity', heat(v))) });
+    more.push({ label: 'First exposure', w: 6, draw: g => g.append('line').attr('x1', 3).attr('x2', 3).attr('y1', 2).attr('y2', 12).attr('stroke', C.ink2).attr('stroke-width', 1.5) });
+  }
+  if (M.persistence.length) more.push({ label: 'In memory', w: 18, draw: g => g.append('rect').attr('x', 0).attr('y', 6).attr('width', 18).attr('height', 2.5).attr('rx', 1.25).attr('fill', C.ink2) });
+  const ek = new Set(M.edges.map(e => e.kind));
+  const edgeItems = TraceData.EDGE_KINDS.filter(k => ek.has(k)).map(k => ({ label: EDGE_LABEL[k], w: 20, draw: g => g.append('line').attr('x1', 1).attr('x2', 19).attr('y1', 7).attr('y2', 7).attr('stroke', edgeColor(k)).attr('stroke-width', 1.6).attr('stroke-dasharray', EDGE_DASH[k]) }));
+  if (M.annotations.some(a => a.kind === 'goal')) more.push({ label: 'Goal period', w: 18, draw: g => g.append('rect').attr('x', 0).attr('y', 2).attr('width', 18).attr('height', 10).attr('rx', 2).attr('fill', C.grid).attr('stroke', C.axis).attr('stroke-width', 0.5) });
+  if (M.annotations.some(a => a.kind !== 'goal' && a.kind !== 'intervention')) more.push({ label: 'Annotation', w: 10, draw: g => g.append('line').attr('x1', 5).attr('x2', 5).attr('y1', 0).attr('y2', 14).attr('stroke', C.ink3).attr('stroke-dasharray', '3 3') });
+  if (M.annotations.some(a => a.kind === 'intervention')) more.push({ label: 'Intervention', w: 10, draw: g => g.append('line').attr('x1', 5).attr('x2', 5).attr('y1', 0).attr('y2', 14).attr('stroke', C.ink).attr('stroke-width', 1.4) });
+  legend($('#lg-lane2'), more.concat(edgeItems.length ? [{ sep: true }].concat(edgeItems) : []));
+  const node = (fill, stroke, sw, op, halo, dash) => g => {
+    if (halo) g.append('circle').attr('cx', 8).attr('cy', 8).attr('r', 7).attr('fill', 'none').attr('stroke', halo).attr('stroke-width', 1.6).attr('stroke-dasharray', dash);
+    g.append('circle').attr('cx', 8).attr('cy', 8).attr('r', 4).attr('fill', fill).attr('stroke', stroke).attr('stroke-width', sw).attr('opacity', op);
+  };
+  const labItems = M.labs.slice(0, 8).map(l => ({ label: l.lab, w: 10, draw: g => g.append('circle').attr('cx', 5).attr('cy', 7).attr('r', 4.5).attr('fill', C.lab[l.key]) }));
+  legend($('#lg-net'), [{ title: 'State' },
+    { label: 'Not yet exposed', w: 16, h: 16, draw: node(C.surface, C.ink3, 1.2, 0.4) },
+    { label: M.hasExposures ? 'Exposed' : 'Active', w: 16, h: 16, draw: node(C.surface, C.ink3, 2, 1) },
+    { label: 'Adopted', w: 16, h: 16, draw: node(C.ink3, C.surface, 1.5, 1, C.s.endorses) },
+    { label: 'Rejecting', w: 16, h: 16, draw: node(C.ink3, C.surface, 1.5, 1, C.s.rejects, '3 2') },
+    { sep: true }, { title: 'Lab' }].concat(labItems, M.labs.length > 8 ? [{ label: '+' + (M.labs.length - 8) + ' more', w: 1, draw: () => {} }] : []));
+}
+
+/* ---------- tables ---------- */
+const dt = t => Number.isFinite(t) ? fmtDT(new Date(t)) : null;
+const dd = t => Number.isFinite(t) ? fmtDate(new Date(t)) : null;
+tables['tbl-lane'] = M => [makeTable(el('div'), [
+  { label: 'Time', get: e => dt(e.tt), cls: 'code' }, { label: 'Agent', get: e => e.agent.name }, { label: 'Lab', get: e => e.agent.lab },
+  { label: 'Channel', get: e => CHANNEL_LABEL[e.channel] }, { label: 'Stance', get: e => STANCE_LABEL[e.stance] }, { label: 'Conf', get: e => e.conf, num: true },
+  { label: 'Room', get: e => e.room }, { label: 'Snippet', get: e => e.snippet, cls: 'wrap' }
+], M.events, int(M.events.length) + ' events, oldest first')];
+tables['tbl-net'] = M => {
+  const out = [makeTable(el('div'), [
+    { label: 'Agent', get: a => a.name }, { label: 'Lab', get: a => a.lab }, { label: 'Group', get: a => a.group },
+    { label: M.hasExposures ? 'First exposure' : 'First event', get: a => dd(a.everT), cls: 'code' },
+    { label: 'Adopted', get: a => dd(a.adoptT), cls: 'code' }, { label: 'Independent', get: a => a.adoption ? (a.adoption.independent ? 'yes' : 'no') : null },
+    { label: 'First rejection', get: a => dd(a.firstRej), cls: 'code' }, { label: 'Events', get: a => a.events.length, num: true },
+    { label: 'Links out', get: a => a.outE, num: true }, { label: 'Links in', get: a => a.inE, num: true }
+  ], M.agents.slice().sort((a, b) => (a.everT === b.everT ? a.idx - b.idx : (a.everT === Infinity ? 1 : b.everT === Infinity ? -1 : a.everT - b.everT))), 'Agents')];
+  const wrap2 = el('div');
+  if (M.edges.length) out.push(makeTable(wrap2, [
+    { label: 'Time', get: e => dt(e.tt), cls: 'code' }, { label: 'From', get: e => e.from.name }, { label: 'To', get: e => e.to.name },
+    { label: 'Kind', get: e => EDGE_LABEL[e.kind] }, { label: 'Evidence', get: e => e.evidence, cls: 'wrap' }
+  ], M.edges, 'Links'));
+  return out;
+};
+tables['tbl-curves'] = M => {
+  const ts = Array.from(new Set(M.cum.exposed.concat(M.cum.adopted, M.cum.rejected))).sort((a, b) => a - b);
+  return [makeTable(el('div'), [
+    { label: 'Date', get: t => dt(t), cls: 'code' }, { label: M.hasExposures ? 'Exposed' : 'Active', get: t => M.countAt(t).exposed, num: true },
+    { label: 'Adopted', get: t => M.countAt(t).adopted, num: true }, { label: 'Rejected at least once', get: t => M.countAt(t).rejected, num: true }
+  ], ts, 'Running totals at each change')];
+};
+
+/* ---------- format section: schema ---------- */
+(function setupSchema() {
+  const s = PAYLOAD.schema;
+  if (!s) { $('#schema-line').textContent = 'A JSON Schema for this format is planned at village_tools/swarmtrace/trace.schema.json; until it lands, the table below and the viewer’s own checks are the reference.'; return; }
+  const txt = JSON.stringify(s, null, 2);
+  $('#schema-line').replaceChildren(document.createTextNode('The full rules are in the JSON Schema at '), el('code', null, PAYLOAD.schemaPath || 'village_tools/swarmtrace/trace.schema.json'), document.createTextNode('; the copy bundled with this page is below.'));
+  $('#schema-controls').hidden = false;
+  const pre = $('#schema-pre'); pre.textContent = txt;
+  $('#schema-toggle').addEventListener('click', ev => { pre.hidden = !pre.hidden; ev.target.setAttribute('aria-expanded', String(!pre.hidden)); ev.target.textContent = pre.hidden ? 'Show JSON Schema' : 'Hide JSON Schema'; });
+  $('#schema-copy').addEventListener('click', () => {
+    const done = m => { $('#schema-copied').textContent = m; };
+    try {
+      navigator.clipboard.writeText(txt).then(() => done('Copied.'), () => { pre.hidden = false; const r = document.createRange(); r.selectNodeContents(pre); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); done('Copy is blocked here; the schema is selected, press Ctrl+C.'); });
+    } catch (e) { done('Copy is blocked here; select the schema text instead.'); }
+  });
+})();
+$('#built').textContent = PAYLOAD.generated || 'from the template (no bundled traces)';
+
+/* ---------- controls ---------- */
+document.querySelectorAll('[data-order]').forEach(b => b.addEventListener('click', () => {
+  state.order = b.dataset.order;
+  document.querySelectorAll('[data-order]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  const M = currentModel(); if (M) safe(() => renderSwimlane(M));
+}));
+document.querySelectorAll('[data-net]').forEach(b => b.addEventListener('click', () => {
+  state.netView = b.dataset.net;
+  const M = currentModel(); if (M) safe(() => renderNetwork(M));
+}));
+$('#show-edges').addEventListener('change', ev => { state.showEdges = ev.target.checked; const M = currentModel(); if (M) safe(() => renderSwimlane(M)); });
+
+/* ---------- render loop ---------- */
+function safe(fn) { try { fn(); } catch (err) { console.error(err); } }
+function renderAll() {
+  readColors();
+  Tip.hide();
+  const entry = currentEntry();
+  if (!entry) { $('#views').hidden = true; $('#t-title').textContent = 'No trace loaded'; $('#t-eyebrow').textContent = ''; $('#t-source').textContent = 'Open a trace file to start.'; return; }
+  const M = currentModel();
+  safe(() => renderHeader(entry, M));
+  lane = null; net = null; curves = null;
+  if (!M) return;
+  $('#zoom-reset').disabled = !state.zoom;
+  [() => renderLegends(M), () => renderSwimlane(M), () => renderOverview(M), () => renderNetwork(M), () => renderCurves(M), () => renderQuotes(M), renderDetail, refreshTables].forEach(safe);
+  placeCursor();
+}
+
+const initial = (location.hash || '').slice(1);
+const firstOk = Store.entries.find(e => !e.check.errors.length) || Store.entries[0];
+state.token = (initial && Store.get(initial)) ? initial : (firstOk ? firstOk.token : null);
+renderPicker();
+renderAll();
+
+let raf = 0;
+const schedule = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(renderAll); };
+const main = $('main');
+let lastW = main.clientWidth, rt = 0;
+const onResize = () => { const w = main.clientWidth; if (w === lastW) return; lastW = w; clearTimeout(rt); rt = setTimeout(renderAll, 150); };
+if (window.ResizeObserver) new ResizeObserver(onResize).observe(main); else window.addEventListener('resize', onResize);
+const mq = window.matchMedia('(prefers-color-scheme: dark)');
+if (mq.addEventListener) mq.addEventListener('change', schedule); else if (mq.addListener) mq.addListener(schedule);
+new MutationObserver(schedule).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+})();
+</script>
