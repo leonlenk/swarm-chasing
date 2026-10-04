@@ -7,9 +7,9 @@
     swarm-mcp export --out DIR [filters]   export a redacted subset of the store, then check it
 
 ``add --adapter auto`` (the default) picks the adapter from the path: ``--mapping``
-given -> mapped; the AI Village file set -> ai_village; a bare git repository
-(a directory with HEAD, objects/ and refs/ that git takes for a repository root) -> git;
-anything else is mapped with ``mappings/<source>.json`` when it exists (re-runs
+given -> mapped; the AI Village file set -> ai_village; a git repository root
+(a bare repository with HEAD, objects/ and refs/, or the top folder of a working
+tree, that git takes for a repository root) -> git; anything else is mapped with ``mappings/<source>.json`` when it exists (re-runs
 keep hand edits; delete it to redraft), else profiled and mapped by a draft
 from ``--agent``, checked (it stops with the report on failure) and then
 ingested. ``--adapter wiki`` (the collusion.wiki explorer SQLite schema) is
@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shlex
 import sys
 from pathlib import Path
 from typing import Any, Callable
@@ -125,11 +126,28 @@ def git_root(path: Path) -> Path | None:
 
 
 def git_repo_dir(path: Path) -> Path | None:
-    """``path`` if it is a bare git repository (auto-detect): HEAD, objects/ and refs/, and git agrees it is a
-    repository root (e.g. ``data/ai-village/repos/rpg-game.git``)."""
-    if not ((path / "HEAD").is_file() and (path / "objects").is_dir() and (path / "refs").is_dir()):
+    """The git directory to read when auto-detecting: ``path`` for a bare repository (HEAD, objects/ and refs/,
+    e.g. ``data/ai-village/repos/rpg-game.git``), ``path/.git`` for the top folder of a working tree; only when
+    git agrees it is a repository root (``git_root``)."""
+    bare = (path / "HEAD").is_file() and (path / "objects").is_dir() and (path / "refs").is_dir()
+    if not (bare or (path / ".git").exists()):
         return None
-    return path if git_root(path) == path else None
+    return git_root(path)
+
+
+def enclosing_repo(path: Path) -> Path | None:
+    """The top folder of the git working tree that contains ``path`` (None if there is none)."""
+    import subprocess
+
+    try:
+        res = subprocess.run(
+            ["git", "-C", str(path if path.is_dir() else path.parent), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=30,
+        )  # fmt: skip
+    except (OSError, subprocess.SubprocessError):
+        return None
+    top = res.stdout.strip() if res.returncode == 0 else ""
+    return Path(top) if top else None
 
 
 def default_name(path: Path) -> str:
@@ -236,6 +254,13 @@ def _replaced_note(res: dict[str, Any]) -> str:
 _BUILTIN_LABEL = {"git": "a bare git repository", "wiki": "a wiki database"}
 
 
+def _label(name: str, path: Path) -> tuple[str, Path]:
+    """(what the dataset is, the folder to name) for the messages: a working tree is named by its top folder."""
+    if name == "git" and path.name == ".git":
+        return "a git working tree", path.parent
+    return _BUILTIN_LABEL[name], path
+
+
 def _inspect_counts(info: dict[str, Any]) -> list[str]:
     """Counts from an adapter's ``inspect``: numbers as is, lists by length, dicts of numbers flattened."""
     out = []
@@ -263,12 +288,12 @@ def _add_builtin(args: argparse.Namespace, name: str, path: Path, db: Path, *, d
     source = args.name
     if source is None and name == "git":  # the repo's name as a slug; a working tree's .git: the tree's name
         source = _slugify((path.parent if path.name == ".git" else path).name.removesuffix(".git"))
-    how = f"detected {_BUILTIN_LABEL[name]}" if detected else _BUILTIN_LABEL[name]
-    print(f"{how} in {path}: using the built-in {name} adapter")
+    label, shown = _label(name, path)
+    print(f"{'detected ' if detected else ''}{label} in {shown}: using the built-in {name} adapter")
     try:
         info = get_adapter(name, source).inspect(path)
     except Exception as e:  # noqa: BLE001 - not a repository / not a database: a user error, not a crash
-        raise CommandError(f"{path} is not readable as {_BUILTIN_LABEL[name]}: {type(e).__name__}: {e}") from None
+        raise CommandError(f"{shown} is not readable as {label}: {type(e).__name__}: {e}") from None
     final = source or info.get("source")
     if not _PART.match(str(final or "")):  # it prefixes every evidence id
         raise CommandError(f"source name {final!r} is not usable in evidence ids; pass --name SLUG")
@@ -338,6 +363,36 @@ def _add_mapped(args: argparse.Namespace, config: Config, path: Path, db: Path) 
     return 0
 
 
+def _drop_invalid_draft(res: dict[str, Any], path: Path) -> None:
+    """A draft that is not a valid mapping (e.g. no record table found) is never kept as mappings/<source>.json,
+    where every re-run would reuse it: delete it (and the task file), show the report and stop."""
+    from swarm_mcp.setup.check import format_report
+
+    mapping_path = Path(res["mapping_path"])
+    try:
+        records = json.loads(mapping_path.read_text(encoding="utf-8")).get("records")
+    except (OSError, ValueError, AttributeError):
+        records = None
+    for key in ("mapping_path", "task_path"):
+        if res.get(key):
+            Path(res[key]).unlink(missing_ok=True)
+    print(format_report(res["report"]))
+    if not records:
+        msg = f"found no table of timestamped records in {path}, so there is nothing to map; no mapping was written"
+    else:
+        msg = "the drafted mapping does not match the mapping schema (see the report), so it was not written"
+    msg += " (to map it anyway, write a mapping by hand and pass --mapping FILE)"
+    top = enclosing_repo(path)
+    if top is not None and top.resolve() != path.resolve():
+        msg += (
+            f"\n{path} is inside the git repository {top}: to add that repository, point at its root: "
+            f"swarm-mcp add {shlex.quote(str(top))}"
+        )
+    elif path.is_dir() and (path / "HEAD").is_file() and (path / "objects").is_dir():
+        msg += f"\n{path} looks like a git directory, but git does not read it as a repository"
+    raise CommandError(msg)
+
+
 def _draft(args: argparse.Namespace, path: Path, source: str, mappings_dir: Path):
     from swarm_mcp.setup.agent import SetupError, setup_dataset
 
@@ -347,6 +402,8 @@ def _draft(args: argparse.Namespace, path: Path, source: str, mappings_dir: Path
     except SetupError as e:
         raise CommandError(str(e)) from None
     mapping_path = Path(res["mapping_path"])
+    if any(p["code"] == "spec_invalid" for p in res["report"]["problems"]):
+        _drop_invalid_draft(res, path)
     print(f"wrote {mapping_path} and {res['log_path']}")
     for n in res.get("notes") or []:
         print(f"  note: {n}")
@@ -530,7 +587,8 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("path", help="dataset folder or file, e.g. data/ai-village or data/ai-village/repos/rpg-game.git")
     a.add_argument(
         "--adapter", choices=ADD_ADAPTERS, default="auto",
-        help="auto = --mapping given -> mapped, the AI Village file set -> village, a bare git repo -> git, "
+        help="auto = --mapping given -> mapped, the AI Village file set -> village, a git repo root (bare or "
+        "working tree) -> git, "
         "else mapped with a drafted mapping; wiki (a collusion.wiki explorer SQLite db) is used only when given",
     )  # fmt: skip
     a.add_argument(

@@ -14,7 +14,7 @@ from test_git_subtasks import make_repo
 from test_mapped_ingest import BOARD_SPEC
 from test_wiki import make_wiki
 
-from swarm_mcp.cli import main
+from swarm_mcp.cli import default_name, main
 from swarm_mcp.scope import db
 
 EMAIL = "bob.smith@gmail.com"
@@ -321,10 +321,10 @@ def test_add_git_needs_a_repository_root(project: Path, capsys):
     assert not store.exists()
 
     assert git_repo_dir(bare) == bare and git_root(bare) == bare  # a bare repo
-    assert git_repo_dir(tree) is None and git_root(tree) == tree / ".git"  # a working tree: only when asked
+    assert git_repo_dir(tree) == tree / ".git" and git_root(tree) == tree / ".git"  # a working tree's top folder
     assert cli("add", "data/work-repo", "--adapter", "git", "--dry-run") == 0
     out = capsys.readouterr().out
-    assert f"in {tree / '.git'}" in out and "dry run: source 'work-repo'" in out
+    assert f"a git working tree in {tree}:" in out and "dry run: source 'work-repo'" in out
     assert cli("add", "data/work-repo", "--adapter", "git") == 0
     assert "ingested source 'work-repo' (git adapter)" in capsys.readouterr().out
     assert table_count(store, "periods", "work-repo") == 0 and table_count(store, "agents", "work-repo") > 0
@@ -405,3 +405,30 @@ def test_add_wiki_needs_a_db_in_the_given_folder(project: Path, capsys, monkeypa
     assert cli("add", "data/My Wiki", "--adapter", "wiki") == 2  # default source 'My Wiki': not an id part
     assert "pass --name" in capsys.readouterr().err
     assert [c[0] for c in calls] == ["inspect"]
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_add_auto_detects_a_working_tree_and_never_keeps_an_empty_draft(project: Path, capsys):
+    """Regression: auto-detect only knew bare repositories, so a working tree, a folder inside one or a fake
+    *.git fell through to the mapping drafter, which wrote mappings/<name>.json with no records (spec_invalid);
+    every re-run then reused that junk mapping. A working tree was also labelled 'a bare git repository'."""
+    make_repo(project / "data" / "repos")  # also leaves the working tree data/work-repo (with commits)
+    tree = project / "data" / "work-repo"
+    mappings = project / "mappings"
+    assert cli("add", "data/work-repo", "--dry-run") == 0
+    out = capsys.readouterr().out
+    assert f"detected a git working tree in {tree}: using the built-in git adapter" in out
+    assert "bare" not in out and "dry run: source 'work-repo'" in out
+
+    lookalike = project / "data" / "lookalike.git"  # HEAD, objects/ and refs/, but not a repository
+    for d in ("objects", "refs"):
+        (lookalike / d).mkdir(parents=True)
+    (lookalike / "HEAD").write_text("")
+    for sub, hint in ((tree / "src", f"inside the git repository {tree}"), (lookalike, "git does not read it")):
+        for _ in range(2):  # a re-run drafts again: nothing junk was kept to be reused
+            assert cli("add", str(sub), "--dry-run") == 2
+            out, err = capsys.readouterr()
+            assert "spec_invalid" in out and "using existing mapping" not in out
+            assert "found no table of timestamped records" in err and "no mapping was written" in err and hint in err
+            assert not (mappings / f"{default_name(sub)}.json").exists()
+    assert not list(mappings.glob("*.json")) or all(f.name.endswith(".setup.json") for f in mappings.glob("*"))
