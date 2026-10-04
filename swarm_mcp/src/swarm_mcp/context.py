@@ -13,7 +13,6 @@ from typing import Any, Callable, TypeVar
 
 from swarm_mcp import sdk
 from swarm_mcp.config import Config
-from swarm_mcp.events import EventSource, EventSources, make_event_id
 from swarm_mcp.toolkit import Scrubber, clamp_limit, untrusted, wrap_tool
 
 T = TypeVar("T")
@@ -103,7 +102,6 @@ class Registry:
     def __init__(self) -> None:
         self.records: dict[str, ModuleRecord] = {}
         self.notes: list[str] = []  # server-level notes, e.g. unknown module names
-        self.events = EventSources()  # event_id sources registered by modules (see events.py)
 
     def add(self, rec: ModuleRecord) -> ModuleRecord:
         self.records[rec.name] = rec
@@ -154,30 +152,6 @@ class ModuleContext:
     def lazy(self, key: str, loader: Callable[[], T]) -> T:
         """Module-namespaced ``cache.get``."""
         return self.cache.get(f"{self.name}:{key}", loader)
-
-    def event_id(self, kind: str, local_id: str, source: str | None = None) -> str:
-        """Build an event id owned by this module: ``<source or NAME>:<kind>:<local_id>``."""
-        return make_event_id(source or self.name, kind, local_id)
-
-    def event_source(
-        self, kinds: dict[str, str], *, source: str | None = None, description: str = ""
-    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-        """Register the resolver that makes this module's event ids retrievable through ``core_get_event``.
-
-        ``kinds`` maps each kind to a one-line description. The resolver is called as
-        ``fn(kind, local_id, before=, after=, max_chars=)`` and returns
-        ``{"event": record, "before": [...], "after": [...], "context": "..."}`` (see ``events.Resolver``).
-        """
-
-        def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-            self.registry.events.add(
-                EventSource(
-                    name=source or self.name, owner=self.name, kinds=dict(kinds), resolve=fn, description=description
-                )
-            )
-            return fn
-
-        return decorator
 
     def limit(self, limit: int | None, default: int | None = None) -> tuple[int, str | None]:
         return clamp_limit(limit, default or self.config.default_limit, self.config.max_limit)

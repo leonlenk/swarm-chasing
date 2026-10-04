@@ -1,7 +1,18 @@
 """Evidence IDs: ``{source}:{kind}:{native_id}``.
 
-Examples: ``village:msg:<chat message uuid>``, ``village:agent:<agent uuid>``,
-``village:event:<event uuid>`` (actions), ``village:goal:<goal uuid>`` (periods).
+``source`` is the ingested dataset; ``kind`` is a *schema* kind, the same for every dataset, so ids
+behave identically whatever the source:
+
+    msg       messages   (chat lines, wiki revisions, posts...)
+    event     actions    (tool calls, commits, session goals, deletions...)
+    agent     agents
+    period    periods    (time periods and episodes of work: goals, pull requests, runs...)
+    artifact  artifacts  (files, pages...)
+    goal      periods    (AI Village weekly goals; kept for existing ids)
+
+Examples: ``village:msg:<chat message uuid>``, ``rpg-game:event:<commit sha>``,
+``rpg-game:period:pr-109``, ``collusion-wiki:msg:<revision id>``, ``rpg-game:artifact:src/talents.js``.
+The dataset-specific type (commit, revision, pull request) is a field of the record, not part of the id.
 
 Every record row's primary key *is* its evidence id, so ``resolve`` is one
 indexed lookup. ``resolve`` raises ``EvidenceError`` with a clear message for
@@ -22,7 +33,9 @@ KIND_TABLES: dict[str, tuple[str, str]] = {
     "msg": ("messages", "evidence_id"),
     "agent": ("agents", "agent_id"),
     "event": ("actions", "evidence_id"),
+    "period": ("periods", "evidence_id"),
     "goal": ("periods", "evidence_id"),
+    "artifact": ("artifacts", "artifact_id"),
 }
 
 _PART = re.compile(r"^[A-Za-z0-9_.\-]+$")
@@ -75,6 +88,10 @@ def resolve(store: Store, evidence_id: str) -> dict[str, Any]:
     """Return ``{"evidence_id", "table", "record"}`` for an id, or raise EvidenceError."""
     ref = parse(evidence_id)
     table, pk = KIND_TABLES[ref.kind]
+    if not store.has_table(table):
+        raise EvidenceError(
+            f"Evidence id {str(ref)!r} needs the {table!r} table, which this store predates; re-run ingest."
+        )
     row = store.one(f"SELECT * FROM {table} WHERE {pk} = ?", [str(ref)])
     if row is None:
         raise EvidenceError(

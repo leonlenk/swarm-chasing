@@ -7,8 +7,12 @@ store with a unified schema. Every record has an **evidence id**
 result carries those ids, so claims can be cited and checked against the raw
 records.
 
-The only adapter so far is **AI Village** (AI Digest's long-running experiment
-in which frontier-model agents share a group chat and pursue weekly goals).
+Adapters so far: **AI Village** (AI Digest's long-running experiment in which
+frontier-model agents share a group chat and pursue weekly goals), **git**
+(a repo the agents built: commits, pull requests, files) and **wiki**
+(edit histories such as collusion.wiki). Evidence ids use the same schema
+kinds for every source (`msg`, `event`, `agent`, `period`, `artifact`), so
+all tools work on all of them; see [ADDING_MODULES.md](ADDING_MODULES.md).
 
 For module authoring and configuration details, see [ADDING_MODULES.md](ADDING_MODULES.md).
 
@@ -48,6 +52,16 @@ messages, 104,239 actions and 51 goal periods.
 
 `agent_memories` (2.4 GB) and computer-use turns are not read.
 
+Other sources go in the same store:
+
+```bash
+uv run --directory swarm_mcp swarm-mcp ingest git data/ai-village/repos/rpg-game.git   # ~11 s; source rpg-game
+uv run --directory swarm_mcp swarm-mcp ingest wiki data/collusion-wiki                  # ~1 s; source collusion-wiki
+```
+
+They add `artifacts` (files, pages) and `touches` (which record created, modified, deleted or mentioned
+which artifact) to the tables above.
+
 ## Connect to Claude Code
 
 The repo's `.mcp.json` registers the server as **`swarm`**, so Claude Code
@@ -65,6 +79,7 @@ Tools (call `core_list_modules` to see what loaded and why):
 | `scope` | `scope_list_sources`, `scope_agents`, `scope_search`, `scope_get_record`, `scope_messages`, `scope_agent_profile`, `scope_timeline`, `scope_comm_graph` |
 | `findings` | `findings_record`, `findings_list`, `findings_spotcheck` |
 | `village` | `village_goals`, `village_goal` (AI Village goal periods), plus resources `village://readme`, `village://schema` and `village://changelog` |
+| `subtasks` | `subtasks_corpora`, `subtasks_list`, `subtasks_get`, `subtasks_trace_pair`, `subtasks_locate` (for sources whose records touch artifacts: git, wiki) |
 | `core` | `core_list_modules`, `core_server_info` |
 
 Safety:

@@ -46,13 +46,14 @@ def cmd_ingest(args: argparse.Namespace, config: Config) -> int:
 
     path = resolve_data_dir(args.path)
     if args.inspect:
-        print(json.dumps(get_adapter(args.adapter).inspect(path), indent=2, default=str))
+        print(json.dumps(get_adapter(args.adapter, args.source).inspect(path), indent=2, default=str))
         return 0
     result = ingest(
         args.adapter,
         path,
         _db(args, config),
         include_events=not args.no_events,
+        source=args.source,
         progress=lambda m: print(m, file=sys.stderr),
     )
     print(json.dumps(result, indent=2))
@@ -94,8 +95,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", required=True)
 
     i = sub.add_parser("ingest", help="ingest a dataset into the SwarmScope DuckDB store (idempotent)")
-    i.add_argument("adapter", help="adapter name, e.g. ai_village")
-    i.add_argument("path", help="dataset directory, e.g. data/ai-village")
+    i.add_argument("adapter", help="adapter name: ai_village, git or wiki")
+    i.add_argument(
+        "path", help="dataset path, e.g. data/ai-village, data/ai-village/repos/rpg-game.git, data/collusion-wiki"
+    )
+    i.add_argument("--source", help="evidence-id source prefix (git/wiki default to the repo / folder name)")
     i.add_argument("--db", help="store path (default: $SWARMSCOPE_DB or data/swarmscope.duckdb)")
     i.add_argument("--no-events", action="store_true", help="skip events.jsonl.gz (actions table stays empty)")
     i.add_argument("--inspect", action="store_true", help="only describe the dataset (files, fields), load nothing")

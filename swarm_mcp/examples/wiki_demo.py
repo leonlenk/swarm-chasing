@@ -1,5 +1,6 @@
-"""The same tools on a non-village corpus: collusion.wiki, over the real MCP protocol (stdio).
+"""The same tools on a non-village source: collusion.wiki, over the real MCP protocol (stdio).
 
+    uv run --directory swarm_mcp swarm-mcp ingest wiki data/collusion-wiki
     uv run --directory swarm_mcp python examples/wiki_demo.py [query]
 
 Needs data/collusion-wiki/collusion-wiki.db (Simon Willison's SQLite build of the collusion.wiki export).
@@ -40,27 +41,26 @@ async def main() -> None:
             print(f"\n▶ {tool}({', '.join(f'{k}={v!r}' for k, v in args.items())})  [{time.perf_counter() - t:.1f}s]")
             return res.structured_content
 
-        d = await call("wiki_describe", corpus="collusion-wiki")
-        show("corpus", {"counts": d["counts"], "time_span": d["time_span"], "blind_spots": d["blind_spots"][:4]})
-
-        hits = await call("wiki_search", corpus="collusion-wiki", query=QUERY, limit=1)
-        hit = hits["results"][0]
+        src = {x["source"]: x for x in (await call("scope_list_sources"))["sources"]}["collusion-wiki"]
         show(
-            "search",
+            "source",
             {
-                "total_matches": hits["total_matches"],
-                "distinct_actors": hits["distinct_actors"],
-                "first": {k: hit[k] for k in ("event_id", "time", "actor", "location", "snippet")},
+                "row_counts": src["row_counts"],
+                "messages_ts": src["messages_ts"],
+                "blind_spots": src["ingest_meta"]["notes"][:4],
             },
         )
 
-        ctx = await call("core_get_event", event_id=hit["event_id"], before=1, after=2, max_chars=150)
-        show(
-            "same page, before/after",
-            [f"{r['time']} {r['actor']}: {r['text'][:100]}" for r in ctx["before"] + [ctx["event"]] + ctx["after"]],
-        )
+        hits = await call("scope_search", query=QUERY, source="collusion-wiki", limit=1)
+        hit = hits["results"][0]
+        show("search", {"total_matches": hits["total_matches"], "first": hit})
 
-        loc = await call("subtasks_locate", event_id=hit["event_id"])
+        rec = await call("scope_get_record", evidence_id=hit["evidence_id"], neighbors=2, max_chars=150)
+        around = rec["neighbors"]["before"] + [{"ts": rec["ts"], "author": rec["author"], "snippet": rec["content"]}]
+        around += rec["neighbors"]["after"]
+        show("same page, before/after", [f"{r['ts']} {r['author']}: {r['snippet']['content'][:100]}" for r in around])
+
+        loc = await call("subtasks_locate", event_id=hit["evidence_id"])
         sub = loc["matches"][0]["subtask"]
         show(
             "its subtask",
@@ -80,7 +80,7 @@ async def main() -> None:
         )
 
         got = await call("subtasks_get", subtask_id=sub["subtask_id"], max_members=5, max_chat=0)
-        show("publishers' page_family labels inside it", got["dataset_labels"])
+        show("dataset's own page categories inside it", got["dataset_labels"])
         show("participants", got["participants"][:5])
         show("handoffs", [f"{h['type']}: {h['summary']}" for h in got["handoffs"][:5]])
         show("unresolved", got["unresolved"])
@@ -94,14 +94,8 @@ async def main() -> None:
             ],
         )
 
-        shared = await call("wiki_actors", corpus="collusion-wiki", sort="ip16", limit=3)
-        show(
-            "labels used from the most IP /16 prefixes (one label != one agent)",
-            [
-                f"{a['actor']}: {a['revisions']} revisions from {a['ip16_prefixes']} /16 prefixes"
-                for a in shared["actors"]
-            ],
-        )
+        relent = await call("scope_get_record", evidence_id="collusion-wiki:agent:AgentRelent")
+        show("one label, many machines", {"agent": relent["display_name"], **relent["meta"]})
 
 
 if __name__ == "__main__":

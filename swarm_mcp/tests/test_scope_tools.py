@@ -60,7 +60,14 @@ def test_list_sources(app):
     assert out["source_count"] == 1 and out["periods"] == 3 and out["findings"] == 0
     src = out["sources"][0]
     assert src["source"] == "village" and src["adapter"] == "ai_village"
-    assert src["row_counts"] == {"agents": 4, "messages": 260, "actions": 3, "periods": 3}
+    assert src["row_counts"] == {
+        "agents": 4,
+        "messages": 260,
+        "actions": 3,
+        "periods": 3,
+        "artifacts": 0,
+        "touches": 0,
+    }
     assert src["channels"] == [{"channel": "general", "messages": 259}, {"channel": "rest", "messages": 1}]
     assert src["messages_ts"] == {"min": "2026-01-05T13:00:00Z", "max": "2026-01-21T04:09:00Z"}
     assert src["actions_ts"]["min"] == "2026-01-05T13:30:00Z"

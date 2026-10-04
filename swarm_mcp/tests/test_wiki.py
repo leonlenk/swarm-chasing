@@ -1,4 +1,4 @@
-"""wiki module + subtasks on a wiki corpus, against a tiny database in the collusion.wiki explorer schema."""
+"""The wiki adapter and subtasks on a wiki source, against a tiny database in the collusion.wiki explorer schema."""
 
 from __future__ import annotations
 
@@ -6,8 +6,9 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from conftest import call, call_error, config_for
+from conftest import call, config_for
 
+from swarm_mcp.scope.ingest import ingest
 from swarm_mcp.server import build_server
 
 SCHEMA = """
@@ -98,51 +99,55 @@ def make_wiki(root: Path) -> Path:
 
 @pytest.fixture
 def wapp(tmp_path: Path):
-    make_wiki(tmp_path / "data")
-    return build_server(config_for(tmp_path / "data"))
+    data = tmp_path / "data"
+    make_wiki(data)
+    ingest("wiki", data / "test-wiki", data / "swarmscope.duckdb", progress=lambda _m: None)
+    return build_server(config_for(data))
 
 
-def test_describe_and_blind_spots(wapp):
-    out = call(wapp, "wiki_describe")
-    assert out["corpus"] == "test-wiki" and out["counts"]["revisions"] == 5 and out["counts"]["sessions"] == 5
-    assert any("blank label" in b for b in out["blind_spots"])
+def test_ingest_and_blind_spots(wapp):
+    src = call(wapp, "scope_list_sources")["sources"][0]
+    assert src["source"] == "test-wiki" and src["adapter"] == "wiki"
+    assert src["row_counts"]["messages"] == 5 and src["row_counts"]["artifacts"] == 3
+    assert any("self-chosen" in n for n in src["ingest_meta"]["notes"])
 
 
 def test_search_matches_only_added_text(wapp):
-    out = call(wapp, "wiki_search", query="Hungary")
+    out = call(wapp, "scope_search", query="Hungary")
     assert out["total_matches"] == 1  # later revisions repeat the body but did not add it
-    assert out["results"][0]["event_id"] == "wiki:revision:test-wiki/dse~OecdEvidence@1"
-    assert call(wapp, "wiki_search", query="cashier")["results"][0]["actor"] == "anon@50.5"
-    assert call(wapp, "wiki_search", query="OECD", actor="OecdHelper")["total_matches"] == 1
+    assert out["results"][0]["evidence_id"] == "test-wiki:msg:dse~OecdEvidence@1"
+    assert call(wapp, "scope_search", query="cashier")["total_matches"] == 1
 
 
-def test_event_ids(wapp):
-    ev = call(wapp, "core_get_event", event_id="wiki:revision:test-wiki/dse~OecdEvidence@2", before=1, after=1)
-    assert ev["event"]["actor"] == "OecdHelper" and ev["event"]["text"].startswith("Please share")
-    assert ev["event"]["page_family"] == "oecd-equity" and ev["context"] == "previous/next revisions of the same page"
-    assert [r["actor"] for r in ev["before"] + ev["after"]] == ["OecdScout", "OecdWatcher"]
-    page = call(wapp, "core_get_event", event_id="wiki:page:test-wiki/dse~OecdEvidence", after=5)
-    assert "Mirrored" in page["event"]["text"] and page["event"]["editors"] == 3 and len(page["after"]) == 3
-    sess = call(wapp, "core_get_event", event_id="wiki:session:test-wiki/dse~OecdEvidence@1")
-    assert sess["event"]["actor"] == "OecdScout" and "(created)" in sess["event"]["text"]
-    assert "No 'revision' record" in call_error(wapp, "core_get_event", event_id="wiki:revision:test-wiki/nope")
+def test_records_and_artifacts(wapp):
+    rev = call(wapp, "scope_get_record", evidence_id="test-wiki:msg:dse~OecdEvidence@2", neighbors=1)
+    assert rev["author"] == "OecdHelper" and rev["content"]["content"].startswith("Please share")
+    assert rev["channel"] == "dse:OecdEvidence" and rev["reply_to"] == "test-wiki:msg:dse~OecdEvidence@1"
+    assert rev["msg_type"] == "revision" and rev["meta"]["page_family"] == "oecd-equity"
+    assert rev["artifacts"] == [{"artifact_id": "test-wiki:artifact:dse~OecdEvidence", "op": "modify"}]
+    watcher = call(wapp, "scope_get_record", evidence_id="test-wiki:msg:dse~OecdEvidence@3")
+    assert {"artifact_id": "test-wiki:artifact:dse~RelayBoard", "op": "mention"} in watcher["artifacts"]
+    page = call(wapp, "scope_get_record", evidence_id="test-wiki:artifact:dse~OecdEvidence")
+    assert page["touches_by_op"] == {"create": 1, "modify": 2} and page["meta"]["category"] == "oecd-equity"
+    anon = call(wapp, "scope_get_record", evidence_id="test-wiki:agent:anon@50.5")
+    assert anon["meta"]["kind"] == "blank_label"
 
 
 def test_subtasks_on_a_wiki(wapp):
     corpora = {c["corpus"]: c for c in call(wapp, "subtasks_corpora")["corpora"]}
-    assert corpora["test-wiki"]["unit"] == "edit session"
+    assert corpora["test-wiki"]["grouping_periods"] == 0  # no periods: units are sessions
     pair = call(wapp, "subtasks_trace_pair", actor_a="OecdScout", actor_b="OecdHelper")
     (h,) = pair["handoffs"]
-    assert h["type"] == "builds_on" and h["from_actor"] == "OecdScout" and h["artifacts"] == ["dse~OecdEvidence"]
-    assert h["evidence"][0] == "wiki:revision:test-wiki/dse~OecdEvidence@1"
-    loc = call(wapp, "subtasks_locate", event_id="wiki:revision:test-wiki/dse~OecdEvidence@3", granularity="coarse")
+    assert h["type"] == "builds_on" and h["from_actor"] == "OecdScout"
+    assert h["artifacts"] == ["test-wiki:artifact:dse~OecdEvidence"]
+    assert h["evidence"][0] == "test-wiki:msg:dse~OecdEvidence@1"
+    loc = call(wapp, "subtasks_locate", event_id="test-wiki:msg:dse~OecdEvidence@3", granularity="coarse")
     sub = loc["matches"][0]["subtask"]
     got = call(wapp, "subtasks_get", subtask_id=sub["subtask_id"])
-    members = {m["event_id"] for m in got["members"]}
-    assert "wiki:session:test-wiki/dse~OecdEvidence@1" in members
+    assert got["unit"] == "session" and "test-wiki:msg:dse~OecdEvidence@1" in {m["event_id"] for m in got["members"]}
     assert got["dataset_labels"]["counts"].get("oecd-equity", 0) >= 2
-    # the link to RelayBoard is an explicit ref from Watcher's session to the session that created RelayBoard
-    inf = wapp.swarm_cache.get("subtasks:inference:test-wiki", lambda: None)
-    i = inf.index["wiki:session:test-wiki/dse~OecdEvidence@3"]
-    j = inf.index["wiki:session:test-wiki/dse~RelayBoard@1"]
+    # Watcher linked RelayBoard: an explicit ref from Watcher's session to the session that created that page
+    _, inf = wapp.swarm_cache.get("subtasks:inference:test-wiki", lambda: None)
+    i = inf.index["test-wiki:msg:dse~OecdEvidence@3"]
+    j = inf.index["test-wiki:msg:dse~RelayBoard@1"]
     assert inf.refs_raw[i, j] > 0

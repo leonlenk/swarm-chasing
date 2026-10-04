@@ -17,6 +17,7 @@ Conventions:
 
 from __future__ import annotations
 
+import collections
 import json
 import re
 from typing import Annotated, Any, Literal
@@ -173,7 +174,8 @@ def register(mcp, ctx) -> None:
                 src = r["source"]
                 rows = {
                     t: s.scalar(f"SELECT count(*) FROM {t} WHERE source = ?", [src])
-                    for t in ("agents", "messages", "actions", "periods")
+                    for t in ("agents", "messages", "actions", "periods", "artifacts", "touches")
+                    if s.has_table(t)
                 }
                 mt = s.one("SELECT min(ts) AS lo, max(ts) AS hi FROM messages WHERE source = ?", [src]) or {}
                 at = s.one("SELECT min(ts) AS lo, max(ts) AS hi FROM actions WHERE source = ?", [src]) or {}
@@ -209,8 +211,10 @@ def register(mcp, ctx) -> None:
             "periods": periods,
             "findings": findings,
             "notes": [
-                "Evidence ids: <source>:msg:<id> (messages), <source>:agent:<id>, <source>:event:<id> (actions), "
-                "<source>:goal:<id> (periods). Resolve any of them with scope_get_record.",
+                "Evidence ids are <source>:<kind>:<id> with the same kinds for every source: msg (messages), "
+                "event (actions), agent, period (periods; AI Village goals keep 'goal'), artifact (files, pages...). "
+                "Resolve any of them with scope_get_record.",
+                "ingest_meta.notes lists each source's blind spots; read them before drawing conclusions.",
                 "All timestamps are UTC.",
             ],
         }
@@ -400,7 +404,9 @@ def register(mcp, ctx) -> None:
     ) -> dict[str, Any]:
         """Resolve one evidence id to its full record: a message (time, channel, author, named recipients,
         content and surrounding messages), an action (kind, agent, content and the agent's adjacent actions),
-        an agent profile, or a period (label, start/end). Use it to verify and quote evidence."""
+        an agent profile, a period (label, start/end), or an artifact (a file or page, with the records that
+        created, changed or mentioned it). Messages and actions also list the artifacts they touched. Use it to
+        verify and quote evidence."""
         cap = short_cap(max_chars)
         with ctx.store() as s:
             hit = evidence.resolve(s, evidence_id)
@@ -454,6 +460,24 @@ def register(mcp, ctx) -> None:
                     message_count=s.scalar("SELECT count(*) FROM messages WHERE author_id = ?", [rec["agent_id"]]),
                     action_count=s.scalar("SELECT count(*) FROM actions WHERE agent_id = ?", [rec["agent_id"]]),
                 )
+            elif table == "artifacts":
+                touches = s.all(
+                    "SELECT t.record_id, t.op, t.ts FROM touches t WHERE t.artifact_id = ? ORDER BY t.ts, t.touch_id",
+                    [rec["artifact_id"]],
+                )
+                ops = collections.Counter(t["op"] for t in touches)
+                out.update(
+                    kind=rec["kind"],
+                    name=rec["name"],
+                    meta=_meta(rec["meta"]),
+                    touches_by_op=dict(ops),
+                    first_touches=[
+                        {"evidence_id": t["record_id"], "op": t["op"], "ts": ts_iso(t["ts"])} for t in touches[:10]
+                    ],
+                    last_touches=[
+                        {"evidence_id": t["record_id"], "op": t["op"], "ts": ts_iso(t["ts"])} for t in touches[10:][-5:]
+                    ],
+                )
             else:  # periods
                 n = None
                 if rec["start_ts"] is not None:
@@ -470,6 +494,20 @@ def register(mcp, ctx) -> None:
                     meta=_meta(rec["meta"]),
                     messages_in_period=n,
                 )
+                if s.has_table("actions"):
+                    members = s.all(
+                        "SELECT evidence_id FROM actions WHERE run_id = ? ORDER BY ts, evidence_id LIMIT 50",
+                        [rec["evidence_id"]],
+                    )
+                    if members:
+                        out["records"] = [m["evidence_id"] for m in members]
+            if table in ("messages", "actions") and s.has_table("touches"):
+                t = s.all(
+                    "SELECT artifact_id, op FROM touches WHERE record_id = ? ORDER BY touch_id LIMIT 50",
+                    [hit["evidence_id"]],
+                )
+                if t:
+                    out["artifacts"] = [{"artifact_id": x["artifact_id"], "op": x["op"]} for x in t]
         return out
 
     def _neighbors(

@@ -23,7 +23,14 @@ from swarm_mcp.scope.adapters import get_adapter
 
 log = logging.getLogger("swarm_mcp.scope.ingest")
 
-_ORDER = {"messages": "ts, evidence_id", "actions": "ts, evidence_id", "periods": "start_ts", "agents": "agent_id"}
+_ORDER = {
+    "messages": "ts, evidence_id",
+    "actions": "ts, evidence_id",
+    "periods": "start_ts",
+    "agents": "agent_id",
+    "artifacts": "artifact_id",
+    "touches": "ts, touch_id",
+}
 
 
 def _sql_str(s: str) -> str:
@@ -41,11 +48,12 @@ def ingest(
     db_path: Path,
     *,
     include_events: bool = True,
+    source: str | None = None,
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Ingest ``path`` with adapter ``adapter_name`` into ``db_path``. Returns counts and timing."""
     say = progress or (lambda msg: log.info(msg))
-    adapter = get_adapter(adapter_name)
+    adapter = get_adapter(adapter_name, source)
     path = Path(path)
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -60,7 +68,7 @@ def ingest(
                 model = schema.RECORD_MODELS[table]
                 handles[table].write(model.model_validate(row).model_dump_json() + "\n")
                 counts[table] += 1
-                if table == "messages" and counts[table] % 50000 == 0:
+                if table in ("messages", "touches") and counts[table] % 50000 == 0:
                     say(f"  read {counts[table]:,} messages ...")
         finally:
             for h in handles.values():
@@ -91,7 +99,13 @@ def ingest(
                     str(path),
                     datetime.now(timezone.utc).replace(tzinfo=None),
                     json.dumps(counts),
-                    json.dumps({"include_events": include_events, "schema_version": schema.SCHEMA_VERSION}),
+                    json.dumps(
+                        {
+                            "include_events": include_events,
+                            "schema_version": schema.SCHEMA_VERSION,
+                            "notes": list(getattr(adapter, "notes", []) or []),
+                        }
+                    ),
                 ],
             )
             con.execute("COMMIT")

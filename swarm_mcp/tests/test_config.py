@@ -14,7 +14,7 @@ def _status(app) -> dict[str, str]:
     return {r.name: r.status for r in app.swarm_registry.records.values()}
 
 
-ALL = {"core": "loaded", "findings": "loaded", "scope": "loaded", "village": "loaded"}
+ALL = {"core": "loaded", "findings": "loaded", "scope": "loaded", "subtasks": "loaded", "village": "loaded"}
 
 
 def test_default_loads_all(data_dir: Path):
@@ -23,7 +23,7 @@ def test_default_loads_all(data_dir: Path):
 
 def test_modules_allowlist_keeps_core(data_dir: Path):
     app = build_server(config_for(data_dir, SWARM_MCP_MODULES="village"))
-    assert _status(app) == {**ALL, "findings": "skipped", "scope": "skipped"}
+    assert _status(app) == {**ALL, "findings": "skipped", "scope": "skipped", "subtasks": "skipped"}
     app = build_server(config_for(data_dir, SWARM_MCP_MODULES="core"))
     st = _status(app)
     assert st["village"] == "skipped"
