@@ -202,7 +202,7 @@ def test_password_values(r):
 @pytest.mark.parametrize(
     "text",
     ["max_tokens: 4096", "token count: 123456789", f"monkey: {HEXKEY}", f"sort_key: {HEXKEY}",
-     "Password: required", "pwd: /home/leon/work", "password: ********", "api_key=YOUR_API_KEY_HERE",
+     "Password: required", "pwd: /home/user/work", "password: ********", "api_key=YOUR_API_KEY_HERE",
      f"commit {HEXKEY}", "uuid 16b4ab90-1234-4cde-8f00-0123456789ab", "token: 2026-01-15T13:00:00Z",
      "keyboard: mechanical-switches-x", "api_key: abc123"],
 )  # fmt: skip

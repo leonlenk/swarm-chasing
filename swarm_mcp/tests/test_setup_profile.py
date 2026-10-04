@@ -143,3 +143,38 @@ def test_summary_lists_tables_and_fields(tmp_path):
     root = make_csv_chat(tmp_path / "b")
     text = summarize(profile_path(root))
     assert "chatlog_export.csv" in text and "sent_epoch_ms" in text
+
+
+def test_json_with_a_utf8_bom_parses(tmp_path):
+    """Windows tools write a BOM; a .json array or object must still parse (``utf-8-sig``)."""
+    (tmp_path / "arr.json").write_text("﻿" + json.dumps([{"a": 1}, {"a": 2}]), encoding="utf-8")
+    (tmp_path / "obj.json").write_text("﻿" + json.dumps({"rows": [{"b": 1}, {"b": 2}]}), encoding="utf-8")
+    tables, _, skipped = readers.discover(tmp_path)
+    assert skipped == []
+    rows = {t.key: list(t.rows()) for t in tables}
+    assert rows == {"arr.json": [{"a": 1}, {"a": 2}], "obj.json#rows": [{"b": 1}, {"b": 2}]}
+
+
+def test_json_gz_object_is_capped_on_its_decompressed_size(tmp_path, monkeypatch):
+    """A small .json.gz that inflates past the object cap is skipped, not parsed whole."""
+    monkeypatch.setattr(readers, "JSON_OBJECT_MAX_BYTES", 1000)
+    with gzip.open(tmp_path / "big.json.gz", "wt", encoding="utf-8") as f:
+        f.write(json.dumps({"rows": [{"x": "y" * 50} for _ in range(100)]}))  # ~6 KB inflated
+    with gzip.open(tmp_path / "small.json.gz", "wt", encoding="utf-8") as f:
+        f.write(json.dumps({"rows": [{"x": 1}]}))
+    assert (tmp_path / "big.json.gz").stat().st_size < 1000  # the old compressed-size check let it through
+    tables, _, skipped = readers.discover(tmp_path)
+    assert [t.key for t in tables] == ["small.json.gz#rows"]
+    assert [(s["path"], "larger than 64 MB" in s["reason"]) for s in skipped] == [("big.json.gz", True)]
+
+
+def test_symlink_out_of_the_root_is_skipped(tmp_path):
+    root = tmp_path / "data"
+    (root / "sub").mkdir(parents=True)
+    (root / "in.jsonl").write_text('{"a": 1}\n')
+    (tmp_path / "outside.jsonl").write_text('{"secret": 1}\n')
+    (root / "sub" / "out.jsonl").symlink_to(tmp_path / "outside.jsonl")
+    (root / "sub" / "in-link.jsonl").symlink_to(root / "in.jsonl")  # inside the root: kept
+    tables, _, skipped = readers.discover(root)
+    assert sorted(t.key for t in tables) == ["in.jsonl", "sub/in-link.jsonl"]
+    assert skipped == [{"path": "sub/out.jsonl", "reason": "symlink to outside the dataset folder"}]

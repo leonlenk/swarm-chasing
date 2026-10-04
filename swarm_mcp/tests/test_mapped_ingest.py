@@ -149,3 +149,20 @@ def _crew_mapping(tmp_path: Path, root: Path) -> Path:
     mapping = tmp_path / "crew.json"
     mapping.write_text(json.dumps(draft_mapping(profile_path(root), "crew")))
     return mapping
+
+
+def test_duplicate_local_id_is_a_tool_error_and_rolls_back(mapped_store):
+    """Two records mapped to one local_id: a ToolInputError naming the id, not a raw DuckDB
+    ConstraintException, and the source's earlier rows survive (the DELETE is rolled back)."""
+    from swarm_mcp.toolkit import ToolInputError
+
+    store, mapping = mapped_store["store"], mapped_store["mapping"]
+    bad = json.loads(json.dumps(BOARD_SPEC))
+    bad["records"][0]["local_id"] = "thread_ref"  # a foreign key: ~20 posts per thread share it
+    mapping.write_text(json.dumps(bad))  # same mapping path, so the source owner matches
+    with pytest.raises(ToolInputError, match=r"duplicate evidence_id in messages: 'board:msg:post/\d+'") as ei:
+        ingest_mapped(mapping, mapped_store["root"], store)
+    assert "--dry-run" in str(ei.value) and "swarm-mcp add" in str(ei.value)
+    with db.connect(store) as s:
+        assert s.scalar("SELECT count(*) FROM messages WHERE source = 'board'") == 240
+        assert s.scalar("SELECT count(*) FROM actions WHERE source = 'board'") == 12

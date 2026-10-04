@@ -78,6 +78,7 @@ Start a session with `core_info`, or with the `investigate` prompt.
 | `swarm-mcp info [--json]` | modules (loaded or skipped, and why), sources with counts and date ranges, findings health, config. Exits 1 when a finding cites an id that does not resolve |
 | `swarm-mcp add <path> [--adapter auto\|village\|git\|wiki\|mapped] [--name SLUG] [--agent none\|api\|claude-code] [--mapping M] [--dry-run] [--replace] [--db]` | add or refresh a dataset in the store (see above) |
 | `swarm-mcp render timeline [--since --until --channel --source --top --out] [--no-explore]` | a self-contained HTML explorer in a paper figure style: each agent's activity over time (counts per bin, single messages when zoomed in; Village days when the store has village goals), who names whom in the window on screen, a thread reader (click a message: masked conversation around it, copyable evidence ids), and linked panels for goal recaps, notable moments, one agent over time and metrics over time. Every figure exports the current view as SVG or PNG at 5.5 in. `--no-explore` skips the linked panels. Default output `data/swarmscope-timeline.html` |
+| `swarm-mcp render subtasks [--corpus --out --title-chars]` | a self-contained HTML subtask map from the same inference as the `subtasks_*` tools: one row per inferred subtask on a time axis (switch method and granularity), who did what, typed handoffs with evidence ids, why each unit was grouped, a two-actor pair lens and method agreement. `--corpus` is any source whose records touch artifacts (a git repo, a wiki). Default output `data/swarmscope-subtasks-<corpus>.html` |
 | `swarm-mcp export --out DIR [--source --kind --channel --author --since --until --query] [--with-agents] [--keep-ips] [--no-check] [--json]` | export a redacted subset of the store for sharing, then rescan it (see Export) |
 
 Developer-only: `python -m swarm_mcp.bench generate|reference|score` (see ADDING_MODULES.md).
@@ -204,7 +205,7 @@ email_allowlist = ["agentvillage.org"]
 
 [server]
 # modules = ["core", "scope", "findings"]   # core is always loaded
-# disable = ["wiki"]
+# disable = ["subtasks"]
 max_text = 500
 ```
 
