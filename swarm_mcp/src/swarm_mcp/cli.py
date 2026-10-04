@@ -9,11 +9,13 @@
 ``add --adapter auto`` (the default) picks the adapter from the path: ``--mapping``
 given -> mapped; the AI Village file set -> ai_village; a bare git repository
 (a directory with HEAD, objects/ and refs/, or a ``*.git`` directory) -> git;
-anything else is profiled, mapped (a draft by ``--agent``), checked (it stops
-with the report on failure) and then ingested. ``--adapter wiki`` (the
-collusion.wiki explorer SQLite schema) is never auto-detected: pass it
-explicitly. ``--dry-run`` stops after the check (mapped) or only inspects the
-dataset (village, git, wiki). The developer benchmark is ``python -m swarm_mcp.bench``.
+anything else is mapped with ``mappings/<source>.json`` when it exists (re-runs
+keep hand edits; delete it to redraft), else profiled and mapped by a draft
+from ``--agent``, checked (it stops with the report on failure) and then
+ingested. ``--adapter wiki`` (the collusion.wiki explorer SQLite schema) is
+never auto-detected: pass it explicitly. ``--dry-run`` ingests nothing: it
+writes the draft mapping (when none exists) and stops after the check (mapped),
+or only inspects the dataset (village, git, wiki). The developer benchmark is ``python -m swarm_mcp.bench``.
 
 Relative paths are tried against the current directory first, then the project
 root (``uv run --directory swarm_mcp`` changes the cwd to swarm_mcp/).
@@ -252,8 +254,15 @@ def _add_mapped(args: argparse.Namespace, config: Config, path: Path, db: Path) 
     from swarm_mcp.setup.mapping import MappingError, load_spec
 
     mappings_dir = config.project_root / "mappings"
-    if args.mapping:
-        mapping_path = resolve_data_dir(args.mapping)
+    mapping_path = resolve_data_dir(args.mapping) if args.mapping else None
+    if mapping_path is None:
+        source = args.name or default_name(path)
+        if not _SLUG.match(source):
+            raise CommandError(f"--name must be a lowercase slug (letters, digits, _ or -), got {source!r}")
+        if (mappings_dir / f"{source}.json").is_file():  # never redraft over the user's edits
+            mapping_path = mappings_dir / f"{source}.json"
+            print(f"using existing mapping mappings/{source}.json (delete it to redraft)")
+    if mapping_path is not None:
         try:
             spec = load_spec(mapping_path)
         except MappingError as e:
@@ -264,10 +273,7 @@ def _add_mapped(args: argparse.Namespace, config: Config, path: Path, db: Path) 
         print(f"using mapping {mapping_path} (source '{source}')")
         _say("checking the mapping on a sample ...")
         report = run_check(spec, path)
-    else:
-        source = args.name or default_name(path)
-        if not _SLUG.match(source):
-            raise CommandError(f"--name must be a lowercase slug (letters, digits, _ or -), got {source!r}")
+    else:  # no mapping yet: draft one (a dry run too, so it can be reviewed)
         mapping_path, report = _draft(args, path, source, mappings_dir)
         if report is None:  # claude-code: the slash command takes over
             return 0
@@ -450,7 +456,8 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument(
         "--dry-run",
         action="store_true",
-        help="mapped: stop after the check; village/git/wiki: only inspect; ingest nothing",
+        help="ingest nothing. mapped: write the draft mapping (if mappings/<source>.json does not exist yet) and "
+        "stop after the check; village/git/wiki: only inspect",
     )
     a.add_argument(
         "--replace",

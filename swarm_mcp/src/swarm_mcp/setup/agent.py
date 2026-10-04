@@ -15,7 +15,8 @@
   summary, where the schema lives, the check command, done criteria) for the
   ``/swarm-setup`` slash command.
 
-``swarm-mcp add <path>`` calls this for any dataset that is not AI Village. Outputs go
+``swarm-mcp add <path>`` calls this for a mapped dataset only when ``mappings/<source>.json``
+does not exist yet (an existing mapping is used as is, so hand edits survive). Outputs go
 to ``<project root>/mappings/``: ``<source>.json`` (the mapping), ``<source>.setup.json``
 (rounds, check summaries, rationale) and, for claude-code, ``<source>.task.md``.
 """

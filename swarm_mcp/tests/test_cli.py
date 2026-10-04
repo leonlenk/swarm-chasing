@@ -119,8 +119,10 @@ def test_add_drafts_a_mapping(project: Path, capsys):
     assert "swarm-mcp add" in (project / "mappings" / "crew2.task.md").read_text()
     assert counts(project / "data" / "swarmscope.duckdb", "crew2")["messages"] == 0  # nothing ingested
 
-    assert cli("add", "data/crew", "--agent", "api") == 2
+    assert cli("add", "data/crew", "--name", "crew3", "--agent", "api") == 2  # no mapping yet and no key
     assert "--agent none" in capsys.readouterr().err
+    assert cli("add", "data/crew", "--agent", "api") == 0  # mappings/crew.json exists: no draft, no key needed
+    assert "using existing mapping mappings/crew.json" in capsys.readouterr().out
     assert cli("add", "data/crew", "--name", "Bad Name") == 2
 
 
@@ -255,3 +257,37 @@ def test_add_replaces_a_mapped_source_when_only_the_mapping_changed(project: Pat
     assert cli("add", "data/board", "--mapping", str(second)) == 0
     out = capsys.readouterr().out
     assert "which used another mapping" in out and str(first.resolve()) in out and "ingested source 'board'" in out
+
+
+def test_add_keeps_a_hand_edited_mapping(project: Path, capsys):
+    """Regression: re-running `add` without --mapping (even with --dry-run) redrafted mappings/<source>.json
+    over the user's edits."""
+    make_nested_jsonl(project / "data" / "crew")
+    mapping = project / "mappings" / "crew.json"
+    store = project / "data" / "swarmscope.duckdb"
+    assert cli("add", "data/crew", "--dry-run") == 0  # no mapping yet: a dry run writes the draft for review
+    out = capsys.readouterr().out
+    assert "drafting a mapping" in out and "nothing ingested" in out and mapping.exists() and not store.exists()
+
+    edited = dict(json.loads(mapping.read_text()), description="hand edited")
+    mapping.write_text(json.dumps(edited))
+    assert cli("add", "data/crew", "--dry-run") == 0
+    out = capsys.readouterr().out
+    assert "using existing mapping mappings/crew.json (delete it to redraft)" in out and "drafting" not in out
+    assert json.loads(mapping.read_text()) == edited and not store.exists()
+
+    assert cli("add", "data/crew") == 0
+    out = capsys.readouterr().out
+    assert "using existing mapping" in out and "ingested source 'crew'" in out
+    assert json.loads(mapping.read_text()) == edited
+    assert counts(store, "crew")["messages"] == 300
+
+    broken = dict(edited, records=[dict(edited["records"][0], text="no_such_field")])
+    mapping.write_text(json.dumps(broken))  # the edited mapping is the one checked, not a fresh draft
+    assert cli("add", "data/crew") == 1
+    assert "does not pass the check" in capsys.readouterr().out
+    assert json.loads(mapping.read_text()) == broken
+
+    mapping.unlink()  # deleting it redrafts
+    assert cli("add", "data/crew", "--dry-run") == 0
+    assert "drafting a mapping" in capsys.readouterr().out and mapping.exists()

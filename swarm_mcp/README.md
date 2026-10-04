@@ -38,10 +38,14 @@ Put datasets under `data/` at the repo root (gitignored; a symlink is fine).
 `add` detects the AI Village export and bare git repos and uses the built-in
 adapters (`--adapter village|git` forces one; `--name` sets a git source's name).
 Wiki databases are only ingested on request: `swarm-mcp add data/collusion-wiki --adapter wiki`.
-For any other dataset it profiles the files, drafts a mapping (`--agent none` heuristics, `api`
-an LLM, or `claude-code` a task for the `/swarm-setup` command), checks it, and
-stops with the report if the check fails. When the check passes, it ingests.
-`--dry-run` stops after the check, and `--mapping M` uses your own mapping.
+For any other dataset it profiles the files, drafts a mapping to `mappings/<source>.json`
+(`--agent none` heuristics, `api` an LLM, or `claude-code` a task for the
+`/swarm-setup` command), checks it, and stops with the report if the check
+fails. When the check passes, it ingests. If `mappings/<source>.json` already
+exists, `add` uses it instead of drafting, so your edits survive a re-run
+(delete the file to redraft); `--mapping M` uses a mapping from elsewhere.
+`--dry-run` ingests nothing: it writes the draft mapping (when there is none
+yet) and stops after the check.
 Re-running `add` on the same dataset replaces that source and keeps other sources
 and findings; so does re-adding a mapped dataset with a changed mapping. If the
 source name already holds a different dataset (another adapter or path), `add`
