@@ -120,7 +120,9 @@ def test_add_drafts_a_mapping(project: Path, capsys):
     assert counts(project / "data" / "swarmscope.duckdb", "crew2")["messages"] == 0  # nothing ingested
 
     assert cli("add", "data/crew", "--name", "crew3", "--agent", "api") == 2  # no mapping yet and no key
-    assert "--agent none" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "--agent none" in err and "export it in your shell" in err  # not only "restart the server"
+    assert "server's environment" not in err
     assert cli("add", "data/crew", "--agent", "api") == 0  # mappings/crew.json exists: no draft, no key needed
     assert "using existing mapping mappings/crew.json" in capsys.readouterr().out
     assert cli("add", "data/crew", "--name", "Bad Name") == 2
