@@ -169,11 +169,35 @@ def _add_village(args: argparse.Namespace, path: Path, db: Path, *, detected: bo
         for name, rows in sorted((info.get("manifest_row_counts") or {}).items()):
             print(f"  {name}: {rows:,} rows")
         return 0
-    res = ingest("ai_village", path, db, progress=_say)
+    res = _guarded(args, lambda replace: ingest("ai_village", path, db, progress=_say, replace=replace))
     print(f"ingested source '{res['source']}' into {res['db']}: {_counts(res)} ({res['seconds']}s)")
-    print("(re-running add replaces this source; other sources and findings are kept)")
+    print(_replaced_note(res))
     print("\n".join(_next_steps(res["source"])))
     return 0
+
+
+def _guarded(args: argparse.Namespace, run: Callable[[bool], dict[str, Any]]) -> dict[str, Any]:
+    """``run(replace)``, turning a ``SourceConflict`` (the source holds another dataset) into a user error."""
+    from swarm_mcp.scope.ingest import SourceConflict
+
+    try:
+        return run(bool(args.replace))
+    except SourceConflict as e:
+        raise CommandError(
+            f"source '{e.source}' already holds {e.existing[0]} data from {e.existing[1]}; pass --name to pick "
+            f"another or --replace (nothing was ingested)"
+        ) from None
+
+
+def _replaced_note(res: dict[str, Any]) -> str:
+    """What happened to the source: only "replaces" when it really was the same dataset."""
+    if res.get("replaced") == "mapping":
+        return f"(replaced source '{res['source']}', which used another mapping: {res.get('previous')})"
+    if res.get("replaced") == "same":
+        return "(this replaced the previous copy of the same dataset; other sources and findings are kept)"
+    if res.get("replaced") == "replaced":
+        return f"(replaced source '{res['source']}', which held {res.get('previous')}; other sources and findings are kept)"
+    return "(a new source; other sources and findings are kept)"
 
 
 _BUILTIN_LABEL = {"git": "a bare git repository", "wiki": "a wiki database"}
@@ -215,10 +239,10 @@ def _add_builtin(args: argparse.Namespace, name: str, path: Path, db: Path, *, d
         counts = ", ".join(_inspect_counts(info)) or "no counts"
         print(f"dry run: source '{info.get('source')}': {counts}; nothing ingested")
         return 0
-    res = ingest(name, path, db, source=source, progress=_say)
+    res = _guarded(args, lambda replace: ingest(name, path, db, source=source, progress=_say, replace=replace))
     print(f"ingested source '{res['source']}' ({res['adapter']} adapter) into {res['db']}: {_counts(res)} "
           f"({res['seconds']}s)")  # fmt: skip
-    print("(re-running add replaces this source; other sources and findings are kept)")
+    print(_replaced_note(res))
     print("\n".join(_next_steps(res["source"])))
     return 0
 
@@ -259,9 +283,14 @@ def _add_mapped(args: argparse.Namespace, config: Config, path: Path, db: Path) 
         return 0
     from swarm_mcp.scope.ingest import ingest_mapped
 
-    res = ingest_mapped(mapping_path, path, db, progress=_say)
+    res = _guarded(  # a re-add with a changed mapping replaces the source; another dataset needs --replace
+        args,
+        lambda replace: ingest_mapped(
+            mapping_path, path, db, progress=_say, replace=replace, allow_mapping_change=True
+        ),
+    )
     print(f"\ningested source '{res['source']}' into {res['db']}: {_counts(res)} ({res['seconds']}s)")
-    print(f"mapping: {mapping_path} (re-running add replaces this source; other sources and findings are kept)")
+    print(f"mapping: {mapping_path} {_replaced_note(res)}")
     print("\n".join(_next_steps(res["source"])))
     return 0
 
@@ -422,6 +451,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="mapped: stop after the check; village/git/wiki: only inspect; ingest nothing",
+    )
+    a.add_argument(
+        "--replace",
+        action="store_true",
+        help="replace a source of the same name that holds another dataset (another adapter or path; its rows "
+        "are deleted)",
     )
     a.add_argument("--db", help="store path (default: [data] db in swarm.toml, or <data dir>/swarmscope.duckdb)")
     a.set_defaults(fn=cmd_add)

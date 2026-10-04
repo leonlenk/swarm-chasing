@@ -206,3 +206,52 @@ def test_export_from_the_store(project: Path, capsys):
 def test_removed_commands_are_gone(project: Path, capsys):
     for old in (["ingest", "ai_village", "data"], ["check-findings"], ["--list-modules"]):
         assert cli(*old) == 2  # falls through to the server's parser, which rejects it
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_add_refuses_a_name_collision_without_replace(project: Path, capsys):
+    """Regression: `add <a repo named village.git>` silently replaced the AI Village source (0 messages left),
+    and two different repos or a mapped folder with the same slug did the same."""
+    make_village(project / "data")
+    store = project / "data" / "swarmscope.duckdb"
+    assert cli("add", "data/ai-village") == 0
+    assert "a new source" in capsys.readouterr().out
+    assert cli("add", "data/ai-village") == 0
+    assert "replaced the previous copy of the same dataset" in capsys.readouterr().out
+
+    bare = make_repo(project / "data" / "repos")
+    clash = project / "data" / "repos" / "village.git"
+    shutil.copytree(bare, clash)
+    assert cli("add", str(clash)) == 2  # the git adapter would name it 'village'
+    err = capsys.readouterr().err
+    assert "source 'village' already holds ai_village data from" in err and "--name" in err and "--replace" in err
+    assert counts(store, "village")["messages"] == 260  # untouched
+
+    assert cli("add", "data/repos/rpg.git") == 0
+    other = project / "data" / "elsewhere" / "rpg.git"
+    shutil.copytree(bare, other)
+    assert cli("add", str(other)) == 2  # same adapter, a different repo with the same name
+    assert "source 'rpg' already holds git data from" in capsys.readouterr().err
+
+    make_sqlite_board(project / "data" / "village")
+    mapping = project / "board.json"
+    mapping.write_text(json.dumps({**BOARD_SPEC, "source": "village"}))
+    assert cli("add", "data/village", "--mapping", str(mapping)) == 2  # a mapped dataset with the same slug
+    assert counts(store, "village")["messages"] == 260
+
+    assert cli("add", str(clash), "--replace") == 0  # deliberate
+    out = capsys.readouterr().out
+    assert "replaced source 'village', which held ai_village data from" in out
+    assert counts(store, "village")["messages"] == 0
+
+
+def test_add_replaces_a_mapped_source_when_only_the_mapping_changed(project: Path, capsys):
+    make_sqlite_board(project / "data" / "board")
+    first, second = project / "board.json", project / "board-v2.json"
+    first.write_text(json.dumps(BOARD_SPEC))
+    second.write_text(json.dumps(BOARD_SPEC))
+    assert cli("add", "data/board", "--mapping", str(first)) == 0
+    capsys.readouterr()
+    assert cli("add", "data/board", "--mapping", str(second)) == 0
+    out = capsys.readouterr().out
+    assert "which used another mapping" in out and str(first.resolve()) in out and "ingested source 'board'" in out

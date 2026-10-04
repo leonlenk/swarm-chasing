@@ -45,50 +45,49 @@ def _columns_struct(table: str) -> str:
     return "{" + ", ".join(f"{_sql_str(c)}: {_sql_str(t.replace('TEXT', 'VARCHAR'))}" for c, t in cols.items()) + "}"
 
 
+Owner = tuple[str, str, "str | None"]  # (adapter name, resolved dataset path, resolved mapping path or None)
+
+
+def _describe(o: Owner) -> str:
+    return f"{o[0]} data from {o[1]}" + (f" (mapping {o[2]})" if o[2] else "")
+
+
 class SourceConflict(ToolInputError):
-    """The source already holds data from another adapter, or from another mapping file."""
+    """The source already holds a different dataset: another adapter or path, or another mapping file."""
 
-    def __init__(self, source: str, db_path: Path, existing: tuple[str, str | None], new: tuple[str, str | None]):
+    def __init__(self, source: str, existing: Owner, new: Owner):
         self.source, self.existing, self.new = source, existing, new
-
-        def owner(o: tuple[str, str | None]) -> str:
-            return f"adapter {o[0]!r}" + (f" (mapping {o[1]})" if o[1] else "")
-
         super().__init__(
-            f"Source {source!r} in {db_path} was loaded by {owner(existing)}; this ingest uses {owner(new)}. "
-            "Ingesting would delete all of its rows, so nothing was ingested. Pass replace=True to replace it."
+            f"source {source!r} already holds {_describe(existing)}; this is {_describe(new)}. Nothing was "
+            "ingested: ingesting would delete all of the source's rows. Pick another source name, or pass "
+            "replace=True to replace it."
         )
 
     @property
-    def same_adapter(self) -> bool:
-        """Only the mapping file differs (re-adding a mapped source with a changed mapping)."""
-        return self.existing[0] == self.new[0]
+    def mapping_only(self) -> bool:
+        """Same adapter and dataset, only the mapping file differs (a re-add with a changed mapping)."""
+        return self.existing[:2] == self.new[:2]
 
 
-def _owner(adapter: Adapter) -> tuple[str, str | None]:
-    """(adapter name, mapping path or None): what a source row's data came from."""
+def _resolved(p: Any) -> str:
+    return str(Path(str(p)).expanduser().resolve())
+
+
+def _owner(adapter: Adapter, path: Path) -> Owner:
     mapping = (getattr(adapter, "source_meta", None) or {}).get("mapping")
-    return adapter.name, str(Path(mapping).resolve()) if mapping else None
+    return adapter.name, _resolved(path), _resolved(mapping) if mapping else None
 
 
-def check_replace(adapter: Adapter, db_path: Path) -> None:
-    """Raise ``SourceConflict`` if ``adapter.source`` is in the store from another adapter or mapping."""
-    if not Path(db_path).exists():
-        return
-    with db.connect(db_path, read_only=True) as store:
-        if not store.has_table("sources"):  # a new or foreign store: ingest() reports what is wrong with it
-            return
-        row = store.con.execute("SELECT adapter, meta FROM sources WHERE source = ?", [adapter.source]).fetchone()
+def _owner_of(row: Any) -> Owner | None:
+    """The owner recorded in a ``sources`` row (adapter, path, meta), or None."""
     if row is None:
-        return
+        return None
     try:
-        meta = json.loads(row[1]) if isinstance(row[1], str) else (row[1] or {})
+        meta = json.loads(row[2]) if isinstance(row[2], str) else (row[2] or {})
     except ValueError:
         meta = {}
     mapping = meta.get("mapping") if isinstance(meta, dict) else None
-    existing = (str(row[0]), str(Path(mapping).resolve()) if mapping else None)
-    if existing != _owner(adapter):
-        raise SourceConflict(adapter.source, db_path, existing, _owner(adapter))
+    return str(row[0]), _resolved(row[1]), _resolved(mapping) if mapping else None
 
 
 def ingest(
@@ -100,16 +99,20 @@ def ingest(
     source: str | None = None,
     progress: Callable[[str], None] | None = None,
     replace: bool = False,
+    allow_mapping_change: bool = False,
 ) -> dict[str, Any]:
     """Ingest ``path`` with adapter ``adapter_name`` (a name or an adapter instance) into ``db_path``.
-    Returns counts and timing. Refuses (``SourceConflict``) to replace a source loaded by another
-    adapter or mapping unless ``replace``."""
+
+    Returns counts, timing and ``replaced``: "new" (the source was not in the store), "same" (the same
+    adapter, dataset path and mapping again), "mapping" (the same dataset with another mapping file,
+    allowed by ``allow_mapping_change``) or "replaced" (``replace=True`` over a different dataset,
+    described in ``previous``). Otherwise a source that holds a different dataset (another adapter,
+    dataset path or mapping) raises ``SourceConflict``; the check reads the ``sources`` row inside the
+    write transaction, before any DELETE, so nothing is changed."""
     say = progress or (lambda msg: log.info(msg))
     adapter = get_adapter(adapter_name, source) if isinstance(adapter_name, str) else adapter_name
     path = Path(path)
     db_path = Path(db_path)
-    if not replace:
-        check_replace(adapter, db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     t0 = time.perf_counter()
 
@@ -150,6 +153,19 @@ def ingest(
                 )
             con.execute("BEGIN TRANSACTION")
             in_tx = True
+            # adapter.source is final now (git/wiki derive it from the path while loading)
+            row = con.execute("SELECT adapter, path, meta FROM sources WHERE source = ?", [adapter.source]).fetchone()
+            previous, new = _owner_of(row), _owner(adapter, path)
+            if previous is None:
+                replaced = "new"
+            elif previous == new:
+                replaced = "same"
+            elif replace:
+                replaced = "replaced"
+            elif allow_mapping_change and previous[:2] == new[:2]:
+                replaced = "mapping"
+            else:
+                raise SourceConflict(adapter.source, previous, new)
             for table in schema.RECORD_MODELS:
                 con.execute(f"DELETE FROM {table} WHERE source = ?", [adapter.source])
             for table in schema.RECORD_MODELS:
@@ -167,7 +183,7 @@ def ingest(
                 [
                     adapter.source,
                     adapter.name,
-                    str(path),
+                    _resolved(path),
                     datetime.now(timezone.utc).replace(tzinfo=None),
                     json.dumps(counts),
                     json.dumps(
@@ -202,6 +218,8 @@ def ingest(
         "db": str(db_path),
         "counts": stored,
         "seconds": round(time.perf_counter() - t0, 1),
+        "replaced": replaced,
+        **({"previous": _describe(previous)} if replaced in ("replaced", "mapping") and previous else {}),
     }
 
 
@@ -212,6 +230,7 @@ def ingest_mapped(
     *,
     progress: Callable[[str], None] | None = None,
     replace: bool = False,
+    allow_mapping_change: bool = False,
 ) -> dict[str, Any]:
     """Ingest the dataset at ``path`` (default: the mapping's ``root``) through the declarative
     ``mapping`` JSON into ``db_path``. Idempotent: the mapping's source is replaced as a whole.
@@ -219,7 +238,10 @@ def ingest_mapped(
     from swarm_mcp.scope.adapters.mapped import MappedStoreAdapter
 
     adapter = MappedStoreAdapter.from_file(mapping, path)
-    result = ingest(adapter, adapter.mapped.root, db_path, progress=progress, replace=replace)
+    result = ingest(
+        adapter, adapter.mapped.root, db_path, progress=progress, replace=replace,
+        allow_mapping_change=allow_mapping_change,
+    )  # fmt: skip
     result["mapping"] = str(mapping)
     stats = {k: v for k, v in adapter.mapped.stats.items() if v}
     if stats:

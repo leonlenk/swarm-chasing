@@ -42,7 +42,10 @@ For any other dataset it profiles the files, drafts a mapping (`--agent none` he
 an LLM, or `claude-code` a task for the `/swarm-setup` command), checks it, and
 stops with the report if the check fails. When the check passes, it ingests.
 `--dry-run` stops after the check, and `--mapping M` uses your own mapping.
-Re-running `add` replaces that source and keeps other sources and findings. The
+Re-running `add` on the same dataset replaces that source and keeps other sources
+and findings; so does re-adding a mapped dataset with a changed mapping. If the
+source name already holds a different dataset (another adapter or path), `add`
+refuses and changes nothing: pick another `--name`, or pass `--replace`. The
 store is `data/swarmscope.duckdb`.
 
 On the 2026-09-20 AI Village export, `add` loads 46 agents, 183,485 chat
@@ -67,7 +70,7 @@ Start a session with `core_info`, or with the `investigate` prompt.
 |---|---|
 | `swarm-mcp` | run the MCP server on stdio (what Claude Code launches) |
 | `swarm-mcp info [--json]` | modules (loaded or skipped, and why), sources with counts and date ranges, findings health, config. Exits 1 when a finding cites an id that does not resolve |
-| `swarm-mcp add <path> [--adapter auto\|village\|git\|wiki\|mapped] [--name SLUG] [--agent none\|api\|claude-code] [--mapping M] [--dry-run] [--db]` | add or refresh a dataset in the store (see above) |
+| `swarm-mcp add <path> [--adapter auto\|village\|git\|wiki\|mapped] [--name SLUG] [--agent none\|api\|claude-code] [--mapping M] [--dry-run] [--replace] [--db]` | add or refresh a dataset in the store (see above) |
 | `swarm-mcp render timeline [--since --until --channel --source --top --out]` | a self-contained HTML swimlane (one lane per agent, one mark per message, masked hover snippets). Default output `data/swarmscope-timeline.html` |
 | `swarm-mcp export --out DIR [--source --kind --channel --author --since --until --query] [--with-agents] [--keep-ips] [--no-check] [--json]` | export a redacted subset of the store for sharing, then rescan it (see Export) |
 
