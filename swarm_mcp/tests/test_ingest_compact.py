@@ -94,7 +94,9 @@ def test_readding_a_source_keeps_the_store_size_flat(tmp_path: Path):
         assert res["replaced"] == "same"
         sizes.append(store.stat().st_size)
     # the old code: each re-add kept the previous copy (here 3.9 -> 5.3 MB over 4 re-adds; 1.5 GB for AI Village)
-    assert sizes[-1] <= sizes[0] and sizes[-1] <= size, (size, sizes)
+    # never above the store before the re-adds (a compacted copy's exact size varies a little with DuckDB's
+    # parallel writes, so compare with the pre-re-add size, not between re-adds)
+    assert max(sizes) <= size, (size, sizes)
     after = _snapshot(store)
     assert after == before and after["dead"] == 0
     assert after["messages/other"][0] == 200 and after["findings/-"][0] == 1
