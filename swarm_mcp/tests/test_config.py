@@ -15,12 +15,20 @@ def _status(app) -> dict[str, str]:
 
 
 def test_default_loads_all(data_dir: Path):
-    assert _status(build_server(config_for(data_dir))) == {"core": "loaded", "village": "loaded"}
+    # git/subtasks/wiki need a repo or wiki db, which the synthetic village dataset does not have
+    expected = {"core": "loaded", "village": "loaded", "git": "skipped", "subtasks": "skipped", "wiki": "skipped"}
+    assert _status(build_server(config_for(data_dir))) == expected
 
 
 def test_modules_allowlist_keeps_core(data_dir: Path):
     app = build_server(config_for(data_dir, SWARM_MCP_MODULES="village"))
-    assert _status(app) == {"core": "loaded", "village": "loaded"}
+    assert _status(app) == {
+        "core": "loaded",
+        "village": "loaded",
+        "git": "skipped",
+        "subtasks": "skipped",
+        "wiki": "skipped",
+    }
     app = build_server(config_for(data_dir, SWARM_MCP_MODULES="core"))
     st = _status(app)
     assert st["village"] == "skipped"
@@ -29,7 +37,7 @@ def test_modules_allowlist_keeps_core(data_dir: Path):
 
 def test_disable_wins_and_can_disable_core(data_dir: Path):
     app = build_server(config_for(data_dir, SWARM_MCP_MODULES="village", SWARM_MCP_DISABLE="village, core"))
-    assert _status(app) == {"core": "skipped", "village": "skipped"}
+    assert set(_status(app).values()) == {"skipped"}
 
 
 def test_unknown_module_names_are_noted(data_dir: Path):
