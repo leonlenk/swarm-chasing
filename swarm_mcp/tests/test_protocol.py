@@ -66,7 +66,7 @@ def test_stdio_subprocess_keeps_stdout_clean(data_dir: Path):
         async with Client(params) as client:
             res = await client.call_tool("core_list_modules", {})
             loaded = [m["name"] for m in res.structured_content["loaded"]]
-            assert loaded == ["core", "sweep", "village"]
+            assert loaded == ["core", "investigate", "sweep", "village"]
             res = await client.call_tool("core_noisy", {})
             assert res.is_error is False and res.structured_content == {"ok": True}
             res = await client.call_tool("village_agents", {})

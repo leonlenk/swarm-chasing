@@ -139,7 +139,7 @@ def test_failures_are_isolated_and_recorded(tmp_path: Path, fake_modules, capsys
 def test_core_reports_skips(data_dir: Path):
     app = build_server(config_for(data_dir, SWARM_MCP_DISABLE="village"))
     out = call(app, "core_list_modules")
-    assert [m["name"] for m in out["loaded"]] == ["core", "sweep"]  # data-free modules
+    assert [m["name"] for m in out["loaded"]] == ["core", "investigate", "sweep"]  # data-free modules
     skipped = {m["name"]: m for m in out["skipped"]}
     assert skipped["village"]["reasons"] == ["disabled via SWARM_MCP_DISABLE"]
     info = call(app, "core_server_info")
