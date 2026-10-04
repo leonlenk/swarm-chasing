@@ -13,13 +13,15 @@ from typing import Any, Callable
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
-from mcp.types import ToolAnnotations
+from mcp.shared.exceptions import MCPError
+from mcp.types import INVALID_PARAMS, ToolAnnotations
 
 App = MCPServer
 
 __all__ = [
     "App",
     "ToolError",
+    "PromptArgumentError",
     "new_app",
     "set_instructions",
     "snapshot",
@@ -29,6 +31,14 @@ __all__ = [
     "add_prompt",
     "run_stdio",
 ]
+
+
+class PromptArgumentError(MCPError):
+    """Bad prompt arguments. The client gets the message as an invalid-params error; any other
+    exception raised while rendering a prompt reaches it only as 'Internal server error'."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(INVALID_PARAMS, message)
 
 
 def new_app(name: str, version: str, log_level: str = "INFO") -> MCPServer:

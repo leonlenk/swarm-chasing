@@ -101,8 +101,9 @@ def _cfg(env: dict, **llm_settings) -> Config:
 def test_get_client_without_key_is_a_clear_error():
     with pytest.raises(LLMUnavailable, match="ANTHROPIC_API_KEY is not set"):
         llm.get_client(_cfg({}))
-    with pytest.raises(LLMUnavailable, match="Dry runs and cost estimates work without a key"):
+    with pytest.raises(LLMUnavailable, match="ANTHROPIC_API_KEY is not set") as e:
         llm.get_client(_cfg({"ANTHROPIC_API_KEY": "   "}))
+    assert "Dry run" not in str(e.value)  # get_client serves tools without a dry run too (subtasks_name)
 
 
 def test_get_client_with_key_builds_anthropic_client_from_config():
@@ -372,6 +373,7 @@ def test_sweep_run_defaults_to_a_dry_run_and_needs_a_key_to_execute(sweep_app):
     assert dry["preview"]["prompt"] and any("dry_run=false" in n for n in dry["notes"])
     err = call_error(app, "sweep_run", rubric="q?", ids=ids(3), dry_run=False)
     assert "ANTHROPIC_API_KEY is not set" in err and "no model calls were made" in err
+    assert "Dry runs (dry_run=true, the default) and cost estimates work without a key" in err
     assert not sweeps.exists()
 
 
@@ -455,7 +457,24 @@ def test_preview_and_rationales_are_masked_untrusted_data(sweep_app, monkeypatch
     got = call(app, "sweep_get", sweep_id=out["sweep_id"])
     review = call(app, "sweep_review", sweep_id=out["sweep_id"], n=2)
     for rows in (out["verdicts"], got["verdicts"], review["to_label"]):
-        assert rows and all("a@b.com" not in r["rationale"] and "email me at" in r["rationale"] for r in rows)
+        texts = [r["rationale"]["content"] for r in rows]
+        assert texts and all("a@b.com" not in t and "email me at" in t for t in texts)
+
+
+def test_rationales_are_wrapped_as_untrusted_content(sweep_app, monkeypatch):
+    """Regression: a rationale (model output over dataset text) was a bare string, with only a
+    dict-level untrusted flag on the verdict; it is now {content, untrusted} like other dataset text."""
+    app, _ = sweep_app
+    monkeypatch.setattr(llm, "get_client", lambda config=None: FakeClient(judge))
+    out = call(app, "sweep_run", rubric="Claims completion?", ids=ids(6), dry_run=False)
+    got = call(app, "sweep_get", sweep_id=out["sweep_id"])
+    review = call(app, "sweep_review", sweep_id=out["sweep_id"], n=2)
+    for rows in (out["verdicts"], got["verdicts"], review["to_label"]):
+        assert rows
+        for r in rows:
+            assert r["rationale"] == {"content": r["rationale"]["content"], "untrusted": True}
+            assert r["rationale"]["content"] in ("claims completion", "no claim")
+            assert "untrusted" not in r  # the flag sits on the text it applies to, not on the event id
 
 
 def test_filters_need_a_registered_provider(sweep_app, monkeypatch):
@@ -530,3 +549,25 @@ def test_sweep_ids_resolve_through_the_real_store(data_dir: Path, tmp_path: Path
     )
     out = call(app, "sweep_run", rubric="q", ids=picked, dry_run=False)
     assert out["sent"] == 3 and [v["event_id"] for v in out["verdicts"]] == picked
+
+
+def test_review_with_empty_labels_is_a_no_op(sweep_app, monkeypatch):
+    """Regression: labels=[] was treated as omitted, so it silently drew and recorded a new sample."""
+    app, sweeps = sweep_app
+    monkeypatch.setattr(llm, "get_client", lambda config=None: FakeClient(judge))
+    sid = call(app, "sweep_run", rubric="Claims completion?", ids=ids(12), dry_run=False)["sweep_id"]
+    out = call(app, "sweep_review", sweep_id=sid, labels=[])
+    assert out["recorded"] == 0 and out["labels"] == [] and "to_label" not in out
+    assert out["precision"]["sampled"] == 0 and any("labels is empty" in n for n in out["notes"])
+    assert not (sweeps / f"{sid}.labels.jsonl").exists()
+
+
+def test_empty_ids_and_verdicts_are_not_treated_as_omitted(sweep_app, monkeypatch):
+    """ids=[] with filters used to fall through to the filters; verdicts=[] silently meant ['yes']."""
+    app, sweeps = sweep_app
+    monkeypatch.setattr(llm, "get_client", lambda config=None: FakeClient(judge))
+    assert "Pass either ids or filters" in call_error(app, "sweep_run", rubric="q", ids=[], filters={})
+    assert "ids is empty" in call_error(app, "sweep_run", rubric="q", ids=[])
+    sid = call(app, "sweep_run", rubric="Claims completion?", ids=ids(6), dry_run=False)["sweep_id"]
+    assert "non-empty" in call_error(app, "sweep_review", sweep_id=sid, verdicts=[])
+    assert not (sweeps / f"{sid}.labels.jsonl").exists()

@@ -432,7 +432,8 @@ def test_subtasks_name_agent_write_back(gapp, git_data: Path):
                         assert s["name"]["content"] == "Talent system"
     stored = json.loads((git_data / "subtask-names" / "rpg.json").read_text())
     assert [v["source"] for v in stored["names"].values()] == ["agent"]
-    assert "no LLM configured" in call_error(gapp, "subtasks_name", subtask_id=sid, generate=True).replace("No", "no")
+    err = call_error(gapp, "subtasks_name", subtask_id=sid, generate=True)
+    assert "no LLM configured" in err.replace("No", "no") and "Dry run" not in err and "name=" in err
     assert "name is empty" in call_error(gapp, "subtasks_name", subtask_id=sid, name="   ")
 
 

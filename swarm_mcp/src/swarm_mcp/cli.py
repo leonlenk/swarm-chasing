@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shlex
 import sys
 from pathlib import Path
 from typing import Any, Callable
@@ -352,9 +353,9 @@ def _draft(args: argparse.Namespace, path: Path, source: str, mappings_dir: Path
         print(f"  note: {n}")
     if args.agent == "claude-code":
         print(
-            f"\nwrote {res['task_path']}. In Claude Code run:\n  /swarm-setup {source} {path}\n"
+            f"\nwrote {res['task_path']}. In Claude Code run:\n  /swarm-setup {source} {shlex.quote(str(path))}\n"
             "It refines the mapping until the check passes, then runs "
-            f"`swarm-mcp add {path} --mapping {mapping_path}`."
+            f"`swarm-mcp add {shlex.quote(str(path))} --mapping {shlex.quote(str(mapping_path))}`."
         )
         return mapping_path, None
     if res.get("rationale"):

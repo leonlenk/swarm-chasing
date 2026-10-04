@@ -2,8 +2,11 @@
 
 ``score(truth, outputs)`` returns per-task precision / recall / F1 plus a summary.
 The synthetic benchmark (``python -m swarm_mcp.bench``) scores three investigation
-tools that do not exist yet in the scope module. This docstring fixes the **output
-shapes** the scorer reads; a tool may return extra keys, which the scorer ignores.
+tasks: how a term spread, who coordinated, and data-integrity problems. No single MCP
+tool returns these shapes; a solver builds them (``reference.py`` reads the files,
+an investigator would use ``scope_search``, ``scope_moments``, ``scope_graph`` and
+``scope_agents``). This docstring fixes the **output shapes** the scorer reads; a
+solver may return extra keys, which the scorer ignores.
 
 Ids and actors
 --------------
@@ -17,7 +20,8 @@ Ids and actors
   Cyrillic look-alike name never resolves to the Latin original.
 - **Timestamps** are ISO 8601 or dataset format (``2031-03-11 14:02:07.123456``), naive UTC.
 
-``scope_trace_diffusion(term)``: how one term spread::
+Diffusion of one term (the ``first_use`` moments of ``scope_moments`` and a
+``scope_search`` for the term are the closest tools)::
 
     {"term": "glimmerframe",
      "first": "village:msg:<uuid>",
@@ -36,15 +40,16 @@ Ids and actors
 - ``basis_event_id``: the earliest earlier use that could have reached them, or null
   when ``possibly_independent``.
 
-``scope_coordinators()``: agents whose messages others act on (shortly after the agent
-posts, other agents reply naming it and start work whose session goal names it), ranked
-best first. A bare list or ``{"coordinators": [...]}`` is accepted::
+Coordinators (``scope_graph`` shows who addressed whom): agents whose messages others
+act on (shortly after the agent posts, other agents reply naming it and start work whose
+session goal names it), ranked best first. A bare list or ``{"coordinators": [...]}`` is accepted::
 
     {"coordinators": [
        {"actor": "village:agent:<uuid>", "score": 8.0,
         "example_event_ids": ["village:msg:<directive>", "village:msg:<reply>", "village:event:<goal>"]}]}
 
-``scope_integrity_report()``: data problems to know about before trusting attributions::
+Integrity report (``scope_moments`` silences and ``scope_agents`` names are the closest
+tools): data problems to know about before trusting attributions::
 
     {"name_collisions": [
        {"agents": ["village:agent:<a>", "village:agent:<b>"], "names": ["Corvin", "Cоrvin"],
@@ -70,9 +75,9 @@ best first. A bare list or ``{"coordinators": [...]}`` is accepted::
 
 The outputs file read by ``score``::
 
-    {"diffusion": {"<term>": <scope_trace_diffusion(term)>, ...},
-     "coordinators": <scope_coordinators()>,
-     "integrity": <scope_integrity_report()>}
+    {"diffusion": {"<term>": <the diffusion shape for term>, ...},
+     "coordinators": <the coordinators shape>,
+     "integrity": <the integrity shape>}
 
 A missing task scores 0 recall for that task and is listed in ``summary.missing``.
 

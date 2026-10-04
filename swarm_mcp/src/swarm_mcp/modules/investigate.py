@@ -14,9 +14,11 @@ are actually loaded (SwarmScope ``scope_*`` tools, ``findings_record``, sweeps, 
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated
 
 from pydantic import Field
+
+from swarm_mcp.sdk import PromptArgumentError
 
 NAME = "investigate"
 DESCRIPTION = (
@@ -45,12 +47,13 @@ Period = Annotated[
 ]
 Agent = Annotated[str | None, Field(description="Focus on one actor (agent name or id).")]
 Location = Annotated[str | None, Field(description="Focus on one location: room, channel, repo, page...")]
+# A plain string, optional on the wire: the SDK turns a missing argument or a value outside a
+# Literal into a bare 'Internal server error', so render() checks it and lists the valid ones.
 Question = Annotated[
-    Literal[
-        "actors", "instructions", "sequence", "reasoning", "misreporting", "collaboration", "environment", "custom"
-    ],
+    str | None,
     Field(
-        description="actors: who was involved; instructions: what they were told; sequence: key actions in order; "
+        description="Required (it may be left out only when `custom` holds your own question). One of: "
+        "actors: who was involved; instructions: what they were told; sequence: key actions in order; "
         "reasoning: how claims evolved; misreporting: anything hidden or misreported; collaboration: how they "
         "worked together; environment: did the scaffolding contribute; custom: your own question in `custom`."
     ),
@@ -176,8 +179,24 @@ CUSTOM_CHECKS = [
 ]
 
 
-def render(ctx, key: str, *, custom=None, source=None, since=None, until=None, period=None, agent=None,
-           location=None) -> str:  # fmt: skip
+def _question_key(question: str | None, custom: str | None) -> str:
+    """The QUESTIONS key or 'custom'; with no question, 'custom' if ``custom`` has text. Raises
+    PromptArgumentError (shown to the client) listing the valid questions otherwise."""
+    key = (question or "").strip().lower()
+    if not key and (custom or "").strip():
+        return "custom"
+    if key in QUESTIONS or key == "custom":
+        return key
+    got = f"unknown question {question.strip()!r}" if key else "no question given"
+    raise PromptArgumentError(
+        f"investigate: {got}. Pass question as one of: {', '.join([*QUESTIONS, 'custom'])} "
+        "(with 'custom', put your own question in `custom`)."
+    )
+
+
+def render(ctx, question: str | None, *, custom=None, source=None, since=None, until=None, period=None,
+           agent=None, location=None) -> str:  # fmt: skip
+    key = _question_key(question, custom)
     focus = None
     if key == "custom":
         question = (custom or "").strip() or (
@@ -274,7 +293,7 @@ def render(ctx, key: str, *, custom=None, source=None, since=None, until=None, p
 
 def register(mcp, ctx) -> None:
     def investigate(
-        question: Question,
+        question: Question = None,
         custom: Custom = None,
         source: Source = None,
         since: Since = None,

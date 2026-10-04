@@ -69,7 +69,9 @@ def test_one_prompt_with_a_question_enum(make_app):
         assert set(prompts) == {"investigate"}
         p = prompts["investigate"]
         assert {a.name for a in p.arguments} == ARGS
-        assert [a.name for a in p.arguments if a.required] == ["question"]
+        # optional on the wire so that a missing question gets our message, not the SDK's internal error
+        assert [a.name for a in p.arguments if a.required] == []
+        assert "Required" in {a.name: a for a in p.arguments}["question"].description
         assert all(a.description for a in p.arguments)
         assert "cite evidence ids" in p.description
 
@@ -154,3 +156,30 @@ def test_render_points_at_recap_and_moments_when_loaded(make_app, fake_modules):
     text = run(_render(app, "investigate", {"question": "sequence"}))
     assert "start with scope_recap" in text and "'what happened during X'" in text
     assert "use scope_moments" in text and "'where should I look'" in text
+
+
+@pytest.mark.parametrize("args", [{"question": "bogus"}, {}, {"question": ""}, {"custom": "  "}])
+def test_bad_or_missing_question_lists_the_valid_ones(make_app, args):
+    """Regression: an unknown or missing question came back as a bare 'Internal server error'."""
+    from mcp.shared.exceptions import MCPError
+
+    app = make_app()
+
+    async def go():
+        async with Client(app) as client:
+            with pytest.raises(MCPError) as e:
+                await client.get_prompt("investigate", args)
+        return e.value
+
+    err = run(go())
+    assert err.error.code == -32602 and "Internal server error" not in err.error.message
+    for q in (*QUESTIONS, "custom"):
+        assert q in err.error.message
+
+
+def test_missing_question_with_custom_text_is_a_custom_question(make_app):
+    app = make_app()
+    text = run(_render(app, "investigate", {"custom": "Who broke the build?", "question": " Custom "}))
+    assert "Question: Who broke the build?" in text
+    text = run(_render(app, "investigate", {"custom": "Who broke the build?"}))
+    assert text.startswith("# Investigation: Custom question") and "Question: Who broke the build?" in text
