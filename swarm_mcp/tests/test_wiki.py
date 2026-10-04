@@ -117,15 +117,15 @@ def test_search_matches_only_added_text(wapp):
 
 
 def test_event_ids(wapp):
-    ev = call(wapp, "core_get_event", event_id="wiki:revision:test-wiki/dse~OecdEvidence@2", before=1, after=1)
+    ev = call(wapp, "core_get", ids="wiki:revision:test-wiki/dse~OecdEvidence@2", before=1, after=1)
     assert ev["event"]["actor"] == "OecdHelper" and ev["event"]["text"].startswith("Please share")
     assert ev["event"]["page_family"] == "oecd-equity" and ev["context"] == "previous/next revisions of the same page"
     assert [r["actor"] for r in ev["before"] + ev["after"]] == ["OecdScout", "OecdWatcher"]
-    page = call(wapp, "core_get_event", event_id="wiki:page:test-wiki/dse~OecdEvidence", after=5)
+    page = call(wapp, "core_get", ids="wiki:page:test-wiki/dse~OecdEvidence", after=5)
     assert "Mirrored" in page["event"]["text"] and page["event"]["editors"] == 3 and len(page["after"]) == 3
-    sess = call(wapp, "core_get_event", event_id="wiki:session:test-wiki/dse~OecdEvidence@1")
+    sess = call(wapp, "core_get", ids="wiki:session:test-wiki/dse~OecdEvidence@1")
     assert sess["event"]["actor"] == "OecdScout" and "(created)" in sess["event"]["text"]
-    assert "No 'revision' record" in call_error(wapp, "core_get_event", event_id="wiki:revision:test-wiki/nope")
+    assert "No 'revision' record" in call_error(wapp, "core_get", ids="wiki:revision:test-wiki/nope")
 
 
 def test_subtasks_on_a_wiki(wapp):

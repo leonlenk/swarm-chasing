@@ -96,12 +96,16 @@ def test_ingest_mapped_converts_records_agents_periods(mapped_store):
 def test_mapped_ids_resolve_through_the_store_event_source(mapped_store):
     app = build_server(config_for(mapped_store["data_dir"]))
     hits = call(app, "scope_search", query="the", source="board", limit=3)
-    assert hits["total_matches"] > 0
+    assert hits["total"] > 0
     eid = hits["results"][0]["evidence_id"]
-    got = call(app, "core_get_event", event_id=eid, after=1)
+    got = call(app, "core_get", ids=eid, after=1)
     assert got["event"]["event_id"] == eid and got["event"]["kind"] == "post"
-    assert call(app, "scope_get_record", evidence_id="board:thread:1")["evidence_id"] == "board:thread:1"
-    kinds = {k["kind"] for src in call(app, "core_event_sources")["sources"] if src["source"] == "board"
+    thread = call(app, "core_get", ids="board:thread:1")["event"]
+    assert thread["event_id"] == "board:thread:1" and thread["period_kind"] == "thread"
+    assert call(app, "core_get", ids="board:open:1")["event"]["action_kind"] == "open"
+    periods = call(app, "scope_periods", source="board")
+    assert periods["count"] == 12 and periods["periods"][0]["kind"] == "thread"
+    kinds = {k["kind"] for src in call(app, "core_info")["sources"] if src["source"] == "board"
              for k in src["kinds"]}  # fmt: skip
     assert {"post", "open", "thread", "agent"} <= kinds
 
@@ -145,13 +149,15 @@ def test_store_records_filters(store_path: Path):
 def test_sweep_filters_use_the_store_provider(data_dir: Path, tmp_path: Path, monkeypatch):
     app = build_server(config_for(data_dir, sweeps=tmp_path / "sweeps"))
     flt = {"source": "village", "channel": "general", "since": "2026-01-05", "until": "2026-01-07"}
-    est = call(app, "sweep_estimate", rubric="Does the agent agree?", filters=flt, cap=50)
+    est = call(app, "sweep_run", rubric="Does the agent agree?", filters=flt, cap=50)
+    est = est["estimate"]
     assert est["records"] == 5 and est["est_input_tokens"] > 0  # m1-m5; a bare until includes that day
-    assert "records from provider 'store'" in est["notes"]
-    monkeypatch.setattr(llm, "get_client", lambda env=None: FakeClient(lambda s, p: '{"verdict": "no"}'))
-    out = call(app, "sweep_run", rubric="q", filters=flt)
+    dry = call(app, "sweep_run", rubric="q", filters=flt)
+    assert "records from provider 'store'" in dry["notes"]
+    monkeypatch.setattr(llm, "get_client", lambda config=None: FakeClient(lambda s, p: '{"verdict": "no"}'))
+    out = call(app, "sweep_run", rubric="q", filters=flt, dry_run=False)
     assert out["sent"] == 5 and all(v["event_id"].startswith("village:chat:") for v in out["verdicts"])
-    assert "Unknown filter" in call_error(app, "sweep_estimate", rubric="q", filters={"actor": "x"})
+    assert "Unknown filter" in call_error(app, "sweep_run", rubric="q", filters={"actor": "x"})
 
 
 def test_export_store_redacts_and_checks(store_path: Path, tmp_path: Path):

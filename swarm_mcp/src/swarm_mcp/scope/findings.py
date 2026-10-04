@@ -432,8 +432,9 @@ def spotcheck_sample(
     channel: str | None = None,
     since: str | None = None,
     until: str | None = None,
+    status: str | None = None,
 ) -> list[dict[str, Any]]:
-    """A deterministic random sample for human review.
+    """A deterministic random sample for human review (``status`` filters findings).
 
     Records (``messages``/``actions``) are ordered by ``md5(evidence_id || seed)``
     (stable across runs and DuckDB versions) after the filters. Findings use
@@ -459,6 +460,8 @@ def spotcheck_sample(
             ]
         if since_p or until_p:
             items = [e for e in items if _in_window(e["finding"].get("created_at"), since_p, until_p)]
+        if status is not None:
+            items = [e for e in items if e["finding"].get("status", "open") == status]
         picked = random.Random(seed).sample(items, min(n, len(items)))
         out = []
         for e in picked:

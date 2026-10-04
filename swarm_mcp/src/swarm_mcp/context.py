@@ -162,7 +162,7 @@ class ModuleContext:
     def event_source(
         self, kinds: dict[str, str], *, source: str | None = None, description: str = ""
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-        """Register the resolver that makes this module's event ids retrievable through ``core_get_event``.
+        """Register the resolver that makes this module's event ids retrievable through ``core_get``.
 
         ``kinds`` maps each kind to a one-line description. The resolver is called as
         ``fn(kind, local_id, before=, after=, max_chars=)`` and returns
@@ -200,7 +200,10 @@ class ModuleContext:
         return db.connect(self.store_path, read_only=read_only)
 
     def _full(self, suffix: str) -> str:
-        return suffix if suffix.startswith(f"{self.name}_") else f"{self.name}_{suffix}"
+        """``<module>_<suffix>``; a suffix equal to the module name (or already prefixed) is kept as is."""
+        if suffix == self.name or suffix.startswith(f"{self.name}_"):
+            return suffix
+        return f"{self.name}_{suffix}"
 
     def _app(self) -> sdk.App:
         if self.mcp is None:  # pragma: no cover - set by the server before register()

@@ -51,7 +51,7 @@ async def main() -> None:
         hit = hits["results"][0]
         show("search hit", {k: hit[k] for k in ("event_id", "time", "actor", "snippet")})
 
-        ctx = await call("core_get_event", event_id=hit["event_id"], before=1, after=1, max_chars=160)
+        ctx = await call("core_get", ids=hit["event_id"], before=1, after=1, max_chars=160)
         show(
             "context",
             [f"{r['time']} {r['actor']}: {r['text'][:110]}" for r in ctx["before"] + [ctx["event"]] + ctx["after"]],
@@ -74,7 +74,7 @@ async def main() -> None:
         show("unresolved", got["unresolved"])
 
         ev = got["handoffs"][0]["evidence"][0]
-        commit = await call("core_get_event", event_id=ev, before=0, after=0, max_chars=400)
+        commit = await call("core_get", ids=ev, before=0, after=0, max_chars=400)
         show("evidence commit", commit["event"]["text"])
 
         pair = await call("subtasks_trace_pair", corpus="rpg-game", actor_a="Opus 4.5", actor_b="GPT-5.2", limit=3)

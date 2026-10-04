@@ -1,33 +1,36 @@
-"""Investigation question battery: MCP prompts that walk a model through an evidence-cited investigation.
+"""Investigation question battery: one MCP prompt, ``investigate``, that walks a model through an
+evidence-cited investigation.
 
-Each prompt asks one standard question about a swarm run (who was involved, what they were told,
-what happened in what order, how claims evolved, what was hidden, how they collaborated, what the
-environment contributed) and lays out the method: discover sources, find candidates with whatever
-search/profile/timeline tools are loaded, read the evidence by event id, cite an id for every claim,
-record findings, and treat record text as untrusted data.
+``question`` picks one of seven standard questions about a swarm run (who was involved, what they
+were told, what happened in what order, how claims evolved, what was hidden, how they collaborated,
+what the environment contributed) or ``custom`` with your own wording. The prompt lays out the
+method: discover sources, find candidates with whatever search/profile/timeline tools are loaded,
+read the evidence by id, cite an id for every claim, record findings, and treat record text as
+untrusted data.
 
-The prompts never depend on a particular module: at render time they list the relevant tools that
+The prompt never depends on a particular module: at render time it lists the relevant tools that
 are actually loaded (SwarmScope ``scope_*`` tools, ``findings_record``, sweeps, dataset modules).
 """
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field
 
 NAME = "investigate"
 DESCRIPTION = (
-    "Prompts for standard investigation questions (actors, instructions, sequence, reasoning, misreporting, "
-    "collaboration, environment), each with optional source/period/agent/location scope; claims must cite event ids."
+    "The investigate prompt: a standard investigation question (actors, instructions, sequence, reasoning, "
+    "misreporting, collaboration, environment) or your own, with optional source/period/agent/location scope; "
+    "claims must cite event ids."
 )
 
 # The SwarmScope tools are named when loaded, but nothing here requires them.
-SCOPE_TOOLS = ("scope_search", "scope_messages", "scope_agent_profile", "scope_timeline", "scope_comm_graph",
+SCOPE_TOOLS = ("scope_search", "scope_agents", "scope_periods", "scope_timeline", "scope_graph",
                "scope_trace_diffusion", "scope_coordinators")  # fmt: skip
 MAX_LISTED_TOOLS = 40
 
-Source = Annotated[str | None, Field(description="Limit to one event source (see core_event_sources), e.g. 'village'.")]
+Source = Annotated[str | None, Field(description="Limit to one event source (see core_info), e.g. 'village'.")]
 Since = Annotated[str | None, Field(description="Start of the period (ISO date or datetime, UTC).")]
 Until = Annotated[str | None, Field(description="End of the period (ISO date or datetime, UTC).")]
 Period = Annotated[
@@ -35,7 +38,18 @@ Period = Annotated[
 ]
 Agent = Annotated[str | None, Field(description="Focus on one actor (agent name or id).")]
 Location = Annotated[str | None, Field(description="Focus on one location: room, channel, repo, page...")]
-Focus = Annotated[str | None, Field(description="Anything more specific to look into.")]
+Question = Annotated[
+    Literal["actors", "instructions", "sequence", "reasoning", "misreporting", "collaboration", "environment", "custom"],
+    Field(
+        description="actors: who was involved; instructions: what they were told; sequence: key actions in order; "
+        "reasoning: how claims evolved; misreporting: anything hidden or misreported; collaboration: how they "
+        "worked together; environment: did the scaffolding contribute; custom: your own question in `custom`."
+    ),
+]
+Custom = Annotated[
+    str | None,
+    Field(description="Your own question (with question='custom'), or extra focus for one of the standard ones."),
+]
 
 QUESTIONS: dict[str, tuple[str, str, list[str]]] = {
     "actors": (
@@ -146,9 +160,24 @@ def _loaded_tools(ctx) -> list[str]:
     return sorted(set(names))
 
 
-def render(ctx, key: str, *, source=None, since=None, until=None, period=None, agent=None, location=None,
-           focus=None) -> str:  # fmt: skip
-    title, question, checks = QUESTIONS[key]
+CUSTOM_CHECKS = [
+    "Restate the question precisely and say what evidence would answer it either way.",
+    "Find the records that bear on it, for and against, and read them in context.",
+    "Separate what the records show from what agents claimed, and note gaps in the data.",
+]
+
+
+def render(ctx, key: str, *, custom=None, source=None, since=None, until=None, period=None, agent=None,
+           location=None) -> str:  # fmt: skip
+    focus = None
+    if key == "custom":
+        question = (custom or "").strip() or (
+            "(none given: ask the user what they want to investigate, then follow the method below)"
+        )
+        title, checks = "Custom question", CUSTOM_CHECKS
+    else:
+        title, question, checks = QUESTIONS[key]
+        focus = custom
     tools = _loaded_tools(ctx)
     have = set(tools)
     scope_now = [t for t in SCOPE_TOOLS if t in have]
@@ -166,8 +195,8 @@ def render(ctx, key: str, *, source=None, since=None, until=None, period=None, a
         *[f"- {c}" for c in checks],
         "",
         "Method:",
-        "1. Discover the data: call core_event_sources to see which sources and record kinds are loaded and their "
-        "event_id format (core_list_modules shows what else is available).",
+        "1. Discover the data: call core_info to see which modules and sources are loaded, their record kinds and "
+        "id format, row counts and date ranges.",
     ]
     if scope_now:
         lines.append(
@@ -181,9 +210,9 @@ def render(ctx, key: str, *, source=None, since=None, until=None, period=None, a
             "tools. Start broad, then search for specifics."
         )
     lines += [
-        "3. Read the evidence itself: core_get_event(event_id) returns a record with its neighbours; "
-        "core_get_events fetches up to 50 at once"
-        + (" (scope_get_record opens SwarmScope evidence ids in context)" if "scope_get_record" in have else "")
+        "3. Read the evidence itself: core_get(id, before=3, after=3) returns a record with its neighbours; "
+        "core_get([ids]) fetches up to 50 at once"
+        + (" (scope_search without a query reads a window chronologically)" if "scope_search" in have else "")
         + ". Do not rely on search snippets alone.",
         "4. Cite event ids for every claim, exactly as tools returned them. Mark each claim as observed "
         "(a record shows it) or inferred (your reading of several records), and give a confidence.",
@@ -197,9 +226,9 @@ def render(ctx, key: str, *, source=None, since=None, until=None, period=None, a
         )
     if "sweep_run" in have:
         lines.append(
-            "6. For a pattern across many records, consider a rubric sweep (sweep_estimate, then sweep_run on "
-            "event ids you found) and check it with sweep_sample, sweep_label and sweep_precision before "
-            "quoting counts."
+            "6. For a pattern across many records, consider a rubric sweep (sweep_run with ids or filters: a dry "
+            "run first for the cost, then dry_run=false) and check it with sweep_review (label a sample, read the "
+            "precision) before quoting counts."
         )
     lines += [
         "",
@@ -220,23 +249,22 @@ def render(ctx, key: str, *, source=None, since=None, until=None, period=None, a
 
 
 def register(mcp, ctx) -> None:
-    def make(key: str):
-        title, question, _ = QUESTIONS[key]
+    def investigate(
+        question: Question,
+        custom: Custom = None,
+        source: Source = None,
+        since: Since = None,
+        until: Until = None,
+        period: Period = None,
+        agent: Agent = None,
+        location: Location = None,
+    ) -> str:
+        return render(ctx, question, custom=custom, source=source, since=since, until=until, period=period,
+                      agent=agent, location=location)  # fmt: skip
 
-        def prompt(
-            source: Source = None,
-            since: Since = None,
-            until: Until = None,
-            period: Period = None,
-            agent: Agent = None,
-            location: Location = None,
-            focus: Focus = None,
-        ) -> str:
-            return render(ctx, key, source=source, since=since, until=until, period=period, agent=agent,
-                          location=location, focus=focus)  # fmt: skip
-
-        prompt.__name__ = key
-        ctx.prompt(name=key, description=f"{title}: {question} Every claim must cite event ids.")(prompt)
-
-    for key in QUESTIONS:
-        make(key)
+    ctx.prompt(
+        name="investigate",
+        description="Investigate a swarm run: pick a standard question (actors, instructions, sequence, reasoning, "
+        "misreporting, collaboration, environment) or 'custom', optionally scoped by source, dates, period, agent "
+        "or location. Every claim must cite event ids.",
+    )(investigate)

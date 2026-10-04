@@ -183,9 +183,9 @@ def test_store_backed_modules_read_it(bench, tmp_path: Path):
     assert out["total"] == bench["truth"]["params"]["n_agents"]
     term, t = next((k, v) for k, v in bench["truth"]["diffusion"].items() if v["kind"] == "copied")
     hits = call(app, "scope_search", query=term, limit=50)
-    assert hits["total_matches"] == len(t["all_use_event_ids"])
+    assert hits["total"] == len(t["all_use_event_ids"])
     assert hits["results"][0]["evidence_id"] == t["first"]
-    got = call(app, "core_get_event", event_id=t["first"])
+    got = call(app, "core_get", ids=t["first"])
     assert got["event"]["event_id"] == t["first"]
 
 

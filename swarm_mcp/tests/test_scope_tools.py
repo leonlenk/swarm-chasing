@@ -20,11 +20,11 @@ GPT = f"village:agent:{A_GPT}"
 GEM = f"village:agent:{A_GEM}"
 HUMAN = f"human:{HUMAN_ID}"
 EMAIL = "bob.smith@gmail.com"
-TEXT_KEYS = {"content", "snippet", "label"}
+TEXT_KEYS = {"content", "snippet", "label", "text"}
 
 
 def assert_wrapped(obj: Any, path: str = "$") -> int:
-    """Every content/snippet/label field must be an untrusted wrapper. Returns how many were checked."""
+    """Every content/snippet/label/text field must be an untrusted wrapper. Returns how many were checked."""
     n = 0
     if isinstance(obj, dict):
         is_wrapper = obj.get("untrusted") is True
@@ -45,27 +45,33 @@ def assert_wrapped(obj: Any, path: str = "$") -> int:
 
 def test_module_skipped_without_store(raw_data_dir: Path):
     app = build_server(config_for(raw_data_dir))
-    mods = call(app, "core_list_modules", include_skipped=True)
-    skipped = {m["name"]: m for m in mods["skipped"]}
+    info = call(app, "core_info")
+    skipped = {m["name"]: m for m in info["modules"]["skipped"]}
     assert "scope" in skipped
     assert "SwarmScope store not found" in skipped["scope"]["reasons"][0]
-    assert "swarm-mcp ingest ai_village data/ai-village" in skipped["scope"]["reasons"][0]
+    assert "swarm-mcp add data/ai-village" in skipped["scope"]["reasons"][0]
+    assert any("no SwarmScope store" in n for n in info["notes"])
 
 
 # ----------------------------------------------------------------------------- list_sources / agents
 
 
-def test_list_sources(app):
-    out = call(app, "scope_list_sources")
-    assert out["source_count"] == 1 and out["periods"] == 3 and out["findings"] == 0
-    src = out["sources"][0]
-    assert src["source"] == "village" and src["adapter"] == "ai_village"
-    assert src["row_counts"] == {"agents": 4, "messages": 260, "actions": 3, "periods": 3}
-    assert src["channels"] == [{"channel": "general", "messages": 259}, {"channel": "rest", "messages": 1}]
-    assert src["messages_ts"] == {"min": "2026-01-05T13:00:00Z", "max": "2026-01-21T04:09:00Z"}
-    assert src["actions_ts"]["min"] == "2026-01-05T13:30:00Z"
-    assert src["action_kinds"] == {"session_goal": 2, "session_summary": 1}
-    assert src["ingested_at"].endswith("Z")
+def test_core_info_sources(app):
+    out = call(app, "core_info")
+    srcs = {x["source"]: x for x in out["sources"]}
+    src = srcs["village"]
+    assert {k["kind"] for k in src["kinds"]} == {"chat", "event", "agent", "goal"}
+    st = src["store"]
+    assert st["adapter"] == "ai_village"
+    assert st["row_counts"] == {"agents": 4, "messages": 260, "actions": 3, "periods": 3}
+    assert st["channels"] == [{"channel": "general", "messages": 259}, {"channel": "rest", "messages": 1}]
+    assert st["messages_ts"] == {"min": "2026-01-05T13:00:00Z", "max": "2026-01-21T04:09:00Z"}
+    assert st["actions_ts"]["min"] == "2026-01-05T13:30:00Z"
+    assert st["action_kinds"] == {"session_goal": 2, "session_summary": 1}
+    assert st["ingested_at"].endswith("Z")
+    assert out["findings"]["ok"] is True and out["findings"]["checked"] == 0
+    assert {m["name"] for m in out["modules"]["loaded"]} >= {"core", "scope", "findings", "village"}
+    assert out["config"]["db_exists"] is True and "api_key_set" in out["config"]["llm"]
 
 
 def test_agents(app):
@@ -94,7 +100,7 @@ def test_agents(app):
 
 def test_search_phrase_and_author_alias(app):
     out = call(app, "scope_search", query="GENUINELY")
-    assert out["total_matches"] == 2 and out["returned"] == 2 and out["has_more"] is False
+    assert out["total"] == 2 and out["returned"] == 2 and out["has_more"] is False
     assert [r["evidence_id"] for r in out["results"]] == ["village:chat:m0003", "village:chat:m0008"]
     r = out["results"][0]
     assert r["author"] == "GPT-5.2" and r["author_id"] == GPT and r["channel"] == "general"
@@ -105,7 +111,7 @@ def test_search_phrase_and_author_alias(app):
     assert newest["results"][0]["evidence_id"] == "village:chat:m0008"
 
     by_alias = call(app, "scope_search", query="genuinely", author="Opus 4.5")
-    assert by_alias["total_matches"] == 1 and by_alias["results"][0]["evidence_id"] == "village:chat:m0008"
+    assert by_alias["total"] == 1 and by_alias["results"][0]["evidence_id"] == "village:chat:m0008"
     assert by_alias["filters"]["author"] == "Claude Opus 4.5"
     human = call(app, "scope_search", query="charity", author="human")
     assert [r["author_id"] for r in human["results"]] == [HUMAN]
@@ -114,34 +120,34 @@ def test_search_phrase_and_author_alias(app):
 def test_search_modes(app):
     terms = call(app, "scope_search", query="together charity", match="all_terms")
     assert [r["evidence_id"] for r in terms["results"]] == ["village:chat:m0002"]
-    assert call(app, "scope_search", query="together charity")["total_matches"] == 0  # phrase: no such substring
+    assert call(app, "scope_search", query="together charity")["total"] == 0  # phrase: no such substring
 
     rx = call(app, "scope_search", query=r"give\w+", match="regex")
     assert [r["evidence_id"] for r in rx["results"]] == ["village:chat:m0003"]
 
     # LIKE wildcards are literal in phrase mode
-    assert call(app, "scope_search", query="%")["total_matches"] == 0
-    assert call(app, "scope_search", query="_")["total_matches"] == 0
-    assert call(app, "scope_search", query="1.234.5")["total_matches"] == 1
+    assert call(app, "scope_search", query="%")["total"] == 0
+    assert call(app, "scope_search", query="_")["total"] == 0
+    assert call(app, "scope_search", query="1.234.5")["total"] == 1
 
     err = call_error(app, "scope_search", query="(unclosed", match="regex")
     assert "Invalid regex" in err and "Traceback" not in err
-    assert "must not be empty" in call_error(app, "scope_search", query="   ")
+    assert call(app, "scope_search", query="   ")["mode"] == "read"  # blank query = read the window
 
 
 def test_search_paging_and_filters(app):
     page = call(app, "scope_search", query="filler message", limit=20)
-    assert page["total_matches"] == 250 and page["returned"] == 20 and page["has_more"] is True
+    assert page["total"] == 250 and page["returned"] == 20 and page["has_more"] is True
     assert page["next_offset"] == 20
     last = call(app, "scope_search", query="filler message", limit=20, offset=240)
     assert last["returned"] == 10 and last["has_more"] is False and "next_offset" not in last
     assert last["results"][-1]["evidence_id"] == "village:chat:m0349"
 
     rest = call(app, "scope_search", query="busy", channel="#REST")
-    assert rest["total_matches"] == 1 and rest["filters"]["channel"] == "rest"
+    assert rest["total"] == 1 and rest["filters"]["channel"] == "rest"
     jan5 = call(app, "scope_search", query="charity", since="2026-01-05", until="2026-01-05")
-    assert jan5["total_matches"] == 2 and jan5["filters"]["until"] == "2026-01-06T00:00:00Z"
-    assert call(app, "scope_search", query="charity", source="village")["total_matches"] == 2
+    assert jan5["total"] == 2 and jan5["filters"]["until"] == "2026-01-06T00:00:00Z"
+    assert call(app, "scope_search", query="charity", source="village")["total"] == 2
 
 
 def test_search_errors(app):
@@ -156,137 +162,141 @@ def test_search_errors(app):
 
 def test_search_masks_email_and_centres_snippet(app):
     out = call(app, "scope_search", query="Contact")
-    snip = out["results"][0]["snippet"]["content"]
+    snip = out["results"][0]["text"]["content"]
     assert EMAIL not in snip and "[email]" in snip and "[phone]" in snip and "555" not in snip
     # allow-listed domain stays readable
-    assert "help@agentvillage.org" in call(app, "scope_search", query="help@")["results"][0]["snippet"]["content"]
+    assert "help@agentvillage.org" in call(app, "scope_search", query="help@")["results"][0]["text"]["content"]
 
     long = call(app, "scope_search", query="THE END", max_chars=100)
-    s = long["results"][0]["snippet"]
+    s = long["results"][0]["text"]
     assert s["truncated"] is True and s["total_chars"] > 1000
     assert "THE END" in s["content"] and s["content"].startswith("…") and len(s["content"]) <= 110
 
 
 def test_search_actions(app):
     out = call(app, "scope_search", query="GiveDirectly", table="actions")
-    assert out["total_matches"] == 1
+    assert out["total"] == 1
     r = out["results"][0]
     assert r["evidence_id"] == "village:event:e0003" and r["kind"] == "session_summary"
     assert r["agent"] == "Claude Opus 4.5" and r["agent_id"] == OPUS and "channel" not in r
-    assert EMAIL not in r["snippet"]["content"] and "[email]" in r["snippet"]["content"]
-    assert call(app, "scope_search", query="draft", table="actions", author="GPT-5.2")["total_matches"] == 1
+    assert EMAIL not in r["text"]["content"] and "[email]" in r["text"]["content"]
+    assert call(app, "scope_search", query="draft", table="actions", author="GPT-5.2")["total"] == 1
 
 
-# ----------------------------------------------------------------------------- get_record
+# ----------------------------------------------------------------------------- core_get on store records
 
 
-def test_get_record_message_with_neighbors(app):
-    out = call(app, "scope_get_record", evidence_id="village:chat:m0003", neighbors=2)
-    assert out["table"] == "messages" and out["evidence_id"] == "village:chat:m0003"
-    assert out["author"] == "GPT-5.2" and out["author_id"] == GPT and out["channel"] == "general"
-    assert out["ts"] == "2026-01-05T15:00:00Z" and out["meta"]["speaker_type"] == "agent"
-    assert {"agent_id": OPUS, "name": "Claude Opus 4.5"} in out["recipients"]
-    assert "genuinely" in out["content"]["content"]
-    nb = out["neighbors"]
-    assert [m["evidence_id"] for m in nb["before"]] == ["village:chat:m0001", "village:chat:m0002"]
-    assert [m["evidence_id"] for m in nb["after"]] == ["village:chat:m0004", "village:chat:m0005"]
-    assert nb["before"][0]["author"] == "human:u0000000"
-    assert EMAIL not in str(out) and "[email]" in nb["after"][0]["snippet"]["content"]
-    assert assert_wrapped(out) == 5
+def test_core_get_message_with_neighbors(app):
+    out = call(app, "core_get", ids="village:chat:m0003", before=2, after=2)
+    ev = out["event"]
+    assert ev["event_id"] == "village:chat:m0003" and ev["kind"] == "chat"
+    assert ev["actor"] == "GPT-5.2" and ev["actor_id"] == GPT and ev["location"] == "general"
+    assert ev["time"] == "2026-01-05T15:00:00Z" and ev["meta"]["speaker_type"] == "agent"
+    assert {"agent_id": OPUS, "name": "Claude Opus 4.5"} in ev["recipients"]
+    assert "genuinely" in ev["text"]
+    assert [m["event_id"] for m in out["before"]] == ["village:chat:m0001", "village:chat:m0002"]
+    assert [m["event_id"] for m in out["after"]] == ["village:chat:m0004", "village:chat:m0005"]
+    assert out["before"][0]["actor"] == "human:u0000000"
+    assert EMAIL not in str(out) and "[email]" in out["after"][0]["text"]
+    assert "recipients" not in out["after"][0]  # detail only for the requested record
 
     # same-channel only: m0006 is the only message in #rest
-    lone = call(app, "scope_get_record", evidence_id="village:chat:m0006", neighbors=3)
-    assert lone["neighbors"] == {"before": [], "after": []}
-    assert "neighbors" not in call(app, "scope_get_record", evidence_id="village:chat:m0006", neighbors=0)
+    lone = call(app, "core_get", ids="village:chat:m0006", before=3, after=3)
+    assert lone["before"] == [] and lone["after"] == []
+    assert call(app, "core_get", ids="village:chat:m0006")["before"] == []
 
 
-def test_get_record_masks_and_truncates(app):
-    m4 = call(app, "scope_get_record", evidence_id="village:chat:m0004")
-    assert EMAIL not in m4["content"]["content"] and "[email]" in m4["content"]["content"]
-
-    full = call(app, "scope_get_record", evidence_id="village:chat:m0007")
-    assert full["content"]["truncated"] is True and full["content"]["total_chars"] > 3000
-    short = call(app, "scope_get_record", evidence_id="village:chat:m0007", max_chars=50)
-    assert short["content"]["truncated"] is True and len(short["content"]["content"]) < 100
-    big = call(app, "scope_get_record", evidence_id="village:chat:m0007", max_chars=20000)
-    assert "truncated" not in big["content"] and big["content"]["content"].endswith("THE END")
-    # neighbor snippets are capped at 200 chars even when max_chars is large
-    m8 = call(app, "scope_get_record", evidence_id="village:chat:m0008", max_chars=20000)
-    assert m8["neighbors"]["before"][0]["evidence_id"] == "village:chat:m0007"
-    assert len(m8["neighbors"]["before"][0]["snippet"]["content"]) < 260
+def test_core_get_masks_and_truncates(app):
+    m4 = call(app, "core_get", ids="village:chat:m0004")["event"]
+    assert EMAIL not in m4["text"] and "[email]" in m4["text"]
+    full = call(app, "core_get", ids="village:chat:m0007")
+    assert full["event"]["truncated"] is True and any("truncated" in n for n in full["notes"])
+    short = call(app, "core_get", ids="village:chat:m0007", max_chars=80)["event"]
+    assert short["truncated"] is True and len(short["text"]) < 140
+    big = call(app, "core_get", ids="village:chat:m0007", max_chars=20000)["event"]
+    assert "truncated" not in big and big["text"].endswith("THE END")
 
 
-def test_get_record_action_agent_period(app):
-    act = call(app, "scope_get_record", evidence_id="village:event:e0003", neighbors=2)
-    assert act["table"] == "actions" and act["kind"] == "session_summary" and act["agent_id"] == OPUS
-    assert EMAIL not in act["content"]["content"]
-    assert [a["evidence_id"] for a in act["neighbors"]["before"]] == ["village:event:e0001"]
-    assert act["neighbors"]["after"] == []
-    assert_wrapped(act)
+def test_core_get_action_agent_period(app):
+    act = call(app, "core_get", ids="village:event:e0003", before=2, after=2)
+    assert act["event"]["action_kind"] == "session_summary" and act["event"]["actor_id"] == OPUS
+    assert EMAIL not in act["event"]["text"]
+    assert [a["event_id"] for a in act["before"]] == ["village:event:e0001"]
+    assert act["after"] == [] and "same agent" in act["context"]
 
-    agent = call(app, "scope_get_record", evidence_id=OPUS)
-    assert agent["table"] == "agents" and agent["display_name"] == "Claude Opus 4.5"
-    assert agent["message_count"] == 4 and agent["action_count"] == 2 and "neighbors" not in agent
-    assert agent["meta"]["model_string"] == "claude-opus-4-5-20251101"
+    agent = call(app, "core_get", ids=OPUS)
+    assert agent["event"]["text"] == "Claude Opus 4.5" and agent["before"] == []
+    assert agent["event"]["message_count"] == 4 and agent["event"]["action_count"] == 2
+    assert agent["event"]["meta"]["model_string"] == "claude-opus-4-5-20251101"
 
-    goal = call(app, "scope_get_record", evidence_id="village:goal:g1")
-    assert goal["table"] == "periods" and goal["label"]["untrusted"] is True
-    assert "charity" in goal["label"]["content"]
+    goal = call(app, "core_get", ids="village:goal:g1")["event"]
+    assert "charity" in goal["text"] and goal["period_kind"] == "village_goal"
     assert goal["start"] == "2026-01-05T12:00:00Z" and goal["end"] == "2026-01-12T12:00:00Z"
     assert goal["messages_in_period"] == 6
-    assert call(app, "scope_get_record", evidence_id="village:goal:g3")["ongoing"] is True
+    assert call(app, "core_get", ids="village:goal:g3")["event"]["ongoing"] is True
 
 
-def test_get_record_bad_ids(app):
-    assert "Malformed evidence id" in call_error(app, "scope_get_record", evidence_id="m0003")
-    assert "Unknown evidence kind" in call_error(app, "scope_get_record", evidence_id="village:post:1")
-    err = call_error(app, "scope_get_record", evidence_id="village:chat:nope")
-    assert "does not resolve" in err and "Traceback" not in err
+def test_core_get_batch_and_bad_ids(app):
+    assert "Malformed event_id" in call_error(app, "core_get", ids="m0003")
+    assert "has no kind 'post'" in call_error(app, "core_get", ids="village:post:1")
+    err = call_error(app, "core_get", ids="village:chat:nope")
+    assert "No 'chat' record" in err and "Traceback" not in err
+    out = call(app, "core_get", ids=["village:chat:m0001", OPUS, "village:chat:nope", "bad"])
+    assert out["requested"] == 4 and out["returned"] == 2
+    assert [r["event"]["event_id"] for r in out["results"]] == ["village:chat:m0001", OPUS]
+    assert [e["id"] for e in out["errors"]] == ["village:chat:nope", "bad"]
+    ctxd = call(app, "core_get", ids=["village:chat:m0003"], before=1)
+    assert ctxd["results"][0]["before"][0]["event_id"] == "village:chat:m0002"
+    assert "At most 50" in call_error(app, "core_get", ids=[f"village:chat:m{i:04d}" for i in range(51)])
+    assert "must not be empty" in call_error(app, "core_get", ids=[])
 
 
-# ----------------------------------------------------------------------------- messages
+# ----------------------------------------------------------------------------- scope_search without a query
 
 
-def test_messages_window(app):
-    out = call(app, "scope_messages", start="2026-01-05", end="2026-01-05")
-    assert out["total_in_window"] == 3 and out["has_more"] is False and out["next_start"] is None
-    assert [m["evidence_id"] for m in out["messages"]] == [f"village:chat:m000{i}" for i in (1, 2, 3)]
-    assert out["messages"][0]["author"] == "human:u0000000"
+def test_read_window(app):
+    out = call(app, "scope_search", since="2026-01-05", until="2026-01-05")
+    assert out["mode"] == "read" and out["total"] == 3 and out["has_more"] is False
+    assert [m["evidence_id"] for m in out["results"]] == [f"village:chat:m000{i}" for i in (1, 2, 3)]
+    assert out["results"][0]["author"] == "human:u0000000"
     assert assert_wrapped(out) == 3
 
-    m4 = call(app, "scope_messages", start="2026-01-06", end="2026-01-06")
-    assert m4["messages"][0]["evidence_id"] == "village:chat:m0004"
-    assert EMAIL not in str(m4) and "[email]" in m4["messages"][0]["content"]["content"]
+    m4 = call(app, "scope_search", since="2026-01-06", until="2026-01-06")
+    assert m4["results"][0]["evidence_id"] == "village:chat:m0004"
+    assert EMAIL not in str(m4) and "[email]" in m4["results"][0]["text"]["content"]
 
-    opus = call(app, "scope_messages", start="2026-01-01", author="Opus 4.5")
-    assert opus["total_in_window"] == 4 and opus["filters"]["author"] == "Claude Opus 4.5"
-    assert call(app, "scope_messages", start="2026-01-01", channel="rest")["total_in_window"] == 1
-    long = call(app, "scope_messages", start="2026-01-13", end="2026-01-13", max_chars=40)
-    assert long["messages"][0]["content"]["truncated"] is True
+    opus = call(app, "scope_search", since="2026-01-01", author="Opus 4.5")
+    assert opus["total"] == 4 and opus["filters"]["author"] == "Claude Opus 4.5"
+    assert call(app, "scope_search", channel="rest")["total"] == 1
+    long = call(app, "scope_search", since="2026-01-13", until="2026-01-13", max_chars=40)
+    assert long["results"][0]["text"]["truncated"] is True
+    newest = call(app, "scope_search", newest_first=True, limit=1)
+    assert newest["results"][0]["evidence_id"] == "village:chat:m0349" and newest["total"] == 260
+    acts = call(app, "scope_search", table="actions")
+    assert [r["evidence_id"] for r in acts["results"]] == ["village:event:e0001", "village:event:e0003", "village:event:e0004"]
 
 
-def test_messages_paging(app):
-    page = call(app, "scope_messages", start="2026-01-21", limit=100)
-    assert page["total_in_window"] == 250 and page["returned"] == 100 and page["has_more"] is True
-    assert page["next_start"] == "2026-01-21T01:40:00.000000Z"
-    assert any("inclusive" in n for n in page["notes"])
-    nxt = call(app, "scope_messages", start=page["next_start"], limit=200)
-    assert nxt["messages"][0]["evidence_id"] == "village:chat:m0200"
+def test_read_paging(app):
+    page = call(app, "scope_search", since="2026-01-21", limit=100)
+    assert page["total"] == 250 and page["returned"] == 100 and page["has_more"] is True
+    assert page["next_offset"] == 100
+    nxt = call(app, "scope_search", since="2026-01-21", limit=200, offset=page["next_offset"])
+    assert nxt["results"][0]["evidence_id"] == "village:chat:m0200"
     assert nxt["returned"] == 150 and nxt["has_more"] is False
 
 
-def test_messages_errors(app):
-    assert "Could not parse" in call_error(app, "scope_messages", start="soon")
-    assert "must be before" in call_error(app, "scope_messages", start="2026-01-10", end="2026-01-01")
-    assert "Unknown channel" in call_error(app, "scope_messages", start="2026-01-01", channel="nope")
-    assert "Unknown agent" in call_error(app, "scope_messages", start="2026-01-01", author="Claude Haiku 9")
+def test_read_errors(app):
+    assert "Could not parse" in call_error(app, "scope_search", since="soon")
+    assert "must be before" in call_error(app, "scope_search", since="2026-01-10", until="2026-01-01")
+    assert "Unknown channel" in call_error(app, "scope_search", channel="nope")
+    assert "Unknown agent" in call_error(app, "scope_search", author="Claude Haiku 9")
 
 
-# ----------------------------------------------------------------------------- agent_profile
+# ----------------------------------------------------------------------------- scope_agents(name=...)
 
 
 def test_agent_profile(app):
-    out = call(app, "scope_agent_profile", agent="Opus 4.5")
+    out = call(app, "scope_agents", name="Opus 4.5")
     assert out["agent_id"] == OPUS and out["display_name"] == "Claude Opus 4.5"
     assert out["model_string"] == "claude-opus-4-5-20251101" and out["lab"]
     assert out["first_seen"] == "2026-01-05T14:00:00Z" and out["last_seen"] == "2026-01-14T08:00:00Z"
@@ -308,20 +318,20 @@ def test_agent_profile(app):
     assert assert_wrapped(out) == 6
     assert len(samples["first"]["snippet"]["content"]) <= 200 + 50
 
-    again = call(app, "scope_agent_profile", agent="Opus 4.5", samples=2)
+    again = call(app, "scope_agents", name="Opus 4.5", samples=2)
     assert [s["evidence_id"] for s in again["samples"]["spread"]] == [
-        s["evidence_id"] for s in call(app, "scope_agent_profile", agent="Opus 4.5", samples=2)["samples"]["spread"]
+        s["evidence_id"] for s in call(app, "scope_agents", name="Opus 4.5", samples=2)["samples"]["spread"]
     ]
 
 
 def test_agent_profile_window_and_errors(app):
-    out = call(app, "scope_agent_profile", agent=OPUS, since="2026-01-10")
+    out = call(app, "scope_agents", name=OPUS, since="2026-01-10")
     assert out["message_count"] == 2 and out["actions_by_kind"] == {}
     assert out["samples"]["first"]["evidence_id"] == "village:chat:m0007"
     assert out["filters"]["since"] == "2026-01-10T00:00:00Z"
-    gpt = call(app, "scope_agent_profile", agent="gpt-5.2")
+    gpt = call(app, "scope_agents", name="gpt-5.2")
     assert gpt["busiest_day"] == {"day": "2026-01-21", "messages": 250}
-    assert "Unknown agent" in call_error(app, "scope_agent_profile", agent="Nobody")
+    assert "Unknown agent" in call_error(app, "scope_agents", name="Nobody")
 
 
 # ----------------------------------------------------------------------------- timeline
@@ -366,11 +376,11 @@ def test_timeline_bucket_cap(store_path: Path):
         assert timeline_analysis.timeline(s, bin="month")["bins_returned"] == 1
 
 
-# ----------------------------------------------------------------------------- comm_graph
+# ----------------------------------------------------------------------------- graph
 
 
 def test_comm_graph_mentions(app):
-    out = call(app, "scope_comm_graph")
+    out = call(app, "scope_graph")
     edges = {(e["source"], e["target"], e["type"]): e for e in out["edges"]}
     gpt_opus = edges[(GPT, OPUS, "mention")]
     assert gpt_opus["weight"] == 2 and gpt_opus["evidence_id"] == "village:chat:m0003"  # m0003 and m0005
@@ -385,30 +395,30 @@ def test_comm_graph_mentions(app):
     assert any("reply edge" in n for n in out["notes"])
 
     # the example evidence id resolves to a message that really names the target
-    rec = call(app, "scope_get_record", evidence_id=gpt_opus["evidence_id"], neighbors=0)
-    assert rec["author_id"] == GPT and OPUS in {r["agent_id"] for r in rec["recipients"]}
+    rec = call(app, "core_get", ids=gpt_opus["evidence_id"])["event"]
+    assert rec["actor_id"] == GPT and OPUS in {r["agent_id"] for r in rec["recipients"]}
 
 
 def test_comm_graph_replies_humans_and_filters(app):
-    out = call(app, "scope_comm_graph", edge_types="replies", reply_window_minutes=90)
+    out = call(app, "scope_graph", edge_types="replies", reply_window_minutes=90)
     assert [(e["source"], e["target"], e["evidence_id"]) for e in out["edges"]] == [(GPT, OPUS, "village:chat:m0003")]
     assert out["totals"]["edges_by_type"] == {"reply": 1}
 
-    with_h = call(app, "scope_comm_graph", edge_types="replies", reply_window_minutes=90, include_humans=True)
+    with_h = call(app, "scope_graph", edge_types="replies", reply_window_minutes=90, include_humans=True)
     pairs = {(e["source"], e["target"]): e["evidence_id"] for e in with_h["edges"]}
     assert pairs[(OPUS, HUMAN)] == "village:chat:m0002"
     assert any(n["agent_id"] == HUMAN and n["name"] == "human:u0000000" for n in with_h["nodes"])
 
-    heavy = call(app, "scope_comm_graph", min_weight=2)
+    heavy = call(app, "scope_graph", min_weight=2)
     assert heavy["edges"] and all(e["weight"] >= 2 for e in heavy["edges"])
     assert heavy["totals"]["edges_below_min_weight"] > 0
 
-    rest = call(app, "scope_comm_graph", channel="rest")
+    rest = call(app, "scope_graph", channel="rest")
     assert rest["totals"]["messages_considered"] == 1
     assert all(e["evidence_id"] == "village:chat:m0006" for e in rest["edges"])
-    capped = call(app, "scope_comm_graph", max_edges=1, top_nodes=1)
+    capped = call(app, "scope_graph", max_edges=1, top_nodes=1)
     assert len(capped["edges"]) == 1 and len(capped["nodes"]) == 1 and capped["totals"]["edges"] > 1
-    assert "Unknown channel" in call_error(app, "scope_comm_graph", channel="nope")
+    assert "Unknown channel" in call_error(app, "scope_graph", channel="nope")
 
 
 def test_comm_graph_analysis_direct(store_path: Path):
@@ -423,39 +433,30 @@ def test_comm_graph_analysis_direct(store_path: Path):
 
 def test_mcp_client_roundtrip(data_dir: Path):
     app = build_server(config_for(data_dir))
-    expected = {
-        "scope_list_sources",
-        "scope_agents",
-        "scope_search",
-        "scope_get_record",
-        "scope_messages",
-        "scope_agent_profile",
-        "scope_timeline",
-        "scope_comm_graph",
-    }
+    expected = {"scope_agents", "scope_search", "scope_periods", "scope_timeline", "scope_graph"}
 
     async def go():
         async with Client(app) as client:
             tools = {t.name: t for t in (await client.list_tools()).tools}
-            assert expected <= set(tools)
+            assert {t for t in tools if t.startswith("scope_")} == expected
             for name in expected:
                 assert tools[name].annotations.read_only_hint is True
                 assert tools[name].description
             schema = tools["scope_search"].input_schema
-            assert schema["required"] == ["query"]
+            assert not schema.get("required")  # no query = read the window
             assert "description" in schema["properties"]["max_chars"]
-            assert tools["scope_get_record"].input_schema["required"] == ["evidence_id"]
+            assert tools["core_get"].input_schema["required"] == ["ids"]
 
             res = await client.call_tool("scope_search", {"query": "Contact", "limit": 1})
             assert res.is_error is False
             hit = res.structured_content["results"][0]
-            assert hit["evidence_id"] == "village:chat:m0004" and hit["snippet"]["untrusted"] is True
+            assert hit["evidence_id"] == "village:chat:m0004" and hit["text"]["untrusted"] is True
             assert EMAIL not in str(res.structured_content)
 
-            bad = await client.call_tool("scope_get_record", {"evidence_id": "village:chat:missing"})
-            assert bad.is_error is True and "does not resolve" in bad.content[0].text
+            bad = await client.call_tool("core_get", {"ids": "village:chat:missing"})
+            assert bad.is_error is True and "No 'chat' record" in bad.content[0].text
 
-            graph = await client.call_tool("scope_comm_graph", {"edge_types": "mentions"})
+            graph = await client.call_tool("scope_graph", {"edge_types": "mentions"})
             assert graph.is_error is False and graph.structured_content["totals"]["edges"] > 0
 
     run(go())

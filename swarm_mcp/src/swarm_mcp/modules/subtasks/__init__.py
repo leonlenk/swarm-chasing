@@ -5,7 +5,7 @@ duplicated).
 Works on any *corpus* an adapter in ``sources.py`` can turn into units: each git repo (units = PRs, with
 village chat that mentions PR numbers when the village dataset is present), and other corpora as their
 adapters are added. Inference runs once per corpus on first use and is cached. Every result cites
-event ids that ``core_get_event`` expands. Subtask ids look like ``<corpus>/<method>/<granularity>/<n>``
+event ids that ``core_get`` expands. Subtask ids look like ``<corpus>/<method>/<granularity>/<n>``
 and are stable for a given dataset and code version.
 """
 

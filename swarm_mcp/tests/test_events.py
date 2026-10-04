@@ -1,4 +1,4 @@
-"""Shared event ids: format, the source registry, and core_get_event / core_get_events."""
+"""Shared event ids: format, the source registry, core_get (one id or a batch) and core_info sources."""
 
 from __future__ import annotations
 
@@ -41,17 +41,17 @@ def test_duplicate_source_rejected():
         reg.add(EventSource("village", "other", {"chat": ""}, resolve=lambda *a, **k: {}))
 
 
-def test_event_sources_lists_village(app):
-    out = call(app, "core_event_sources")
+def test_core_info_lists_village_source(app):
+    out = call(app, "core_info")
     (src,) = [s for s in out["sources"] if s["source"] == "village"]
     # store-backed: the scope module registers one source per ingested dataset
     assert src["module"] == "scope" and src["kinds"][0]["id_format"] == "village:chat:<id>"
 
 
-def test_search_results_expand_through_core_get_event(app):
+def test_search_results_expand_through_core_get(app):
     hit = call(app, "scope_search", query="same agent")["results"][0]
     assert hit["evidence_id"] == "village:chat:m0005"
-    out = call(app, "core_get_event", event_id=hit["evidence_id"], before=2, after=2)
+    out = call(app, "core_get", ids=hit["evidence_id"], before=2, after=2)
     assert out["event"]["text"].startswith("Opus 4.5 and Claude Opus 4.5")
     assert out["event"]["actor"] == "GPT-5.2" and out["event"]["location"] == "general"
     # context stays in the same room: m0006 is in #rest, so it is skipped
@@ -60,21 +60,21 @@ def test_search_results_expand_through_core_get_event(app):
     assert any("truncated" in n for n in out["notes"])  # m0007 is the long message
 
 
-def test_get_event_edges_and_errors(app):
-    first = call(app, "core_get_event", event_id="village:chat:m0001", before=5, after=0)
+def test_core_get_edges_and_errors(app):
+    first = call(app, "core_get", ids="village:chat:m0001", before=5, after=0)
     assert first["before"] == [] and first["after"] == []
-    assert "Malformed event_id" in call_error(app, "core_get_event", event_id="m0001")
-    err = call_error(app, "core_get_event", event_id="nope:chat:m0001")
+    assert "Malformed event_id" in call_error(app, "core_get", ids="m0001")
+    err = call_error(app, "core_get", ids="nope:chat:m0001")
     assert "Unknown event source 'nope'" in err and "village" in err
-    assert "has no kind 'turn'" in call_error(app, "core_get_event", event_id="village:turn:x")
-    assert "No 'chat' record with id 'zzz'" in call_error(app, "core_get_event", event_id="village:chat:zzz")
+    assert "has no kind 'turn'" in call_error(app, "core_get", ids="village:turn:x")
+    assert "No 'chat' record with id 'zzz'" in call_error(app, "core_get", ids="village:chat:zzz")
 
 
-def test_get_events_batch(app):
-    out = call(app, "core_get_events", event_ids=["village:chat:m0002", "village:chat:zzz", "bad"], max_chars=80)
-    assert ids(out["events"]) == ["m0002"] and len(out["errors"]) == 2
-    assert out["errors"][0]["event_id"] == "village:chat:zzz" and "No 'chat' record" in out["errors"][0]["error"]
-    assert "At most 50" in call_error(app, "core_get_events", event_ids=["village:chat:m0001"] * 51)
+def test_core_get_batch(app):
+    out = call(app, "core_get", ids=["village:chat:m0002", "village:chat:zzz", "bad"], max_chars=80)
+    assert ids([r["event"] for r in out["results"]]) == ["m0002"] and len(out["errors"]) == 2
+    assert out["errors"][0]["id"] == "village:chat:zzz" and "No 'chat' record" in out["errors"][0]["error"]
+    assert "At most 50" in call_error(app, "core_get", ids=["village:chat:m0001"] * 51)
 
 
 def test_failed_register_drops_its_event_source(tmp_path, fake_modules):
@@ -104,5 +104,5 @@ def register(mcp, ctx):
     )
     app = build_server(config_for(tmp_path), package=pkg)
     assert set(app.swarm_registry.events.by_name) == {"steady"}
-    out = call(app, "core_get_event", event_id="steady:thing:a:b")
+    out = call(app, "core_get", ids="steady:thing:a:b")
     assert out["event"]["text"] == "a:b" and out["before"] == [] and out["after"] == []

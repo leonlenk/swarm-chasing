@@ -13,7 +13,7 @@ types, so a mapped dataset lands in the same tables as AI Village:
 
 Evidence ids are kept exactly as the mapping produced them (``<source>:<kind>:<id>``),
 and the mapping's kinds are recorded in ``sources.meta.kinds``, so they resolve
-through ``scope_get_record`` and ``core_get_event``. Records are yielded first (so
+through ``core_get`` and the scope tools. Records are yielded first (so
 agents carry first/last seen), then agents, then periods. ``ingest_mapped`` loads
 it with the normal idempotent ``scope.ingest.ingest`` (all rows of the source are
 replaced).

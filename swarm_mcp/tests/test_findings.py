@@ -43,11 +43,11 @@ def _lines(path: Path) -> list[str]:
 def test_module_loads_and_skips_without_store(app, tmp_path: Path):
     tools = {r.name: r for r in app.swarm_registry.records.values()}
     assert tools["findings"].status == "loaded"
-    assert set(tools["findings"].tools) == {"findings_record", "findings_list", "findings_spotcheck"}
+    assert set(tools["findings"].tools) == {"findings_record", "findings_list"}
 
     empty = build_server(config_for(tmp_path / "nodata"))
     rec = empty.swarm_registry.records["findings"]
-    assert rec.status == "skipped" and "swarm-mcp ingest ai_village" in rec.reasons[0]
+    assert rec.status == "skipped" and "swarm-mcp add data/ai-village" in rec.reasons[0]
 
 
 def test_record_valid_finding_writes_jsonl_and_duckdb(app, fdir: Path, store_path: Path):
@@ -172,30 +172,6 @@ def test_findings_list(app, fdir: Path):
 # --------------------------------------------------------------------------- spotcheck
 
 
-def test_spotcheck_messages_is_deterministic(app):
-    a = call(app, "findings_spotcheck", kind="messages", n=5, seed=7)
-    b = call(app, "findings_spotcheck", kind="messages", n=5, seed=7)
-    ids = [i["evidence_id"] for i in a["items"]]
-    assert ids == [i["evidence_id"] for i in b["items"]] and len(set(ids)) == 5
-    assert all(i["content"]["untrusted"] is True for i in a["items"])
-    others = {
-        tuple(i["evidence_id"] for i in call(app, "findings_spotcheck", kind="messages", seed=s)["items"])
-        for s in range(5)
-    }
-    assert len(others) > 1
-
-    gen = call(app, "findings_spotcheck", kind="messages", n=50, channel="rest")
-    assert gen["returned"] == 1 and gen["items"][0]["evidence_id"] == "village:chat:m0006" and gen["notes"]
-    window = call(app, "findings_spotcheck", kind="messages", n=50, since="2026-01-05", until="2026-01-05")
-    assert {i["evidence_id"] for i in window["items"]} == {
-        "village:chat:m0001",
-        "village:chat:m0002",
-        "village:chat:m0003",
-    }
-    capped = call(app, "findings_spotcheck", kind="messages", n=200, max_chars=40)
-    assert all(len(i["content"]["content"]) < 80 for i in capped["items"])
-
-
 def test_spotcheck_library_stable_order(store_path: Path):
     with db.connect(store_path) as s:
         one = [r["evidence_id"] for r in lib.spotcheck_sample(s, kind="messages", n=10, seed=3)]
@@ -208,26 +184,25 @@ def test_spotcheck_library_stable_order(store_path: Path):
     assert {a["evidence_id"] for a in acts} == {"village:event:e0001", "village:event:e0003", "village:event:e0004"}
 
 
-def test_spotcheck_findings(app):
+def test_findings_list_sample(app):
     for i in range(6):
         call(
             app, "findings_record", claim=f"claim {i}", evidence_ids=[f"village:chat:m{100 + i:04d}", "village:goal:g3"]
         )
-    a = call(app, "findings_spotcheck", kind="findings", n=3, seed=1)
-    b = call(app, "findings_spotcheck", kind="findings", n=3, seed=1)
+    a = call(app, "findings_list", sample=3, seed=1)
+    b = call(app, "findings_list", sample=3, seed=1)
     ids = [i["finding"]["finding_id"] for i in a["items"]]
     assert ids == [i["finding"]["finding_id"] for i in b["items"]] and len(set(ids)) == 3
     item = a["items"][0]
     assert item["finding"]["claim"]["untrusted"] is True
     assert [e["evidence_id"] for e in item["evidence"]][1] == "village:goal:g3"
     assert item["evidence"][0]["content"]["content"].startswith("filler message")
-    seeds = {
-        tuple(
-            i["finding"]["finding_id"] for i in call(app, "findings_spotcheck", kind="findings", n=3, seed=s)["items"]
-        )
-        for s in range(6)
-    }
+    seeds = {tuple(i["finding"]["finding_id"] for i in call(app, "findings_list", sample=3, seed=s)["items"])
+             for s in range(6)}  # fmt: skip
     assert len(seeds) > 1
+    assert call(app, "findings_list", sample=3, status="rejected")["returned"] == 0
+    many = call(app, "findings_list", sample=50)
+    assert many["returned"] == 6 and many["notes"]
 
 
 # --------------------------------------------------------------------------- check_findings + CLI

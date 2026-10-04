@@ -243,7 +243,7 @@ def register(mcp, ctx) -> None:
         offset: Annotated[int, Field(description="Skip this many matches (paging).", ge=0)] = 0,
     ) -> dict[str, Any]:
         """Search the text each wiki revision added (and its edit summary), oldest first. Returns revision event
-        ids with actor, page and a snippet; expand with core_get_event for the page's neighbouring revisions."""
+        ids with actor, page and a snippet; expand with core_get for the page's neighbouring revisions."""
         if not query.strip():
             raise ToolInputError("query must not be empty")
         try:

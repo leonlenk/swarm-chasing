@@ -4,10 +4,11 @@ The engine is store-agnostic. It works on standard event records (``events.event
 however they were obtained:
 
 - ``resolve_event_ids`` / ``EventIdProvider`` resolve event ids through the EventSources
-  registry (the same path as ``core_get_event``).
+  registry (the same path as ``core_get``).
 - Any other ``RecordProvider`` (e.g. a store-backed one that understands filters) can be
-  registered per server with ``register_provider(ctx.registry, name, provider)``;
-  ``sweep_run(filters=..., provider=...)`` then uses it.
+  registered per server with ``register_provider(ctx.registry, name, provider)``; the scope
+  module registers ``scope.records.StoreRecordProvider`` as ``"store"``, which
+  ``sweep_run(filters=...)`` uses.
 
 Each record is sent to the model as clearly delimited untrusted data, and the reply must be
 strict JSON ``{"verdict": "yes"|"no"|"unclear", "confidence": "low"|"medium"|"high",
@@ -165,7 +166,7 @@ _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,100}$")
 def _check_id(sweep_id: str) -> str:
     sid = (sweep_id or "").strip()
     if not _ID_RE.match(sid) or ".." in sid:
-        raise SweepError(f"Malformed sweep_id {sweep_id!r}. Use an id exactly as returned by sweep_run or sweep_list.")
+        raise SweepError(f"Malformed sweep_id {sweep_id!r}. Use an id exactly as returned by sweep_run or sweep_get.")
     return sid
 
 
@@ -555,7 +556,7 @@ def load(sweep_id: str, directory: Path) -> dict[str, Any]:
     """``{"meta": {...}, "verdicts": [...], "summary": {...} | None}`` for one sweep."""
     path = _sweep_path(directory, sweep_id)
     if not path.exists():
-        raise SweepError(f"No sweep {sweep_id!r} in {directory}. sweep_list shows the available ids.")
+        raise SweepError(f"No sweep {sweep_id!r} in {directory}. sweep_get() lists the available ids.")
     rows = _read_jsonl(path)
     meta = next((r for r in rows if r.get("type") == "meta"), {})
     verdicts = sorted((r for r in rows if r.get("type") == "verdict"), key=lambda r: r.get("i", 0))
@@ -677,6 +678,23 @@ def sample_for_labeling(
     }
 
 
+def pending_labels(sweep_id: str, directory: Path) -> list[dict[str, Any]]:
+    """Sampled verdicts that have no label yet, in sampling order."""
+    s = load(sweep_id, directory)
+    labels = _labels(directory, sweep_id)
+    by_id = {v["event_id"]: v for v in s["verdicts"]}
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for r in _label_rows(directory, sweep_id):
+        eid = r.get("event_id")
+        if r.get("type") != "sample" or eid in seen:
+            continue
+        seen.add(eid)
+        if labels.get(eid) is None and eid in by_id:
+            out.append(_public(by_id[eid]))
+    return out
+
+
 def label(
     sweep_id: str, event_id: str, correct: bool, directory: Path, note: str | None = None, labeler: str | None = None
 ) -> dict[str, Any]:
@@ -721,12 +739,12 @@ def precision(sweep_id: str, directory: Path) -> dict[str, Any]:
     pending = sum(1 for e in sampled if labels.get(e) is None)
     notes: list[str] = []
     if yes["labeled"] == 0:
-        notes.append("no labeled 'yes' verdicts yet: run sweep_sample, then sweep_label each sampled event")
+        notes.append("no labeled 'yes' verdicts yet: call sweep_review for items, then sweep_review(labels=...)")
     elif yes["labeled"] < 20:
         notes.append(f"only {yes['labeled']} labels: the interval is wide; label more for a firmer number")
     if outside:
         notes.append(
-            f"{outside} labeled 'yes' verdict(s) were not drawn by sweep_sample, so the estimate may be biased"
+            f"{outside} labeled 'yes' verdict(s) were not drawn by sweep_review, so the estimate may be biased"
         )
     if pending:
         notes.append(f"{pending} sampled item(s) still unlabeled")

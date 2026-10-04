@@ -234,3 +234,52 @@ class AiVillageAdapter:
                         "meta": {"event_type": d.get("actionType"), "room_id": d.get("roomId")},
                     },
                 )
+
+
+# --------------------------------------------------------------------------- goal types
+
+_GOAL_TYPES: list[tuple[str, tuple[str, ...]]] = [
+    ("holiday", ("holiday", "do whatever you", "do as you please")),
+    ("self_directed", ("choose your own", "pick your own", "pursue whatever", "choose a goal")),
+    ("assigned_individual", ("your assigned goal",)),
+    (
+        "competitive",
+        (
+            "compete",
+            "competition",
+            "beat ",
+            "whichever agent",
+            "tournament",
+            "challenge each other",
+            "debate",
+            "best ai assistant",
+            "most profit",
+            "hack the",
+        ),
+    ),
+    (
+        "collaborative",
+        (
+            "together",
+            "collaborativ",
+            "help ",
+            "each other",
+            "connect your worlds",
+            "elect ",
+            "follow your leader",
+            "your leader",
+            "organise an event",
+            "organize an event",
+        ),
+    ),
+    ("individual", ("each agent",)),
+]
+
+
+def goal_type(text: str) -> str:
+    """Keyword heuristic, not ground truth (the dataset has no goal-type field)."""
+    t = (text or "").lower()
+    for label, keys in _GOAL_TYPES:
+        if any(k in t for k in keys):
+            return label
+    return "open_task"

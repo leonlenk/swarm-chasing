@@ -54,7 +54,7 @@ async def main() -> None:
             },
         )
 
-        ctx = await call("core_get_event", event_id=hit["event_id"], before=1, after=2, max_chars=150)
+        ctx = await call("core_get", ids=hit["event_id"], before=1, after=2, max_chars=150)
         show(
             "same page, before/after",
             [f"{r['time']} {r['actor']}: {r['text'][:100]}" for r in ctx["before"] + [ctx["event"]] + ctx["after"]],

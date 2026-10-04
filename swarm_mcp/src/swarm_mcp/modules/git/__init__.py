@@ -4,7 +4,7 @@ Data: bare clones (with PR heads fetched) under ``$SWARM_DATA_DIR/<dataset>/repo
 ``$SWARM_DATA_DIR/repos/*.git``; override with ``SWARM_GIT_DIR``. A repo loads on first use
 (about 10 s for ~460 PRs) and is cached for the process.
 
-Event ids: ``git:pr:<repo>#<number>`` and ``git:commit:<repo>@<sha>``. ``core_get_event`` on a PR
+Event ids: ``git:pr:<repo>#<number>`` and ``git:commit:<repo>@<sha>``. ``core_get`` on a PR
 returns its commits as context; on a commit, the neighbouring commits of the same PR (or of main).
 """
 
@@ -22,7 +22,7 @@ from swarm_mcp.toolkit import ToolInputError, iso, parse_time, truncate
 NAME = "git"
 DESCRIPTION = (
     "Git repos the agents built (bare clones with PR refs): list repos and pull requests; PRs and commits are "
-    "event ids (git:pr:<repo>#N, git:commit:<repo>@<sha>) that core_get_event expands. PR state is inferred from "
+    "event ids (git:pr:<repo>#N, git:commit:<repo>@<sha>) that core_get expands. PR state is inferred from "
     "main's history (merged / landed / unmerged)."
 )
 
@@ -194,7 +194,7 @@ def register(mcp, ctx) -> None:
         offset: Annotated[int, Field(description="Skip this many (paging).", ge=0)] = 0,
     ) -> dict[str, Any]:
         """List pull requests in a repo, oldest first, with event ids, title, main author, inferred state and
-        commit count. Expand one with core_get_event to see its commits."""
+        commit count. Expand one with core_get to see its commits."""
         r = get_repo(ctx, repo)
         lim, note = ctx.limit(limit)
         s, u = parse_time(since, field="since"), parse_time(until, end=True, field="until")

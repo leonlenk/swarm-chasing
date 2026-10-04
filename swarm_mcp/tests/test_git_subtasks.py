@@ -174,15 +174,15 @@ def test_git_prs_and_states(gapp):
 
 
 def test_git_event_ids_resolve(gapp):
-    pr = call(gapp, "core_get_event", event_id="git:pr:rpg#1", after=5)
+    pr = call(gapp, "core_get", ids="git:pr:rpg#1", after=5)
     assert pr["event"]["title"] == "feat: Talent tree core" and pr["event"]["merged_by"] == "gpt-5-2"
     assert pr["event"]["merge_kind"] == "merge" and len(pr["after"]) == 1
     sha = pr["after"][0]["sha"]
-    c = call(gapp, "core_get_event", event_id=f"git:commit:rpg@{sha[:9]}")
+    c = call(gapp, "core_get", ids=f"git:commit:rpg@{sha[:9]}")
     assert c["event"]["actor"] == "Claude Opus 4.5" and "src/talents.js (+3 -0)" in c["event"]["text"]
     assert c["event"]["prs"] == ["git:pr:rpg#1"] and c["context"] == "commits of PR #1"
-    assert "No 'pr' record" in call_error(gapp, "core_get_event", event_id="git:pr:rpg#99")
-    assert "No 'commit' record" in call_error(gapp, "core_get_event", event_id="git:commit:rpg@deadbeef")
+    assert "No 'pr' record" in call_error(gapp, "core_get", ids="git:pr:rpg#99")
+    assert "No 'commit' record" in call_error(gapp, "core_get", ids="git:commit:rpg@deadbeef")
 
 
 def test_handoffs_are_typed_and_attributed(gapp):

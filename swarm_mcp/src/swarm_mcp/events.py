@@ -9,12 +9,12 @@ Every piece of evidence a tool returns carries an ``event_id``:
   (the activity timeline), ``turn`` (a computer-use turn), ``commit``...
 - ``local_id``: the source's own id. It may itself contain ``:``.
 
-Ids are opaque to callers: they only pass them back, to ``core_get_event`` or
+Ids are opaque to callers: they only pass them back, to ``core_get`` or
 to any tool that takes event ids. Derived results (search hits, subtasks,
 handoffs, claims) cite event ids instead of copying text around.
 
 Modules make their records retrievable by registering one resolver per source
-with ``@ctx.event_source(kinds={...})``. ``core_get_event`` parses the id,
+with ``@ctx.event_source(kinds={...})``. ``core_get`` parses the id,
 finds the resolver and returns the record plus its surrounding context in one
 standard shape, whatever the source.
 

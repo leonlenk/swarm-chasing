@@ -1,11 +1,16 @@
-"""Rubric sweeps: apply one yes/no rubric to many event records with an LLM, then hand-label a sample for precision."""
+"""Rubric sweeps: apply one yes/no rubric to many event records with an LLM, then hand-label a sample for precision.
+
+Three tools: ``sweep_run`` (a dry run, the default, returns the cost estimate and a prompt preview;
+``dry_run=false`` executes), ``sweep_get`` (one sweep, or the list) and ``sweep_review`` (items to
+hand-label plus the current precision; with ``labels`` it records them and returns the updated precision).
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from swarm_mcp import llm
 from swarm_mcp import sweep as engine
@@ -13,9 +18,10 @@ from swarm_mcp.toolkit import ToolInputError
 
 NAME = "sweep"
 DESCRIPTION = (
-    "LLM rubric sweeps over event records: estimate cost, run a capped yes/no/unclear sweep that cites event ids, "
-    "then sample, hand-label and report precision with a 95% CI. Needs ANTHROPIC_API_KEY for real runs."
+    "LLM rubric sweeps over event records: estimate (dry run), run a capped yes/no/unclear sweep that cites event "
+    "ids, then hand-label a sample and get precision with a 95% CI. Real runs need ANTHROPIC_API_KEY."
 )
+DEFAULT_PROVIDER = "store"
 
 Rubric = Annotated[
     str,
@@ -24,19 +30,13 @@ Rubric = Annotated[
         "it did not actually finish?'. Say what counts as yes."
     ),
 ]
-EventIds = Annotated[
-    list[str] | None,
-    Field(description="Event ids to evaluate, exactly as returned by other tools (see core_event_sources)."),
-]
-Filters = Annotated[
-    dict[str, Any] | None,
-    Field(
-        description="Instead of event_ids: a filter object for a registered record provider (see `provider`). "
-        "Only available when a module has registered one."
-    ),
-]
-Provider = Annotated[str | None, Field(description="Name of the registered record provider that interprets `filters`.")]
-SweepId = Annotated[str, Field(description="A sweep id as returned by sweep_run or sweep_list.")]
+SweepId = Annotated[str, Field(description="A sweep id as returned by sweep_run or sweep_get.")]
+
+
+class Label(BaseModel):
+    event_id: str = Field(description="The event_id of a verdict in this sweep.")
+    correct: bool = Field(description="True if the sweep's verdict for this record is right.")
+    note: str | None = Field(default=None, description="Optional short reason.")
 
 
 def _prices(ctx) -> dict[str, list[float]] | None:
@@ -48,75 +48,67 @@ def _prices(ctx) -> dict[str, list[float]] | None:
 def register(mcp, ctx) -> None:
     config = ctx.config
     max_chars = engine.DEFAULT_RECORD_CHARS
-    concurrency = config.llm_concurrency
 
     def directory() -> Path:
         return engine.sweeps_dir(config)
 
-    def gather(event_ids: list[str] | None, filters: dict[str, Any] | None, provider: str | None, limit: int):
-        """Records for a sweep, plus resolution errors and notes."""
-        if event_ids and filters is not None:
-            raise ToolInputError("Pass either event_ids or filters, not both.")
-        if event_ids:
-            if len(event_ids) > engine.MAX_CAP * 4:
-                raise ToolInputError(f"At most {engine.MAX_CAP * 4} event_ids per call (got {len(event_ids)}).")
-            records, errors = engine.resolve_event_ids(ctx.registry.events, event_ids, max_chars)
-            return records, errors, []
+    def gather(ids: list[str] | None, filters: dict[str, Any] | None, limit: int):
+        """Records for a sweep, plus resolution errors, notes and the provider used."""
+        if ids and filters is not None:
+            raise ToolInputError("Pass either ids or filters, not both.")
+        if ids:
+            if len(ids) > engine.MAX_CAP * 4:
+                raise ToolInputError(f"At most {engine.MAX_CAP * 4} ids per call (got {len(ids)}).")
+            records, errors = engine.resolve_event_ids(ctx.registry.events, ids, max_chars)
+            return records, errors, [], None
         if filters is not None:
             table = engine.providers(ctx.registry)
             if not table:
                 raise ToolInputError(
-                    "No record provider is registered on this server, so `filters` cannot be used yet. "
-                    "Pass event_ids (from search/timeline tools) instead."
+                    "No record provider is registered on this server (the SwarmScope store is not loaded), so "
+                    "`filters` cannot be used. Pass ids (from scope_search or other tools) instead."
                 )
-            name = provider or (next(iter(table)) if len(table) == 1 else None)
-            if name not in table:
-                raise ToolInputError(
-                    f"Unknown or missing provider {provider!r}. Registered: {', '.join(sorted(table))}."
-                )
+            name = DEFAULT_PROVIDER if DEFAULT_PROVIDER in table else sorted(table)[0]
             records = list(table[name].iter_records(filters, limit + 1))
-            return records, [], [f"records from provider {name!r}"]
-        raise ToolInputError("Pass event_ids (or filters for a registered provider).")
-
-    @ctx.tool()
-    def estimate(
-        rubric: Rubric,
-        event_ids: EventIds = None,
-        filters: Filters = None,
-        provider: Provider = None,
-        cap: Annotated[int, Field(description="Records that would be sent (default 50).", ge=1)] = engine.DEFAULT_CAP,
-        model: Annotated[str | None, Field(description="Model to price (default: the configured one).")] = None,
-    ) -> dict[str, Any]:
-        """Estimate the tokens and USD cost of sweeping these records (chars/4 input tokens, a fixed output
-        allowance per record, times a price table). Makes no model calls."""
-        records, errors, notes = gather(event_ids, filters, provider, cap)
-        out = engine.estimate(rubric, records[:cap], model=model or llm.configured_model(config), prices=_prices(ctx))
-        if len(records) > cap:
-            notes.append(f"cap {cap} applied: only the first {cap} of {len(records)} records are priced")
-        out["unresolved"] = errors
-        out["notes"] = notes + out["notes"]
-        return out
+            return records, [], [f"records from provider {name!r}"], name
+        raise ToolInputError(
+            "Pass ids (from scope_search or other tools), or filters such as "
+            "{'source': 'village', 'channel': 'general', 'since': '2026-01-05', 'until': '2026-01-12', "
+            "'author': 'Opus 4.5', 'kind': 'chat', 'query': 'deadline'}."
+        )
 
     @ctx.tool(read_only=False)
     def run(
         rubric: Rubric,
-        event_ids: EventIds = None,
+        ids: Annotated[
+            list[str] | None,
+            Field(description="Record ids to evaluate, exactly as returned by other tools."),
+        ] = None,
+        filters: Annotated[
+            dict[str, Any] | None,
+            Field(
+                description="Instead of ids: select records from the SwarmScope store with keys source, kind, "
+                "channel, author, since, until, query (all optional; oldest first)."
+            ),
+        ] = None,
+        dry_run: Annotated[
+            bool,
+            Field(
+                description="True (default): estimate tokens and USD cost and preview the first prompt; no model "
+                "calls, nothing written. False: run the sweep (needs ANTHROPIC_API_KEY)."
+            ),
+        ] = True,
         cap: Annotated[
             int, Field(description=f"Max records sent to the model (default 50, max {engine.MAX_CAP}).", ge=1)
         ] = engine.DEFAULT_CAP,
-        dry_run: Annotated[
-            bool, Field(description="Only estimate and preview the first prompt; no model calls, nothing written.")
-        ] = False,
-        filters: Filters = None,
-        provider: Provider = None,
     ) -> dict[str, Any]:
-        """Apply a yes/no rubric to each record with an LLM and store the verdicts.
+        """Apply a yes/no rubric to each record with an LLM.
 
-        Each record is sent as delimited untrusted data; the model returns verdict (yes/no/unclear),
-        confidence and a short rationale. Every verdict cites its event_id; expand any of them with
-        core_get_event. Results are saved under a sweep_id (sweep_get, sweep_sample, sweep_precision).
-        Real runs need ANTHROPIC_API_KEY on the server; dry_run works without it. Rationales are model
-        output about untrusted text: verify before relying on them.
+        Start with the default dry run: it returns the estimate (records, tokens, USD) and the first prompt.
+        Then call again with dry_run=false to execute: each record is sent as delimited untrusted data and the
+        model returns verdict (yes/no/unclear), confidence and a short rationale; every verdict cites its
+        event_id (expand it with core_get). Results are saved under a sweep_id (sweep_get, sweep_review).
+        Rationales are model output about untrusted text: verify before relying on them.
         """
         if cap > engine.MAX_CAP:
             raise ToolInputError(f"cap {cap} is above the maximum of {engine.MAX_CAP}; split the sweep.")
@@ -126,47 +118,51 @@ def register(mcp, ctx) -> None:
                 client = llm.get_client(config)  # before any work: no key, nothing happens
             except llm.LLMUnavailable as e:
                 raise ToolInputError(str(e)) from None
-        records, errors, notes = gather(event_ids, filters, provider, cap)
+        records, errors, notes, provider = gather(ids, filters, cap)
         if not records:
-            raise ToolInputError(
-                "None of the event_ids resolved, so nothing was swept. Errors: "
-                + "; ".join(f"{e['event_id']}: {e['error']}" for e in errors[:5])
+            if errors:
+                raise ToolInputError(
+                    "None of the ids resolved, so nothing was swept. Errors: "
+                    + "; ".join(f"{e['event_id']}: {e['error']}" for e in errors[:5])
+                )
+            raise ToolInputError("No records match these filters, so nothing was swept.")
+        model = llm.configured_model(config)
+        if dry_run:
+            out = engine.run(rubric, records, None, cap=cap, dry_run=True, model=model, prices=_prices(ctx))
+            out["notes"] = notes + out["notes"] + ["call again with dry_run=false to run it"]
+        else:
+            out = engine.run(
+                rubric,
+                records,
+                client,
+                cap=cap,
+                directory=directory(),
+                model=model,
+                prices=_prices(ctx),
+                concurrency=config.llm_concurrency,
+                meta={"source_tool": "sweep_run", "unresolved": len(errors), "provider": provider},
             )
-        out = engine.run(
-            rubric,
-            records,
-            client,
-            cap=cap,
-            dry_run=dry_run,
-            directory=directory(),
-            model=llm.configured_model(config),
-            prices=_prices(ctx),
-            concurrency=concurrency,
-            meta={"source_tool": "sweep_run", "unresolved": len(errors), "provider": provider if filters else None},
-        )
+            out["notes"] = notes + out.get("notes", [])
         out["unresolved"] = errors
-        out["notes"] = notes + out.get("notes", [])
         if errors:
-            out["notes"].append(f"{len(errors)} event id(s) could not be resolved and were skipped (see unresolved)")
+            out["notes"].append(f"{len(errors)} id(s) could not be resolved and were skipped (see unresolved)")
         return out
-
-    @ctx.tool(name="list")
-    def list_sweeps() -> dict[str, Any]:
-        """List saved sweeps, newest first: id, rubric, model, verdict counts and how many are hand-labeled."""
-        sweeps = engine.list_sweeps(directory())
-        return {"directory": str(directory()), "count": len(sweeps), "sweeps": sweeps}
 
     @ctx.tool()
     def get(
-        sweep_id: SweepId,
+        sweep_id: Annotated[str | None, Field(description="A sweep id; omit to list all saved sweeps.")] = None,
         verdict: Annotated[
             Literal["yes", "no", "unclear", "error"] | None, Field(description="Only verdicts of this kind.")
         ] = None,
         limit: Annotated[int | None, Field(description="Verdicts per page (default 20, max 200).")] = None,
         offset: Annotated[int, Field(ge=0, description="Skip this many verdicts (paging).")] = 0,
     ) -> dict[str, Any]:
-        """One sweep: its rubric, model, counts, token use and cost, plus a page of verdicts (each citing an
+        """Without sweep_id: the saved sweeps, newest first (id, rubric, model, verdict counts, labels so far).
+        With sweep_id: its rubric, model, counts, token use and cost, plus a page of verdicts (each citing an
         event_id)."""
+        if not sweep_id:
+            sweeps = engine.list_sweeps(directory())
+            return {"directory": str(directory()), "count": len(sweeps), "sweeps": sweeps}
         limit, note = ctx.limit(limit)
         s = engine.load(sweep_id, directory())
         rows = s["verdicts"]
@@ -192,33 +188,53 @@ def register(mcp, ctx) -> None:
         }
 
     @ctx.tool(read_only=False)
-    def sample(
+    def review(
         sweep_id: SweepId,
-        n: Annotated[int, Field(description="How many verdicts to draw (default 20).", ge=1, le=500)] = 20,
-        seed: Annotated[int, Field(description="Random seed, so the sample is reproducible.")] = 0,
+        labels: Annotated[
+            list[Label] | None,
+            Field(
+                description="Your judgements, [{event_id, correct, note?}], one per verdict you checked. Omit to get "
+                "the items to label."
+            ),
+        ] = None,
+        n: Annotated[int, Field(description="How many items to label (default 20).", ge=1, le=500)] = 20,
+        seed: Annotated[int, Field(description="Random seed for drawing new items (reproducible sample).")] = 0,
         verdicts: Annotated[
             list[Literal["yes", "no", "unclear"]] | None,
-            Field(description="Which verdicts to sample from (default ['yes'], what precision needs)."),
+            Field(description="Which verdicts to draw from (default ['yes'], what precision needs)."),
         ] = None,
     ) -> dict[str, Any]:
-        """Draw a seeded random sample of verdicts to hand-label and write it to the sweep's label file.
-        Then read each item with core_get_event and record your judgement with sweep_label."""
-        out = engine.sample_for_labeling(sweep_id, n, seed, directory(), tuple(verdicts or ("yes",)))
-        out["next"] = "For each item: core_get_event(event_id), decide if the verdict is right, then sweep_label."
+        """Check a sweep by hand and measure its precision.
+
+        Without labels: up to n items to label (earlier-sampled but unlabeled items first, then a seeded random
+        draw of new ones, recorded in the sweep's label file) plus the current precision. Read each item with
+        core_get, decide whether the verdict is right, then call again with labels=[{event_id, correct}].
+        With labels: records them (the latest label for an event wins) and returns the updated precision of the
+        'yes' verdicts with a Wilson 95% CI."""
+        d = directory()
+        if labels:
+            recorded = [engine.label(sweep_id, lb.event_id, lb.correct, d, note=lb.note) for lb in labels]
+            return {
+                "sweep_id": sweep_id,
+                "recorded": len(recorded),
+                "labels": recorded,
+                "precision": engine.precision(sweep_id, d),
+            }
+        pending = engine.pending_labels(sweep_id, d)
+        items = pending[:n]
+        drawn = None
+        if len(items) < n:
+            drawn = engine.sample_for_labeling(sweep_id, n - len(items), seed, d, tuple(verdicts or ("yes",)))
+            items += drawn["items"]
+        out: dict[str, Any] = {
+            "sweep_id": sweep_id,
+            "to_label": items,
+            "pending_from_earlier": min(len(pending), n),
+            "newly_drawn": drawn["sampled"] if drawn else 0,
+            "precision": engine.precision(sweep_id, d),
+            "next": "For each item: core_get(event_id), decide if the verdict is right, then "
+            "sweep_review(sweep_id, labels=[{event_id, correct}, ...]).",
+        }
+        if drawn and drawn.get("notes"):
+            out["notes"] = drawn["notes"]
         return out
-
-    @ctx.tool(read_only=False)
-    def label(
-        sweep_id: SweepId,
-        event_id: Annotated[str, Field(description="The event_id of a verdict in this sweep.")],
-        correct: Annotated[bool, Field(description="True if the sweep's verdict for this record is right.")],
-        note: Annotated[str | None, Field(description="Optional short reason.")] = None,
-    ) -> dict[str, Any]:
-        """Record whether the sweep's verdict for one event was correct. The latest label for an event wins."""
-        return engine.label(sweep_id, event_id, correct, directory(), note=note)
-
-    @ctx.tool()
-    def precision(sweep_id: SweepId) -> dict[str, Any]:
-        """Precision of the sweep's 'yes' verdicts from hand labels, with a Wilson 95% confidence interval, the
-        number of labels it rests on, and the implied number of true positives among all 'yes' verdicts."""
-        return engine.precision(sweep_id, directory())
