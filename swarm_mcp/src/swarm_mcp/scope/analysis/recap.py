@@ -42,6 +42,9 @@ from functools import partial
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import numpy as np
+
+from swarm_mcp.scope.analysis.common_words import is_common
 from swarm_mcp.scope.analysis.timeline import ts_iso
 from swarm_mcp.scope.db import Store, label_for
 from swarm_mcp.scope.viz.pagekit import day_number, day_range_label, day_start_utc, village_days
@@ -588,81 +591,130 @@ def period_recaps(
 
 
 _NOVEL_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
+_EPOCH = datetime(1970, 1, 1)
+COINED_RE = "[a-z]+(-[a-z]+)*"  # letters, hyphen-joined parts allowed: no digits or underscores (ids, versions, code)
+TOPIC_SHARE = 0.10  # a term in more than this share of agent messages near its first use is a topic, not a coinage
 
 
-def default_min_term_msgs(store: Store, source: str | None = None) -> int:
-    """max(5, agent messages / 20,000): 9 on the 173k-message AI Village store, 5 on small stores."""
-    w, p = _filters("messages", source, None)
-    n = store.scalar(f"SELECT count(*) FROM messages WHERE {w} AND author_id IN (SELECT agent_id FROM agents)", p) or 0
-    return max(5, round(n / 20_000))
+def _store_key(store: Store, *params: Any) -> tuple[Any, ...] | None:
+    """A cache key that changes when the store file changes (None for an in-memory store)."""
+    if store.path is None:
+        return None
+    try:
+        st = os.stat(store.path)
+    except OSError:
+        return None
+    return (str(store.path), st.st_size, st.st_mtime_ns, *params)
 
 
 def novel_terms(
-    store: Store, *, min_msgs: int | None = None, min_agents: int = 3, source: str | None = None
+    store: Store, *, min_msgs: int | None = None, min_agents: int = 2, source: str | None = None
 ) -> dict[str, Any]:
-    """Terms that appear after the first 10% of the store's span (and at least a day in), used in
-    >= min_msgs agent messages (default ``default_min_term_msgs``) by >= min_agents agents, and not
-    made only of agent-name tokens. Per term: first use, coiner, totals, adopters (agents other than
-    the coiner with >= 2 messages using it) and fast adopters (the same within 14 days of the first
-    use). One scan of every agent message (~6 s on the AI Village store), cached per store file."""
-    if min_msgs is None:
-        min_msgs = default_min_term_msgs(store, source)
-    key = None
-    if store.path is not None:
-        try:
-            st = os.stat(store.path)
-            key = (str(store.path), st.st_size, st.st_mtime_ns, int(min_msgs), int(min_agents), source)
-        except OSError:
-            key = None
+    """Coined terms: single words (letters, optionally hyphen-joined; no digits or underscores) that
+    no message in the store (from any author) contains before an agent's first use, first used after
+    the first 10% of the store's span (and at least a day in), in >= min_msgs agent messages (default
+    2) by >= min_agents agents, that are not stopwords, common English words (``common_words``) or
+    made only of agent-name tokens, and that are in at most 10% of agent messages within 14 days of
+    the first use (more than that is a new topic, such as a goal's subject, not a coinage spreading).
+    Per term: first use, coiner, totals, adopters (other agents that used it at least once), fast
+    adopters (the same within 14 days of the first use), the first 30 agent uses and each agent's
+    use. Scans every message (~3.5 s on the AI Village store); cached per store file."""
+    min_msgs = 2 if min_msgs is None else int(min_msgs)
+    key = _store_key(store, "novel", min_msgs, int(min_agents), source)
     if key is not None and key in _NOVEL_CACHE:
         return _NOVEL_CACHE[key]
     t0, t1 = _store_span(store, source)
     if t0 is None:
-        return {"terms": {}, "cutoff": None, "span": [None, None]}
+        return {"terms": {}, "cutoff": None, "span": [None, None], "min_msgs": min_msgs, "min_agents": int(min_agents)}
     cutoff = t0 + max((t1 - t0) * NOVEL_SPAN_SHARE, NOVEL_MIN_DELAY)
     where, params = _filters("messages", source, None)
-    rows = store.all(
-        f"""WITH {_terms_cte(f"(SELECT * FROM messages WHERE {where} AND author_id IN (SELECT agent_id FROM agents))", "evidence_id, author_id, ts")},
-            f AS (SELECT term, min(ts) AS first_ts, count(*) AS n, count(DISTINCT author_id) AS agents
-                  FROM terms GROUP BY term
-                  HAVING count(*) >= ? AND count(DISTINCT author_id) >= ? AND min(ts) > CAST(? AS TIMESTAMP)),
-            ft AS (SELECT t.* FROM terms t SEMI JOIN f ON f.term = t.term),
-            ta AS (SELECT term, author_id, count(*) AS n FROM ft GROUP BY 1, 2),
-            co AS (SELECT term, arg_min(author_id, (ts, evidence_id)) AS coiner,
-                          arg_min(evidence_id, (ts, evidence_id)) AS first_id
-                   FROM ft GROUP BY 1),
-            ad AS (SELECT ta.term, count(*) FILTER (WHERE ta.author_id <> co.coiner AND ta.n >= 2) AS adopters
-                   FROM ta JOIN co USING (term) GROUP BY 1),
-            early AS (SELECT ft.term, ft.author_id, count(*) AS n FROM ft JOIN f USING (term)
-                      WHERE ft.ts < f.first_ts + INTERVAL {FAST_DAYS} DAY GROUP BY 1, 2),
-            fast AS (SELECT early.term, count(*) FILTER (WHERE early.author_id <> co.coiner AND early.n >= 2) AS fast
-                     FROM early JOIN co USING (term) GROUP BY 1)
-            SELECT f.term, f.first_ts, f.n, f.agents, co.coiner, co.first_id, ad.adopters, coalesce(fast.fast, 0) AS fast
-            FROM f JOIN co USING (term) JOIN ad USING (term) LEFT JOIN fast USING (term)""",
-        params + [int(min_msgs), int(min_agents), _sql_ts(cutoff)],
+    # words seen before the cutoff can't be novel; the agent uses of the candidates go to a temp table
+    store.con.execute(
+        f"""CREATE OR REPLACE TEMP TABLE _novel_uses AS
+            WITH early AS (SELECT DISTINCT unnest(regexp_extract_all(lower(content), '{TOKEN_RE}')) AS term
+                           FROM messages WHERE {where} AND ts <= CAST(? AS TIMESTAMP)),
+            late AS (SELECT evidence_id, author_id, ts, author_id IN (SELECT agent_id FROM agents) AS ag,
+                            unnest(list_distinct(regexp_extract_all(lower(content), '{TOKEN_RE}'))) AS term
+                     FROM messages WHERE {where} AND ts > CAST(? AS TIMESTAMP)),
+            g AS (SELECT term, min(ts) FILTER (WHERE ag) AS first_ts FROM late GROUP BY term
+                  HAVING count(*) FILTER (WHERE ag) >= ? AND count(DISTINCT author_id) FILTER (WHERE ag) >= ?
+                     AND min(ts) = min(ts) FILTER (WHERE ag) AND regexp_full_match(term, '{COINED_RE}')),
+            f AS (SELECT * FROM g ANTI JOIN early USING (term))
+            SELECT late.evidence_id, late.author_id, late.ts, late.term, f.first_ts
+            FROM late JOIN f USING (term) WHERE late.ag""",
+        params + [_sql_ts(cutoff)] + params + [_sql_ts(cutoff), min_msgs, int(min_agents)],
     )
-    name_tokens = _name_tokens(store)
-    terms = {
-        r["term"]: {
-            "term": r["term"],
-            "first_ts": r["first_ts"],
-            "coiner": r["coiner"],
-            "first_id": r["first_id"],
-            "n": int(r["n"]),
-            "agents": int(r["agents"]),
-            "adopters": int(r["adopters"]),
-            "adopters_fast": int(r["fast"]),
-        }
-        for r in rows
-        if not set(r["term"].split(" ")) <= name_tokens
-    }
+    try:
+        rows = store.all(
+            f"""WITH co AS (SELECT term, arg_min(author_id, (ts, evidence_id)) AS coiner,
+                                   arg_min(evidence_id, (ts, evidence_id)) AS first_id
+                            FROM _novel_uses GROUP BY 1)
+                SELECT u.term, any_value(u.first_ts) AS first_ts, any_value(co.coiner) AS coiner,
+                       any_value(co.first_id) AS first_id, count(*) AS n, count(DISTINCT u.author_id) AS agents,
+                       count(DISTINCT u.author_id) FILTER (WHERE u.ts < u.first_ts + INTERVAL {FAST_DAYS} DAY
+                                                         AND u.author_id <> co.coiner) AS fast,
+                       count(*) FILTER (WHERE u.ts < u.first_ts + INTERVAL {FAST_DAYS} DAY) AS n_fast,
+                       list(u.evidence_id ORDER BY u.ts, u.evidence_id)[1:{MAX_MOMENT_IDS}] AS ids
+                FROM _novel_uses u JOIN co USING (term) GROUP BY u.term"""
+        )
+        # agent messages in the FAST_DAYS window after each first use, for the topic share
+        agent_ms = store.con.execute(
+            f"""SELECT epoch_ms(ts) AS t FROM messages WHERE {where} AND author_id IN (SELECT agent_id FROM agents)
+                ORDER BY 1""",
+            params,
+        ).fetchnumpy()["t"]
+        name_tokens = _name_tokens(store)
+        terms: dict[str, dict[str, Any]] = {}
+        dropped = Counter()
+        for r in rows:
+            t = r["term"]
+            if t in STOPWORDS or set(t.split("-")) <= name_tokens or t in name_tokens:
+                dropped["name_or_stopword"] += 1
+                continue
+            if is_common(t):
+                dropped["common_word"] += 1
+                continue
+            t_ms = (r["first_ts"] - _EPOCH) // timedelta(milliseconds=1)
+            window = int(np.searchsorted(agent_ms, t_ms + FAST_DAYS * 86_400_000) - np.searchsorted(agent_ms, t_ms))
+            share = int(r["n_fast"]) / max(window, 1)
+            if share > TOPIC_SHARE:
+                dropped["topic"] += 1
+                continue
+            terms[t] = {
+                "term": t,
+                "first_ts": r["first_ts"],
+                "coiner": r["coiner"],
+                "first_id": r["first_id"],
+                "n": int(r["n"]),
+                "agents": int(r["agents"]),
+                "adopters": int(r["agents"]) - 1,
+                "adopters_fast": int(r["fast"]),
+                "window_share": round(share, 4),
+                "ids": list(r["ids"] or []),
+                "by_agent": {},
+            }
+        if terms:
+            for r in store.all(
+                """SELECT term, author_id, count(*) AS n, min(ts) AS first_ts,
+                          arg_min(evidence_id, (ts, evidence_id)) AS first_id
+                   FROM _novel_uses GROUP BY 1, 2"""
+            ):
+                if r["term"] not in terms:
+                    continue
+                terms[r["term"]]["by_agent"][r["author_id"]] = {
+                    "n": int(r["n"]),
+                    "first_ts": r["first_ts"],
+                    "first_id": r["first_id"],
+                }
+    finally:
+        store.con.execute("DROP TABLE IF EXISTS _novel_uses")
     res = {
         "terms": terms,
         "cutoff": cutoff,
         "span": [t0, t1],
-        "min_msgs": int(min_msgs),
+        "min_msgs": min_msgs,
         "min_agents": int(min_agents),
-        "excluded_name_terms": len(rows) - len(terms),
+        "excluded": dict(dropped),
     }
     if key is not None:
         if len(_NOVEL_CACHE) > 8:
@@ -681,41 +733,15 @@ def _name_tokens(store: Store) -> set[str]:
     return toks
 
 
-def _term_regex(term: str) -> str:
-    """A regex that finds the term the way the tokenizer does (lowercased text, token boundaries)."""
-    parts = [re.escape(w) for w in term.split(" ")]
-    return "(^|[^a-z0-9_-])" + "[^a-z0-9_-]+".join(parts) + "([^a-z0-9_-]|$)"
-
-
-def _term_ids(store: Store, term: str, source: str | None, limit: int = MAX_MOMENT_IDS) -> list[str]:
-    where, params = _filters("messages", source, None)
-    rows = store.all(
-        f"""SELECT evidence_id FROM messages WHERE {where} AND author_id IN (SELECT agent_id FROM agents)
-              AND regexp_matches(lower(content), ?) ORDER BY ts, evidence_id LIMIT ?""",
-        params + [_term_regex(term), int(limit)],
-    )
-    return [r["evidence_id"] for r in rows]
-
-
-def _agent_term_use(store: Store, aid: str, source: str | None) -> dict[str, dict[str, Any]]:
-    """term -> {n, first_ts, first_id} over one agent's messages (same tokenizer)."""
-    where, params = _filters("messages", source, None)
-    rows = store.all(
-        f"""WITH {_terms_cte(f"(SELECT * FROM messages WHERE {where} AND author_id = ?)", "evidence_id, author_id, ts")}
-            SELECT term, count(*) AS n, min(ts) AS first_ts, arg_min(evidence_id, (ts, evidence_id)) AS first_id
-            FROM terms GROUP BY term""",
-        params + [aid],
-    )
-    return {r["term"]: r for r in rows}
-
-
 def _novel_rule(min_msgs: int | None, min_agents: int) -> str:
     return (
-        f"novel term: first used after the first {NOVEL_SPAN_SHARE:.0%} of the store's span (and at least "
-        f"{NOVEL_MIN_DELAY.days} day in), in >= {min_msgs} agent messages by >= {min_agents} agents, and not made "
-        "only of agent-name tokens; "
-        "coined = this agent used it first; adopted = this agent used it in >= 2 messages after "
-        "another agent first used it; adopters = agents other than the coiner with >= 2 messages using it."
+        f"novel term (a coinage): a single word of letters (hyphen-joined parts allowed) that no message contains "
+        f"before an agent's first use, first used after the first {NOVEL_SPAN_SHARE:.0%} of the store's span (and "
+        f"at least {NOVEL_MIN_DELAY.days} day in), in >= {min_msgs} agent messages by >= {min_agents} agents; "
+        "stopwords, common English words and agent-name tokens are left out, and so is a term in more than "
+        f"{TOPIC_SHARE:.0%} of agent messages within {FAST_DAYS} days of its first use (a new topic). "
+        "coined = this agent used it first; adopted = this agent used it (once is enough) after another agent "
+        "first used it; adopters = agents other than the coiner that used it."
     )
 
 
@@ -770,7 +796,7 @@ def agent_arc(
     top_partners: int = 3,
     min_period_mentions: int = 5,
     min_term_msgs: int | None = None,
-    min_term_agents: int = 3,
+    min_term_agents: int = 2,
     max_terms: int = 40,
     source: str | None = None,
     day_one: Any = None,
@@ -913,9 +939,9 @@ def agent_arc(
     # novel terms the agent coined or adopted
     nt = novel_terms(store, min_msgs=min_term_msgs, min_agents=min_term_agents, source=source)
     coined, adopted = [], []
-    for term, u in _agent_term_use(store, aid, source).items():
-        t = nt["terms"].get(term)
-        if t is None:
+    for t in nt["terms"].values():
+        u = t["by_agent"].get(aid)
+        if u is None:
             continue
         base = {
             "term": t["term"],
@@ -930,7 +956,7 @@ def agent_arc(
             base.update(_day_fields(u["first_ts"], spec))
         if t["coiner"] == aid:
             coined.append({**base, "role": "coined"})
-        elif int(u["n"]) >= 2:
+        else:
             adopted.append(
                 {
                     **base,
@@ -1239,7 +1265,7 @@ def _first_uses(
 ) -> list[Callable[[], dict[str, Any]]]:
     nt = novel_terms(store, min_msgs=min_msgs, min_agents=min_agents, source=source)
     names = store.display_names()
-    items = [t for t in nt["terms"].values() if t["adopters_fast"] >= 2]
+    items = [t for t in nt["terms"].values() if t["adopters_fast"] >= max(1, min_agents - 1)]
     items.sort(key=lambda t: (-t["adopters_fast"], -t["adopters"], -t["n"], t["term"]))
     # one moment per first message: "claude haiku" and "haiku" introduced together count once
     keep, seen = [], set()
@@ -1264,10 +1290,11 @@ def _first_uses(
             "score": t["adopters_fast"],
             "why": (
                 f"“{t['term']}” first used by {label_for(t['coiner'], names)} on {when}; "
-                f"{t['adopters_fast']} other agents used it in >= 2 messages within {FAST_DAYS} days "
-                f"({t['adopters']} in all; {t['n']:,} messages by {t['agents']} agents)"
+                f"{t['adopters_fast']} other agent{'s' if t['adopters_fast'] != 1 else ''} used it within "
+                f"{FAST_DAYS} days ({t['adopters']} in all; {t['n']:,} messages by {t['agents']} agents); "
+                "no message used it before"
             ),
-            "ids": _term_ids(store, t["term"], source),
+            "ids": list(t["ids"]),
             **_day_fields(t["first_ts"], spec),
         }
 
@@ -1370,7 +1397,7 @@ def notable_moments(
     z_min: float = 4.0,
     min_shift_mentions: int = 20,
     min_term_msgs: int | None = None,
-    min_term_agents: int = 3,
+    min_term_agents: int = 2,
     min_silent_days: int = 3,
     min_prior_rate: float = 3.0,
     day_one: Any = None,
@@ -1415,7 +1442,7 @@ def moments_page(
     z_min: float = 4.0,
     min_shift_mentions: int = 20,
     min_term_msgs: int | None = None,
-    min_term_agents: int = 3,
+    min_term_agents: int = 2,
     min_silent_days: int = 3,
     min_prior_rate: float = 3.0,
     day_one: Any = None,
@@ -1431,14 +1458,14 @@ def moments_page(
       then posts again; scored by the messages it would have sent at its prior rate.
     - ``partner_shift``: Jensen-Shannon distance between an agent's out-mention distributions in
       consecutive periods (village goals, else 14-day bins) with >= min_shift_mentions each.
-    - ``first_use``: the first use of a novel term (see ``novel_terms``) that >= 2 other agents used
-      in >= 2 messages within 14 days, scored by that number of fast adopters.
+    - ``first_use``: the first use of a coined term (see ``novel_terms``) that >= min_term_agents - 1
+      other agents used within 14 days (once is enough), scored by that number of fast adopters.
 
     Scores are not comparable across kinds, so the ranking interleaves them: the strongest moment of
     each kind first, then the second of each, and so on. ``rank`` is the rank within its kind.
     ``ids`` holds up to 30 evidence ids to open (the day's messages, the first messages after a
     silence, the new partner mentions, or the term's first uses). Only the returned page is built:
-    one small query per item for its ids. The window [since, until) keeps moments whose days
+    at most one small query per item for its ids. The window [since, until) keeps moments whose days
     overlap it (bursts, silences), whose later period starts in it (partner shifts) or whose first
     use falls in it (first uses).
     """

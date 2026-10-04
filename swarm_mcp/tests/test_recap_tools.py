@@ -127,13 +127,13 @@ def test_moments_surface_the_planted_silence(bench_app):
 
 def test_moments_paging_kinds_and_wrapping(bench_app):
     app, _ = bench_app
-    first = call(app, "scope_moments", limit=3)
-    assert first["returned"] == 3 and first["offset"] == 0
-    assert first["total"] == sum(first["by_kind"].values()) and first["total"] > 3
-    assert first["has_more"] and first["next_offset"] == 3
-    second = call(app, "scope_moments", limit=3, offset=3)
+    first = call(app, "scope_moments", limit=2)
+    assert first["returned"] == 2 and first["offset"] == 0
+    assert first["total"] == sum(first["by_kind"].values()) and first["total"] > 2
+    assert first["has_more"] and first["next_offset"] == 2
+    second = call(app, "scope_moments", limit=2, offset=2)
     pos = [m["position"] for m in first["moments"] + second["moments"]]
-    assert pos == list(range(1, 7))
+    assert pos == list(range(1, len(pos) + 1)) and len(pos) >= 3
     # ranking interleaves kinds: the best of each kind before any kind's second best
     kinds_seen = [(m["kind"], m["rank_in_kind"]) for m in first["moments"] + second["moments"]]
     ranks = [r for _, r in kinds_seen]
@@ -146,6 +146,21 @@ def test_moments_paging_kinds_and_wrapping(bench_app):
     assert all(m["term"]["untrusted"] is True for m in only["moments"])
     past = call(app, "scope_moments", limit=5, offset=every["total"] + 10)
     assert past["returned"] == 0 and "past the last moment" in " ".join(past["notes"])
+
+
+def test_moments_first_use_surfaces_the_planted_terms(bench_app):
+    """Both planted coinages surface (one copied by four agents with mostly single uses, one used by
+    just two agents), the copied one first, and no ordinary word does."""
+    app, truth = bench_app
+    planted = truth["diffusion"]
+    out = call(app, "scope_moments", kinds=["first_use"], limit=20)
+    got = [m["term"]["content"] for m in out["moments"]]
+    assert sorted(got) == sorted(planted), got
+    copied = next(t for t, d in planted.items() if d["kind"] == "copied")
+    top = out["moments"][0]
+    assert got[0] == copied and top["score"] == len(planted[copied]["adopters"])
+    assert top["agent_id"] == planted[copied]["first_actor"] and top["evidence_ids"][0] == planted[copied]["first"]
+    assert top["evidence_ids"] == planted[copied]["all_use_event_ids"]
 
 
 def test_moments_window_and_errors(bench_app):
