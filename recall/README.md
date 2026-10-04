@@ -5,8 +5,9 @@
 It is built around the real [AI Village dataset](https://huggingface.co/datasets/aidigestorg/ai-village) (AI Digest), and also ships a small synthetic demo. Everything runs client-side: there is no backend, no API keys and no LLM calls. Analysis is deterministic.
 
 ```bash
-npm install
-npm run dev            # http://localhost:5173
+npm install            # Node 22+
+npm run dev            # http://localhost:5173 (the synthetic demo works with no data)
+npm run build && npm run preview   # production build, served locally
 ```
 
 ---
@@ -21,6 +22,7 @@ npm run dev            # http://localhost:5173
 | **Agents** | What each agent produced, with their claims, checks, corrections and acknowledgements. |
 | **Incidents** · *Signals worth your attention.* | The monitor findings. Repeats of the same claim subject are grouped, and each finding links to its exact records. |
 | **Monitors** · *Rules, not guesses.* | The rules as written, how much of the source each record type and provenance makes up, and the evidence visibility experiment. |
+| **Swarm** | How the team checks claims as a whole: repeats without an own check, consensus without a check, correction reach, directive uptake, checking spread, single points of failure (see *Swarm view* below). |
 | **Evidence** | Every record, searchable and filterable. Opens the record drawer: the record, what it cites, and what cites it. |
 
 All views share one **timeline cursor**. State and findings are reconstructed only from records at or before it. Keyboard: `←` `→` step, `space` play, `⌘K` command palette, `esc` close. URLs are deep links: `#/incidents/<id>?src=<source>&t=<seq>`.
@@ -33,17 +35,20 @@ All views share one **timeline cursor**. State and findings are reconstructed on
 
 ### AI Village (primary) — huggingface.co/datasets/aidigestorg/ai-village
 
-These are real records from AI Digest's AI Village, where frontier-model agents share a chat and use their own computers to pursue goals. The dataset is **gated (manual approval)** and released for research use. Extracts go to `public/data/` and caches to `.hf/`. **Both are gitignored and never committed.**
+These are real records from AI Digest's AI Village, where frontier-model agents share a chat and use their own computers to pursue goals. The dataset is **gated (manual approval)** and released for research use: request access on the dataset page, and keep to the terms stated there (research use).
+`data:build` reads it from Hugging Face, not from the repo's `data/ai-village` export, so it needs a token: `HF_TOKEN` (or `HUGGING_FACE_HUB_TOKEN`), or the one `huggingface_hub` saves at login. Without one it stops with "No Hugging Face token found". Extracts go to `public/data/` and caches to `.hf/`. **Both are gitignored and never committed.**
 
 ```bash
-python3 -c "from huggingface_hub import login; login()"   # once, after access is approved (run from ~)
+uv run --no-project --with huggingface_hub python -c "from huggingface_hub import login; login()"   # once, after access is approved (run from ~)
 npm run data:download     # 2.5 GB computer_use_turns → .hf/ with curl byte-level resume (HF drops long streams)
 npm run data:build        # verdict index + windows → public/data/index.json and public/data/<window>.json
 npm run data:build -- --list-goals                 # or choose a slice:
 npm run data:build -- --goal 33 --hours 4
 npm run data:build -- --from 2026-03-05T17:00Z --to 2026-03-05T21:00Z
 npm run data:build -- --refresh                     # rebuild the verdict index after a dataset update
-npm run data:scan         # optional exploratory scan for candidate incidents → .hf/candidates.json
+npm run fetch:ai-village  # the windows only (same flags as data:build), without the series
+npm run data:series       # only the Swarm view sparklines (public/data/series/), from the windows already built
+npm run data:scan         # optional exploratory scan for candidate incidents → .hf/candidates.json (python3)
 ```
 
 **Pipeline**

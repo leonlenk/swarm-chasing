@@ -35,24 +35,29 @@ uv run --directory swarm_mcp swarm-mcp info                    # what is loaded,
 ```
 
 Put datasets under `data/` at the repo root (gitignored; a symlink is fine).
-`add` detects the AI Village export and bare git repos and uses the built-in
-adapters (`--adapter village|git` forces one; `--adapter git` also takes the top folder of a
-working tree, but never a folder inside a repository; `--name` sets a git source's name).
+`add` detects the AI Village export, bare git repos, the top folder of a git
+working tree and a swarm-live recordings `.db` (source `claude-code`), and uses the built-in adapters (`--adapter village|git|claude-code` forces one; a
+folder inside a repository is never taken as git: point at the repository's top folder;
+`--name` sets a git source's name).
 Wiki databases are only ingested on request: `swarm-mcp add data/collusion-wiki --adapter wiki`
 (a `.db` file, or a folder that directly holds one).
 For any other dataset it profiles the files, drafts a mapping to `mappings/<source>.json`
 (`--agent none` heuristics, `api` an LLM, or `claude-code` a task for the
 `/swarm-setup` command), checks it, and stops with the report if the check
-fails. When the check passes, it ingests. If `mappings/<source>.json` already
-exists, `add` uses it instead of drafting, so your edits survive a re-run
-(delete the file to redraft); `--mapping M` uses a mapping from elsewhere.
+fails. When the check passes, it ingests. A draft that finds no table of
+timestamped records is not kept. If `mappings/<source>.json` already
+exists and was drafted for the same dataset folder, `add` uses it instead of drafting,
+so your edits survive a re-run (delete the file to redraft); `add` refuses a mapping
+drafted for another folder. `--mapping M` uses a mapping from elsewhere.
 `--dry-run` ingests nothing: it writes the draft mapping (when there is none
 yet) and stops after the check.
 Re-running `add` on the same dataset replaces that source and keeps other sources
 and findings; so does re-adding a mapped dataset with a changed mapping. If the
 source name already holds a different dataset (another adapter or path), `add`
 refuses and changes nothing: pick another `--name`, or pass `--replace`. The
-store is `data/swarmscope.duckdb`.
+store is `data/swarmscope.duckdb` (`--db` points any command at another store). After an ingest,
+`add` compacts the store once deleted rows reach a quarter of the live ones, so re-adding a source
+does not grow the file.
 
 On the 2026-09-20 AI Village export, `add` loads 46 agents, 183,485 chat
 messages, 104,239 actions and 51 goal periods. `agent_memories` and
@@ -146,6 +151,11 @@ uv run --directory swarm_mcp swarm-mcp add ~/.swarm-live/swarm-live.db          
 uv run --directory swarm_mcp swarm-live serve                                      # a permanent collector
 ```
 
+`swarm-live serve [--port 47831] [--db PATH] [--quiet] [--exit-when-idle]` and `swarm-live import PATH [--db PATH]`
+(a transcript `.jsonl` or a `~/.claude/projects/<project>` folder). The recordings file defaults to
+`SWARM_LIVE_DB`, else the plugin's data directory, else `~/.swarm-live/swarm-live.db`; `SWARM_LIVE_PORT`
+changes the port.
+
 **Why the recordings go to a separate SQLite file rather than straight into the DuckDB store:**
 - **One writer.** DuckDB allows one writing process at a time, and that writer locks out every
   other process, even readers. The collector writes several times per tool call. Meanwhile each
@@ -170,12 +180,12 @@ investigator's `mcp__swarm__*` calls in this repo and are not part of the plugin
 | command | what it does |
 |---|---|
 | `swarm-mcp` | run the MCP server on stdio (what Claude Code launches) |
-| `swarm-mcp info [--json]` | modules (loaded or skipped, and why), sources with counts and date ranges, findings health, config. Exits 1 when a finding cites an id that does not resolve |
-| `swarm-mcp add <path> [--adapter auto\|village\|git\|wiki\|mapped] [--name SLUG] [--agent none\|api\|claude-code] [--mapping M] [--dry-run] [--replace] [--db]` | add or refresh a dataset in the store (see above) |
-| `swarm-mcp render timeline [--since --until --channel --source --top --out] [--no-explore]` | a self-contained HTML explorer in a paper figure style: each agent's activity over time (counts per bin, single messages when zoomed in; Village days when the store has village goals), who names whom in the window on screen, a thread reader (click a message: masked conversation around it, copyable evidence ids), and linked panels for goal recaps, notable moments, one agent over time and metrics over time. Every figure exports the current view as SVG or PNG at 5.5 in. `--no-explore` skips the linked panels. Default output `data/swarmscope-timeline.html` |
-| `swarm-mcp render subtasks [--corpus --out --title-chars]` | a self-contained HTML subtask map from the same inference as the `subtasks_*` tools: one row per inferred subtask on a time axis (switch method and granularity), who did what, typed handoffs with evidence ids, why each unit was grouped, a two-actor pair lens and method agreement. `--corpus` is any source whose records touch artifacts (a git repo, a wiki). Default output `data/swarmscope-subtasks-<corpus>.html` |
-| `swarm-mcp render recall [--out DIR --source --top --max-marks --recordings DB --no-explorer --no-subtasks --watch]` | the data for the RECALL UI (`recall/`), under `<out>/scope/` (default `recall/public/data`): the `render timeline` payload for each source with messages, the `render subtasks` payload for each source with artifact touches, and every recorded Claude Code session (read from the swarm-live recordings, not the store, so no DuckDB lock is taken), plus an `index.json` RECALL polls. `--watch` keeps rewriting the live sessions while the recordings change. A run with `--no-explorer`/`--no-subtasks` keeps the earlier payloads. `python examples/live_demo.py DB [--drip S]` writes a synthetic recording to try it |
-| `swarm-mcp export --out DIR [--source --kind --channel --author --since --until --query] [--with-agents] [--keep-ips] [--no-check] [--json]` | export a redacted subset of the store for sharing, then rescan it (see Export) |
+| `swarm-mcp info [--json] [--db]` | modules (loaded or skipped, and why), sources with counts and date ranges, findings health, config. Exits 1 when a finding cites an id that does not resolve |
+| `swarm-mcp add <path> [--adapter auto\|village\|git\|wiki\|claude-code\|mapped] [--name SLUG] [--agent none\|api\|claude-code] [--mapping M] [--dry-run] [--replace] [--db]` | add or refresh a dataset in the store (see above) |
+| `swarm-mcp render timeline [--since --until --channel --source --top --snippet-chars --out --db] [--no-explore]` | a self-contained HTML explorer in a paper figure style: each agent's activity over time (counts per bin, single messages when zoomed in; Village days when the store has village goals), who names whom in the window on screen, a thread reader (click a message: masked conversation around it, copyable evidence ids), and linked panels for goal recaps, notable moments, one agent over time and metrics over time. Every figure exports the current view as SVG or PNG at 5.5 in. `--no-explore` skips the linked panels. Default output `data/swarmscope-timeline.html` |
+| `swarm-mcp render subtasks [--corpus --out --title-chars --db] [--llm-names --llm-cap --llm-min-size]` | a self-contained HTML subtask map from the same inference as the `subtasks_*` tools: one row per inferred subtask on a time axis (switch method and granularity), who did what, typed handoffs with evidence ids, why each unit was grouped, a two-actor pair lens and method agreement. `--corpus` (or `--source`) is any source whose records touch artifacts (a git repo, a wiki); it may be left out when the store has only one. Subtasks are inferred over the whole corpus, so there is no `--since`/`--until`. `--llm-names` names the subtasks with the configured model (needs `ANTHROPIC_API_KEY`; at most `--llm-cap` calls, subtasks of at least `--llm-min-size` units; names are cached next to the store). Default output `data/swarmscope-subtasks-<corpus>.html`, or `data/swarmscope-subtasks.html` when the corpus is left out |
+| `swarm-mcp render recall [--out DIR --source --db --top --max-marks --recordings DB --no-explorer --no-subtasks --watch]` | the data for the RECALL UI (`recall/`), under `<out>/scope/` (default `recall/public/data`): the `render timeline` payload for each source with messages, the `render subtasks` payload for each source with artifact touches, and every recorded Claude Code session (read from the swarm-live recordings, not the store, so no DuckDB lock is taken), plus an `index.json` RECALL polls. `--watch` keeps rewriting the live sessions while the recordings change. A run with `--no-explorer`/`--no-subtasks` keeps the earlier payloads. `--recordings` defaults to `SWARM_LIVE_DB`, else the plugin's recordings, else `~/.swarm-live/swarm-live.db`. `python examples/live_demo.py DB [--drip S]` writes a synthetic recording to try it (pass the same `DB` as `--recordings`) |
+| `swarm-mcp export --out DIR [--source --kind --type --channel --author --since --until --query] [--with-agents] [--keep-ips] [--no-check] [--json] [--db]` | export a redacted subset of the store for sharing, then rescan it (see Export) |
 
 Developer-only: `python -m swarm_mcp.bench generate|reference|score` (see ADDING_MODULES.md).
 
@@ -191,7 +201,7 @@ Developer-only: `python -m swarm_mcp.bench generate|reference|score` (see ADDING
 | `scope_timeline(bin, group_by, table, ...)` | activity counts per hour/day/week/month, optionally by channel or author |
 | `scope_graph(...)` | who talks to whom: mention and reply edges, top nodes by degree and betweenness, example ids |
 | `scope_recap(period=None, since, until, source, channel, top, max_chars)` | what happened during a period or window: active agents (messages, actions; humans and external actors counted apart), top who-names-whom pairs, terms that rose against the previous window of equal length (log-odds candidates) and the busiest threads with ids and snippets; Village days when the source has village goals |
-| `scope_moments(since, until, source, kinds, limit, offset, max_chars)` | where to look: ranked bursts, silences, partner shifts and first uses of spreading terms, each with its numbers (z-score, baseline, counts), Village day and evidence ids; paged |
+| `scope_moments(since, until, source, kinds, limit, offset, max_chars)` | where to look: ranked bursts, silences, partner shifts and first uses of newly coined terms that other agents then picked up, each with its numbers (z-score, baseline, counts), Village day and evidence ids; paged |
 | `findings_record(claim, evidence_ids, confidence)` | record a claim; rejected unless every id resolves |
 | `findings_list(status, limit, sample=None, seed=0)` | recorded findings, newest first; with `sample`, a seeded random sample with the cited evidence, for spot checks |
 | `sweep_run(rubric, ids=None, filters=None, dry_run=True, cap=50)` | apply a yes/no rubric to many records with an LLM; the default dry run returns the cost estimate |
@@ -204,10 +214,15 @@ Prompt: `investigate(question, custom, source, since, until, period, agent, loca
 rendered prompt walks the model through finding, reading and citing evidence.
 
 `subtasks` (Rigel's module, loaded when the store has data) adds
-`subtasks_corpora`, `subtasks_list`, `subtasks_get`, `subtasks_trace_pair` and
-`subtasks_locate`: work units (pull requests, runs, sessions) grouped into subtasks,
-with typed handoffs between actors; see ADDING_MODULES.md. `village` adds the AI
-Village docs as resources (`village://readme`, `village://schema`, `village://changelog`).
+`subtasks_corpora`, `subtasks_list`, `subtasks_get`, `subtasks_trace_pair`,
+`subtasks_locate`, `subtasks_graph` and `subtasks_name`: work units (pull requests, runs,
+sessions) grouped into subtasks, with typed handoffs between actors, which subtasks built
+on which (`subtasks_graph`), and names you or a model give them (`subtasks_name`); see
+ADDING_MODULES.md. `village` adds the AI
+Village docs as resources (`village://readme`, `village://schema`, `village://changelog`) when the
+export's `README.md`, `SCHEMA.md` and `CHANGELOG.md` are in `<data dir>/ai-village`.
+
+Bad tool arguments come back as a one-line message naming the argument, not a validation dump.
 
 ## Rubric sweeps
 
@@ -241,8 +256,10 @@ uv run --directory swarm_mcp swarm-mcp export --source village --channel general
 The export directory holds `events.jsonl` (standard records with full text, every
 string field redacted except the identity fields), optional `agents.jsonl`, and
 `manifest.json` (counts by source and kind, redaction counts by type, the policy, the
-filters, file hashes; never the redacted values). Exports mask private and loopback IPs
-too (`--keep-ips` leaves them). Afterwards the command rescans everything with every rule
+filters, file hashes; never the redacted values). `--kind` is `msg` or `event`; `--type` is the
+dataset's own type (e.g. `commit`, `revision`, `session_goal`). `--out` must be a new or empty
+folder or a previous export (which is replaced); anything else is refused before writing.
+Exports mask private and loopback IPs too (`--keep-ips` leaves them). Afterwards the command rescans everything with every rule
 and exits 1 on any hit, hash mismatch or unlisted file; `--no-check` skips that. Emails
 at the `email_allowlist` domains are kept.
 
@@ -258,6 +275,9 @@ at the `email_allowlist` domains are kept.
   `[phone]`, credentials (provider keys, JWTs, auth headers, `key=secret` pairs, private
   keys) as `[credential]` and `user:pass@` in URLs as `[url-credential]`. VCS remotes such
   as `git@github.com:org/repo` are kept.
+- Dataset-supplied names (agents, channels, authors, actors) are sanitized in every tool result:
+  whitespace collapsed, invisible characters dropped, PII masked, tag-like and markdown control text
+  neutralized, capped at 80 characters. Evidence ids are unchanged.
 - The server instructions tell the model that record contents are data, not instructions.
 
 ## Hooks (`.claude/settings.json`)
@@ -306,4 +326,16 @@ max_text = 500
 ```
 
 Environment variables: `SWARM_DATA_DIR` (overrides `[data] dir`), `ANTHROPIC_API_KEY`
-(enables sweeps and `add --agent api`) and `SWARM_LLM_MODEL` (overrides `[llm] model`).
+(enables sweeps, `add --agent api` and `render subtasks --llm-names`), `SWARM_LLM_MODEL` (overrides
+`[llm] model`), `SWARM_LIVE_DB` (the swarm-live recordings file) and `SWARM_LIVE_PORT` (the collector's
+port, default 47831).
+
+## Examples
+
+Run from the repo root; they use the store you already built.
+
+| script | what it does |
+|---|---|
+| `uv run --directory swarm_mcp python examples/live_demo.py data/swarm-live-demo.db [--drip 1.5]` | writes a synthetic swarm-live recording (two sessions with subagents) through the real recorder; feed it to `render recall --recordings data/swarm-live-demo.db [--watch]` |
+| `uv run --directory swarm_mcp python examples/subtasks_demo.py [query]` | launches the server on stdio and follows one lead from a chat search to a subtask, its handoffs and the commits behind them (needs the village and a git source) |
+| `examples/wiki_demo.py`, `examples/wiki_eval.py` | the same walk-through and an evaluation for a wiki source (needs a wiki dataset added with `--adapter wiki`) |
