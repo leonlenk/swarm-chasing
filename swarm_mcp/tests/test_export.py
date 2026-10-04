@@ -230,11 +230,64 @@ def test_bad_records_are_rejected(tmp_path):
         export([records()[0], {"text": "no id"}], tmp_path / "x", Redactor())
     with pytest.raises(ExportError, match="record 1: expected a JSON object"):
         export(["nope"], tmp_path / "y", Redactor())
-    # a failed re-export over a good one leaves no manifest, so check() fails
-    export(records(), tmp_path / "z", Redactor())
-    with pytest.raises(ExportError):
-        export([records()[0], {"text": "no id"}], tmp_path / "z", Redactor())
-    assert not (tmp_path / "z" / MANIFEST_FILE).exists() and not check(tmp_path / "z").ok
+    assert not (tmp_path / "x").exists() and not (tmp_path / "y").exists()
+
+
+def snapshot(out: Path) -> dict[str, bytes]:
+    return {p.name: p.read_bytes() for p in sorted(out.iterdir())}
+
+
+def test_failed_export_leaves_no_new_directory(tmp_path):
+    """Regression: a failed export left its new --out directory and a partial events.jsonl behind."""
+
+    def unknown_source():  # a lazy provider that fails on first use, like store_records
+        raise ValueError("Unknown source(s) nope")
+        yield {}
+
+    out = tmp_path / "new" / "deep" / "exp"
+    for recs in ([records()[0], {"text": "no id"}], unknown_source()):
+        with pytest.raises(ValueError):
+            export(recs, out, Redactor(), agents=AGENTS)
+        assert list(tmp_path.iterdir()) == []
+    (tmp_path / "keep").mkdir()
+    (tmp_path / "keep" / "other.txt").write_text("not ours")
+    with pytest.raises(ValueError):
+        export(unknown_source(), tmp_path / "keep" / "exp", Redactor())
+    assert sorted(p.name for p in (tmp_path / "keep").iterdir()) == ["other.txt"]
+
+
+def test_failed_reexport_keeps_the_good_export(exported):
+    """Regression: a failed re-export truncated events.jsonl and dropped the manifest of a good export."""
+    out, _ = exported
+    before = snapshot(out)
+    assert sorted(before) == [AGENTS_FILE, EVENTS_FILE, MANIFEST_FILE]
+    with pytest.raises(ExportError, match="record 2"):
+        export([records()[0], {"text": "no id"}], out, Redactor())  # agents=None would drop agents.jsonl
+    with pytest.raises(ExportError, match="agent 1"):
+        export(records(), out, Redactor(), agents=["nope"])
+    assert snapshot(out) == before and check(out).ok  # no staging directory left behind either
+
+
+def test_failed_store_export_leaves_nothing(store_path: Path, tmp_path: Path):
+    """`swarm-mcp export --out DIR --source nope` (and a missing store) must not create DIR or touch a good one."""
+    from swarm_mcp.scope.db import StoreMissing
+    from swarm_mcp.scope.records import export_store
+
+    out = tmp_path / "exports" / "e3"
+    with pytest.raises(ValueError, match="Unknown source"):
+        export_store(store_path, out, {"source": "nope"})
+    with pytest.raises(StoreMissing):
+        export_store(tmp_path / "missing.duckdb", out, {})
+    assert not (tmp_path / "exports").exists()
+
+    res = export_store(store_path, out, {"source": "village"}, with_agents=True)
+    assert res["ok"] and res["records"]["events"] > 0
+    before = snapshot(out)
+    with pytest.raises(ValueError, match="Unknown source"):
+        export_store(store_path, out, {"source": "nope"}, with_agents=True)
+    with pytest.raises(ValueError, match="Unknown source"):
+        export_store(store_path, out, {"kind": "nope:msg"})
+    assert snapshot(out) == before and check(out).ok
 
 
 def test_select_filters():

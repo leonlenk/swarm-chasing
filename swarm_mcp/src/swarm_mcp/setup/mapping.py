@@ -29,6 +29,7 @@ kind's schema kind: ``reply_to: {field: re_mid, kind: post}`` -> ``forum:msg:pos
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 from collections import Counter
@@ -386,12 +387,16 @@ class MappedAdapter:
         self._index: AgentIndex | None = None
         self._lookups: dict[str, dict[str, Any]] | None = None
         self._tables_cache: dict[str, list[readers.Table]] = {}
+        self._discovered: list[readers.Table] | None = None  # one walk of the root for every 'from'
         self._seen: dict[str, list[Any]] = {}
 
     # ------------------------------------------------------------------ tables
     def tables(self, pattern: str) -> list[readers.Table]:
         if pattern not in self._tables_cache:
-            found = readers.find_tables(self.root, pattern)
+            if self._discovered is None:
+                self._discovered = readers.discover(self.root)[0]
+            # copies: each pattern keeps its own read state (eof, raw_pos, bad_rows), as before the cache
+            found = [copy.copy(t) for t in readers.match_tables(self._discovered, pattern)]
             if not found:
                 raise MappingError(
                     f"no table matches {pattern!r} under {self.root}. Run `swarm-mcp add <path> --dry-run` to profile the dataset and list its table keys."
@@ -439,10 +444,14 @@ class MappedAdapter:
             self._lookups = {}
             for name, lk in (self.spec.get("lookups") or {}).items():
                 table: dict[str, Any] = {}
-                for _, _, row in self._rows(lk["from"], limit=LOOKUP_MAX_ROWS):
-                    k = _scalar(get_path(row, lk["key"]))
-                    if k is not None:
-                        table.setdefault(k, get_path(row, lk["value"]))
+                for t in self.tables(lk["from"]):
+                    for i, row in enumerate(t.rows(limit=LOOKUP_MAX_ROWS + 1), 1):
+                        if i > LOOKUP_MAX_ROWS:  # reported, so a partial lookup isn't silent
+                            self.stats[f"lookup_{name}_truncated_at_{LOOKUP_MAX_ROWS}_rows"] += 1
+                            break
+                        k = _scalar(get_path(row, lk["key"]))
+                        if k is not None:
+                            table.setdefault(k, get_path(row, lk["value"]))
                 self._lookups[name] = table
         return self._lookups
 

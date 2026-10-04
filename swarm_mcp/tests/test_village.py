@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -113,3 +114,12 @@ def test_helpers():
     assert parse_time(None) is None
     with pytest.raises(ToolInputError):
         parse_time("soon")
+
+
+def test_ai_village_parse_ts_converts_an_offset_to_utc():
+    from swarm_mcp.scope.adapters.ai_village import parse_ts
+
+    assert parse_ts("2025-12-29T10:00:00-08:00") == datetime(2025, 12, 29, 18, 0)  # converted, not stripped
+    assert parse_ts("2025-12-29T18:00:00Z") == datetime(2025, 12, 29, 18, 0)
+    assert parse_ts("2025-12-29 18:49:21.291984") == datetime(2025, 12, 29, 18, 49, 21, 291984)  # naive = UTC
+    assert parse_ts("not a time") is None and parse_ts(None) is None

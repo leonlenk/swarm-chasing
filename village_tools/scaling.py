@@ -25,6 +25,27 @@ Pre-specified (written before looking at any correlation):
 
 Run: uv run --with numpy --with scipy --with matplotlib python scaling.py
 Inputs: data/ai-village/*.jsonl.gz, model_metadata.csv. Outputs: out/scaling/.
+
+model_metadata.csv (village_tools/model_metadata.csv) is NOT in git: *.csv is gitignored and
+data files are never committed, so a clean checkout lacks it and the script stops with a
+pointer here. Get it from the original author's checkout, or rebuild it by hand: one row per
+village agent, UTF-8 CSV with a header row. Columns, in order (the script reads only *):
+  name*                      the agent's display name, exactly as in the village data
+  model_string               the API model id the agent ran on
+  lab*                       developer (Anthropic, OpenAI, Google, ...)
+  joined, left               when the agent joined / left the village
+  release_date*              ISO YYYY-MM-DD: the model string's date suffix if it has one, else
+                             Epoch AI's date for the model; "unknown" or blank = missing
+  release_source             where release_date came from
+  announce_date_crosscheck, announce_crosscheck_source
+                             the public announcement date and its source, as a cross-check
+  eci*                       Epoch Capabilities Index (Epoch AI's eci_scores.csv; the report
+                             used the file retrieved 2026-10-03); "unknown" or blank = missing
+  eci_ci90_low, eci_ci90_high  Epoch's 90% interval for eci
+  eci_epoch_label            the model's name in Epoch's file
+  eci_source, eci_retrieved  where and when eci was taken
+  flag, eci_notes            free-text caveats (e.g. ECI is the best-setting score)
+Every analysed agent needs a row (main() asserts this).
 """
 
 import collections
@@ -100,10 +121,26 @@ def decimal_year(d):
     return d.year + (d - start).days / (dt.date(d.year + 1, 1, 1) - start).days
 
 
+METADATA = ROOT / "model_metadata.csv"
+METADATA_COLUMNS = ("name", "lab", "release_date", "eci")  # the ones read below
+
+
 def load_metadata():
+    if not METADATA.is_file():
+        raise SystemExit(
+            f"error: {METADATA} is missing. It is gitignored (*.csv, no data files in git), so a clean "
+            "checkout lacks it. See 'model_metadata.csv' in the docstring of scaling.py (or "
+            "out/scaling/REPORT.md) for its source and columns."
+        )
     meta = {}
-    with open(ROOT / "model_metadata.csv") as f:
-        for r in csv.DictReader(f):
+    with open(METADATA, encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        missing = [c for c in METADATA_COLUMNS if c not in (reader.fieldnames or [])]
+        if missing:
+            raise SystemExit(
+                f"error: {METADATA} lacks column(s) {', '.join(missing)}; see the docstring of scaling.py."
+            )
+        for r in reader:
             eci = r.get("eci", "").strip()
             rel = r.get("release_date", "").strip()
             meta[r["name"]] = {

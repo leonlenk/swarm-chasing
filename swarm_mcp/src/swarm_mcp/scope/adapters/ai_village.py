@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import gzip
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -52,13 +52,15 @@ def read_jsonl_gz(path: Path) -> Iterator[dict[str, Any]]:
 
 
 def parse_ts(value: str | None) -> datetime | None:
-    """Dataset timestamps are naive UTC strings like '2025-12-29 18:49:21.291984'."""
+    """Dataset timestamps are naive UTC strings like '2025-12-29 18:49:21.291984'; one with a UTC
+    offset is converted to naive UTC (not just stripped of its offset)."""
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+    return dt.astimezone(timezone.utc).replace(tzinfo=None) if dt.tzinfo else dt
 
 
 def agent_eid(uuid: str) -> str:
