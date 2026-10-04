@@ -30,6 +30,7 @@ Run: uv run --with scikit-learn --with numpy --with scipy --with matplotlib pyth
   (re-running with judge_ratings_*.json present also produces the judged analysis).
   (--plot-only redraws out/coherence/same_vs_cross.png from results.json.)
 Outputs: out/coherence/.
+Judge prompt (judge_items_<j>.jsonl -> judge_ratings_<j>.json; reconstructed): prompts/coherence_judge.md.
 """
 
 import collections
