@@ -15,16 +15,22 @@ import collections
 import re
 from typing import Annotated, Any, Literal
 
+import networkx as nx
 from pydantic import Field
 
+from swarm_mcp import llm
+from swarm_mcp.modules.subtasks import naming
 from swarm_mcp.modules.subtasks.infer import (
     LEVELS,
     METHOD_DESCRIPTIONS,
     METHODS,
     Edge,
     Inference,
+    Link,
     cohesion,
+    parents,
     score,
+    subtask_links,
     why,
 )
 from swarm_mcp.modules.subtasks.sources import Corpus, corpus_sources
@@ -38,6 +44,8 @@ DESCRIPTION = (
     "Groups work units (pull requests, edit sessions, runs: any store source whose records touch artifacts) into "
     "subtasks with several inference methods, so disagreement is visible, and derives typed handoffs between actors: "
     "who built on, integrated, tested, fixed, re-submitted or duplicated whose work. Start with subtasks_corpora. "
+    "Each subtask has a name (the title of the unit the others built on most, or one a model or agent wrote: "
+    "subtasks_name) and keywords; subtasks_graph shows which subtasks built on which. "
     "Results cite evidence ids for core_get."
 )
 
@@ -51,9 +59,9 @@ EDGE_VERBS = {
     "resubmits": "re-created the {art}s of",
     "duplicate": "duplicated",
 }
-# caps for the agent-authored text returned (wrapped by ctx.untrusted): unit titles, subtask labels (terms
-# from member titles, or a lone unit's title), chat snippets, handoff sentences (they name units)
-TITLE_CHARS, LABEL_CHARS, SNIPPET_CHARS, SUMMARY_CHARS = 200, 120, 160, 300
+# caps for the agent-authored text returned (wrapped by ctx.untrusted): unit titles, subtask names (a member's
+# title, or model/agent text about the titles), keywords, objectives, chat snippets, handoff sentences
+TITLE_CHARS, LABEL_CHARS, SNIPPET_CHARS, SUMMARY_CHARS, OBJECTIVE_CHARS = 200, 120, 160, 300, 300
 
 
 def requires(ctx) -> list[str]:
@@ -168,8 +176,41 @@ def register(mcp, ctx) -> None:
             "start": iso(u.start),
         }
 
-    def label(inf: Inference, method: str, level: str, k: int) -> dict[str, Any]:
-        return ctx.untrusted(inf.names[method][level][k], LABEL_CHARS)
+    def name_store(inf: Inference) -> naming.NameStore:
+        return naming.NameStore(naming.names_path(ctx.store_path, inf.corpus))
+
+    def label(inf: Inference, method: str, level: str, k: int, store: naming.NameStore | None = None) -> dict[str, Any]:
+        """The subtask's name, wrapped (a stored model/agent name for this membership wins)."""
+        return ctx.untrusted(naming.overlay(inf, store or name_store(inf), method, level, k)["name"], LABEL_CHARS)
+
+    def naming_fields(inf: Inference, method: str, level: str, k: int, store: naming.NameStore) -> dict[str, Any]:
+        o = naming.overlay(inf, store, method, level, k)
+        out: dict[str, Any] = {
+            "name": ctx.untrusted(o["name"], LABEL_CHARS),
+            "keywords": ctx.untrusted(o["keywords"], LABEL_CHARS),
+            "name_source": o["source"],
+        }
+        if o["objective"]:
+            out["objective"] = ctx.untrusted(o["objective"], OBJECTIVE_CHARS)
+        return out
+
+    def ref(inf: Inference, method: str, level: str, k: int, store: naming.NameStore) -> dict[str, Any]:
+        return {
+            "subtask_id": sid(inf.corpus, method, level, k),
+            "name": label(inf, method, level, k, store),
+            "size": len(inf.clusters[method][level][k]),
+        }
+
+    def link_dict(inf: Inference, ln: Link, end: str, method: str, level: str, store) -> dict[str, Any]:
+        """One subtask-to-subtask link, seen from the subtask at the other ``end`` ('src' or 'dst')."""
+        es = [inf.edges[x] for x in ln.edges]
+        return {
+            **ref(inf, method, level, getattr(ln, end), store),
+            "handoffs": len(ln.edges),
+            "types": dict(ln.kinds.most_common()),
+            "actors": [{"from": g, "to": t} for g, t in sorted(ln.actors)[:6]],
+            "evidence": [x for e in es[:3] for x in (e.giver_actions[:1] + e.taker_actions[:1])],
+        }
 
     def resolve_actor(c: Corpus, inf: Inference, name: str) -> str:
         """User-typed actor -> the name used in results (aliases from every source understood)."""
@@ -189,14 +230,14 @@ def register(mcp, ctx) -> None:
             raise ToolInputError(f"actor {name!r} is ambiguous: {', '.join(hits[:10])}")
         raise ToolInputError(f"{name!r} did no work in corpus {inf.corpus}.")
 
-    def cluster_summary(inf, method, level, k, members) -> dict[str, Any]:
+    def cluster_summary(inf, method, level, k, members, store: naming.NameStore | None = None) -> dict[str, Any]:
         U = [inf.units[i] for i in members]
         authors = collections.Counter(inf.authors[i] for i in members if inf.authors[i])
         inside = set(members)
         coh = cohesion(inf, members, method, level)
         return {
             "subtask_id": sid(inf.corpus, method, level, k),
-            "label": label(inf, method, level, k),
+            **naming_fields(inf, method, level, k, store or name_store(inf)),
             "size": len(members),
             "start": iso(min(u.start for u in U)),
             "end": iso(max((u.end or u.start) for u in U)),
@@ -273,11 +314,12 @@ def register(mcp, ctx) -> None:
         lim, note = ctx.limit(limit)
         s, u = parse_time(since, field="since"), parse_time(until, end=True, field="until")
         who = resolve_actor(c, inf, actor) if actor else None
+        store = name_store(inf)
         rows = []
         for k, members in enumerate(inf.clusters[method][granularity]):
             if len(members) < min_size or (who and not any(who in inf.touch[i] for i in members)):
                 continue
-            row = cluster_summary(inf, method, granularity, k, members)
+            row = cluster_summary(inf, method, granularity, k, members, store)
             if (s and row["end"] < iso(s)) or (u and row["start"] >= iso(u)):
                 continue
             rows.append(row)
@@ -305,8 +347,10 @@ def register(mcp, ctx) -> None:
                 n
                 for n in [
                     note,
-                    "labels are the most distinctive terms in member titles, content and artifact names: they echo "
-                    "the actors' own wording, not a verified objective",
+                    "name = the cleaned title of the member the others built on most (else the most central one), "
+                    "unless a model or agent named this exact group (name_source; subtasks_name); keywords = the most "
+                    "distinctive terms in member titles, content and artifact names. Both echo the actors' own "
+                    "wording, not a verified objective",
                     *inf.notes,
                 ]
                 if n
@@ -321,15 +365,17 @@ def register(mcp, ctx) -> None:
         max_members: Annotated[int, Field(description="Max member units to list (default 40).", ge=1, le=200)] = 40,
         max_chat: Annotated[int, Field(description="Max chat messages to cite (default 10).", ge=0, le=100)] = 10,
     ) -> dict[str, Any]:
-        """One subtask in detail: member units (event ids) with the signals that tie each to the group, who did
-        what, typed handoffs between actors with action-level evidence, duplicates, handoffs to/from other
-        subtasks, how the other methods split these units, and the chat messages that discuss them."""
+        """One subtask in detail: its name, keywords and (if named by a model/agent) objective; member units
+        (event ids) with the signals that tie each to the group, who did what, typed handoffs between actors with
+        action-level evidence, duplicates, the subtasks it built on and that built on it, the coarser subtask it is
+        part of and its finer parts, how the other methods split these units, and the chat that discusses them."""
         name, method, level, k = parse_sid(subtask_id)
         c, inf = get_inf(name)
         cl = inf.clusters[method][level]
         if not 0 <= k < len(cl):
             raise ToolInputError(f"{subtask_id!r}: there are {len(cl)} subtasks for {method}/{level}.")
         members = cl[k]
+        store = name_store(inf)
         inside = set(members)
         rows = []
         for i in members[:max_members]:
@@ -343,16 +389,22 @@ def register(mcp, ctx) -> None:
                 row["rewrote"] = inf.rewrites[i]
             rows.append(row)
         internal = [edge_dict(c, inf, e) for e in inf.edges if e.src in inside and e.dst in inside]
-        incoming = [e for e in inf.edges if e.kind != "duplicate" and e.dst in inside and e.src not in inside]
-        outgoing = [e for e in inf.edges if e.kind != "duplicate" and e.src in inside and e.dst not in inside]
-
-        def other_groups(es: list[Edge], end: str) -> list[dict[str, Any]]:
-            lab = inf.label_of[method][level]
-            cnt = collections.Counter(int(lab[getattr(e, end)]) for e in es)
-            return [
-                {"subtask_id": sid(inf.corpus, method, level, g), "label": label(inf, method, level, g), "handoffs": n}
-                for g, n in cnt.most_common(5)
-            ]
+        links = subtask_links(inf, method, level)
+        builds_on = [link_dict(inf, ln, "src", method, level, store) for ln in links if ln.dst == k][:8]
+        built_on_by = [link_dict(inf, ln, "dst", method, level, store) for ln in links if ln.src == k][:8]
+        lv = list(LEVELS)
+        up = parents(inf, method, level)
+        part_of = None
+        if up:
+            p, share = up[k]
+            part_of = {**ref(inf, method, lv[lv.index(level) - 1], p, store), "share_of_members": share}
+        finer_parts = []
+        if level != lv[-1]:
+            finer = lv[lv.index(level) + 1]
+            for g, (p, share) in enumerate(parents(inf, method, finer) or []):
+                if p == k:
+                    finer_parts.append({**ref(inf, method, finer, g, store), "share_inside": share})
+            finer_parts.sort(key=lambda x: -x["size"])
 
         splits = []
         for m in METHODS:
@@ -366,7 +418,7 @@ def register(mcp, ctx) -> None:
                     "pieces": len(parts),
                     "largest_piece": {
                         "subtask_id": sid(inf.corpus, m, level, big),
-                        "label": label(inf, m, level, big),
+                        "name": label(inf, m, level, big, store),
                         "members": n,
                     },
                 }
@@ -399,7 +451,7 @@ def register(mcp, ctx) -> None:
                 "no cross-actor handoffs inside: actors may have worked in parallel, or links went through hub artifacts"
             )
         return {
-            **cluster_summary(inf, method, level, k, members),
+            **cluster_summary(inf, method, level, k, members, store),
             "corpus": c.name,
             "unit": c.unit_noun,
             "method": method,
@@ -408,14 +460,17 @@ def register(mcp, ctx) -> None:
             "members_omitted": max(0, len(members) - max_members),
             "participants": participants(inf, members),
             "handoffs": internal,
-            "handoffs_from_other_subtasks": other_groups(incoming, "src"),
-            "handoffs_to_other_subtasks": other_groups(outgoing, "dst"),
+            "builds_on": builds_on,
+            "built_on_by": built_on_by,
+            "part_of": part_of,
+            "parts": finer_parts[:12],
+            "parts_omitted": max(0, len(finer_parts) - 12),
             "other_methods": splits,
             "agreement_by_method": coh,
             **(
                 {
                     "dataset_labels": {
-                        "name": c.tag_name,
+                        "about": c.tag_name,
                         "counts": dict(
                             sum(
                                 (collections.Counter(inf.units[i].tags) for i in members), collections.Counter()
@@ -430,6 +485,9 @@ def register(mcp, ctx) -> None:
             "unresolved": unresolved,
             "notes": [
                 "signals compare each unit with its closest member: shared terms/artifacts explain the grouping",
+                "builds_on / built_on_by: other subtasks linked by handoffs (this one used their work / they used "
+                "this one's); part_of / parts: the subtask one granularity coarser holding most of these units, and "
+                "the finer subtasks mostly inside this one (granularities are clustered independently)",
                 f"handoffs are between different actors and come from shared {c.artifact_noun}s; 'duplicate' is inferred",
                 *inf.notes,
             ],
@@ -460,6 +518,7 @@ def register(mcp, ctx) -> None:
             and any(r not in ("author", "action") for r in inf.touch[i].get((pair - {inf.authors[i]}).pop(), ()))
         ]
         lab = inf.label_of[method][granularity]
+        store = name_store(inf)
         shared = []
         for k, members in enumerate(inf.clusters[method][granularity]):
             ra = sorted({x for i in members for x in inf.touch[i].get(a, ())})
@@ -469,7 +528,7 @@ def register(mcp, ctx) -> None:
                 shared.append(
                     {
                         "subtask_id": sid(inf.corpus, method, granularity, k),
-                        "label": label(inf, method, granularity, k),
+                        "name": label(inf, method, granularity, k, store),
                         "size": len(members),
                         "roles": {a: ra, b: rb},
                         "handoffs_between_them": n,
@@ -550,3 +609,152 @@ def register(mcp, ctx) -> None:
             "matches": out,
             "notes": [] if out else ["not part of any unit (a message must name a unit's number, e.g. 'PR #12')"],
         }
+
+    @ctx.tool()
+    def graph(
+        corpus: Annotated[str | None, Field(description="Corpus name; optional if there is only one.")] = None,
+        method: Annotated[Method, Field(description="Inference method.")] = "combined",
+        granularity: Annotated[Level, Field(description="Granularity.")] = "medium",
+        min_size: Annotated[int, Field(description="Ignore subtasks smaller than this (units).", ge=1)] = 2,
+        min_handoffs: Annotated[int, Field(description="Ignore links with fewer handoffs.", ge=1)] = 1,
+        duplicates: Annotated[
+            bool, Field(description="True: show 'duplicate' links (similar work, no handoff) instead of handoffs.")
+        ] = False,
+        limit: Annotated[int, Field(description="Max links (default 40, max 200).", ge=1, le=200)] = 40,
+    ) -> dict[str, Any]:
+        """Structure over subtasks: which subtasks built on which. A link A -> B aggregates the handoffs from
+        units of A to units of B (B's actors built on, integrated, tested, fixed or re-submitted A's work), with
+        counts by type, the actor pairs and sample evidence ids. Also orders the subtasks into stages (stage 0
+        = built on nothing else shown; mutual dependencies share a stage) and lists foundations (others built
+        on them, they built on none) and the most-built-on subtasks."""
+        c, inf = get_inf(corpus)
+        store = name_store(inf)
+        cl = inf.clusters[method][granularity]
+        links = [
+            ln
+            for ln in subtask_links(inf, method, granularity, duplicates=duplicates)
+            if len(ln.edges) >= min_handoffs and len(cl[ln.src]) >= min_size and len(cl[ln.dst]) >= min_size
+        ]
+        shown = links[:limit]
+        G = nx.DiGraph()
+        G.add_edges_from((ln.src, ln.dst) for ln in links)
+        C = nx.condensation(G)
+        stage_of_comp: dict[int, int] = {}
+        for comp in nx.topological_sort(C):
+            preds = list(C.predecessors(comp))
+            stage_of_comp[comp] = 1 + max(stage_of_comp[p] for p in preds) if preds else 0
+        stage = {n: stage_of_comp[C.graph["mapping"][n]] for n in G.nodes}
+        cycles = [sorted(C.nodes[x]["members"]) for x in C.nodes if len(C.nodes[x]["members"]) > 1]
+
+        def node(k: int) -> dict[str, Any]:
+            return {
+                **ref(inf, method, granularity, k, store),
+                "stage": stage.get(k),
+                "built_on": G.in_degree(k) if k in G else 0,
+                "built_on_by": G.out_degree(k) if k in G else 0,
+            }
+
+        nodes = sorted({k for ln in shown for k in (ln.src, ln.dst)}, key=lambda k: (stage.get(k, 0), k))
+        out_weight = collections.Counter()
+        for ln in links:
+            out_weight[ln.src] += len(ln.edges)
+        return {
+            "corpus": c.name,
+            "method": method,
+            "granularity": granularity,
+            "kind": "duplicate" if duplicates else "handoff",
+            "total_links": len(links),
+            "returned": len(shown),
+            "links": [
+                {
+                    "from": sid(inf.corpus, method, granularity, ln.src),
+                    "to": sid(inf.corpus, method, granularity, ln.dst),
+                    "handoffs": len(ln.edges),
+                    "types": dict(ln.kinds.most_common()),
+                    "actor_pairs": len(ln.actors),
+                    "evidence": [
+                        x for i in ln.edges[:2] for x in inf.edges[i].giver_actions[:1] + inf.edges[i].taker_actions[:1]
+                    ],
+                }
+                for ln in shown
+            ],
+            "subtasks": [node(k) for k in nodes],
+            "foundations": [node(k) for k, _ in out_weight.most_common() if G.in_degree(k) == 0][:8],
+            "most_built_on": [{**node(k), "handoffs_out": n} for k, n in out_weight.most_common(8)],
+            "mutual_dependencies": [[sid(inf.corpus, method, granularity, k) for k in cyc] for cyc in cycles[:10]],
+            "notes": [
+                "a link A -> B means actors in B used work from A; 'stage' is the longest chain of such links "
+                "leading into a subtask (subtasks that depend on each other share a stage)",
+                "links come from shared artifacts between different actors (see subtasks_get for unit-level handoffs); "
+                "hub artifacts never create them",
+                *inf.notes,
+            ],
+        }
+
+    @ctx.tool(read_only=False)
+    def name(
+        subtask_id: Annotated[
+            str, Field(description="A subtask_id from subtasks_list, e.g. 'rpg-game/combined/medium/7'.")
+        ],
+        name: Annotated[
+            str | None, Field(description="Your name for this subtask (3-8 words); stored and shown from now on.")
+        ] = None,
+        objective: Annotated[
+            str | None, Field(description="With name: one sentence on what the work aimed at.")
+        ] = None,
+        generate: Annotated[
+            bool, Field(description="Without name: ask the configured model to name it (needs ANTHROPIC_API_KEY).")
+        ] = False,
+    ) -> dict[str, Any]:
+        """Name a subtask. Without arguments: its current name, keywords and the titles of its most central units,
+        to name it from. With name (and objective): store your name. With generate=true: ask the configured model.
+        Names attach to this exact set of units, so they show under every method/granularity that finds the same
+        group, and stop applying if a rerun changes the group. A name you write replaces a model's."""
+        corpus_name, method, level, k = parse_sid(subtask_id)
+        c, inf = get_inf(corpus_name)
+        cl = inf.clusters[method][level]
+        if not 0 <= k < len(cl):
+            raise ToolInputError(f"{subtask_id!r}: there are {len(cl)} subtasks for {method}/{level}.")
+        store = name_store(inf)
+        key = naming.member_key(inf, cl[k])
+        action = "read"
+        if name is not None:
+            clean_name = naming.clean(name, naming.NAME_CHARS)
+            if not clean_name:
+                raise ToolInputError("name is empty")
+            store.put(
+                key,
+                {
+                    "name": clean_name,
+                    "objective": naming.clean(objective, naming.OBJECTIVE_CHARS),
+                    "source": "agent",
+                    "size": len(cl[k]),
+                },
+            )
+            action = "stored"
+        elif generate:
+            try:
+                client = llm.get_client(ctx.config)
+            except llm.LLMUnavailable as e:
+                raise ToolInputError(str(e)) from None
+            res = naming.generate(
+                client, inf, [(method, level, k)], store, unit_noun=c.unit_noun, scrub=ctx.scrub, cap=1, force=True
+            )
+            if res["failed"]:
+                raise ToolInputError(f"the model call failed: {'; '.join(res['errors'])}")
+            action = "generated" if res["named"] else "kept (an agent already named it)"
+        out = {
+            "subtask_id": subtask_id,
+            "action": action,
+            **naming_fields(inf, method, level, k, store),
+            "size": len(cl[k]),
+        }
+        if action == "read":
+            out["central_titles"] = [
+                ctx.untrusted(inf.units[i].title, TITLE_CHARS) for i in inf.exemplars[method][level][k]
+            ]
+        out["notes"] = [
+            "names attach to this exact set of units (every method/granularity that finds it); they are untrusted "
+            "text like the titles they describe"
+        ]
+        return out

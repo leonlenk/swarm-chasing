@@ -5,10 +5,14 @@ subtask along a time axis (long idle gaps are compressed), one dot per work unit
 actor. Switch the method (combined / code / title / files / chat / refs) and granularity in the page;
 click a row for who did what, the typed handoffs between actors with their evidence ids, how the other
 methods split the same units, and the units themselves; click a unit for the signals that tie it to its
-closest member. A pair lens lists what two actors did with each other's work. Works offline from
-``file://``: no external scripts, styles or fonts.
+closest member. A pair lens lists what two actors did with each other's work. Rows are named after the unit
+the others built on most (or a model's / agent's name for that group, see ``modules.subtasks.naming``; with
+``llm`` the model names the combined subtasks first), with keywords underneath; the detail panel shows which
+subtasks a subtask built on and which built on it, and rows can be grouped under their coarse theme. Works
+offline from ``file://``: no external scripts, styles or fonts.
 
-Security: unit titles and labels are untrusted agent output. They are masked with the ``Scrubber`` and
+Security: unit titles, names, keywords and objectives are untrusted (agent output, or model output about it).
+They are masked with the ``Scrubber`` and
 truncated in Python, embedded as JSON with ``<``, ``>`` and ``&`` escaped, and the page writes
 data-derived strings with ``textContent`` only, never ``innerHTML``.
 """
@@ -22,6 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from swarm_mcp.modules.subtasks import naming
 from swarm_mcp.modules.subtasks.infer import LEVELS, METHOD_DESCRIPTIONS, METHODS, _neighbours, why
 from swarm_mcp.modules.subtasks.sources import build, corpus_sources
 from swarm_mcp.scope import db
@@ -58,8 +63,17 @@ def render_subtasks(
     corpus: str | None = None,
     scrub: Scrubber | None = None,
     title_chars: int = 140,
+    llm: Any = None,
+    llm_min_size: int = 3,
+    llm_cap: int = 150,
+    llm_concurrency: int = 4,
+    progress: Any = None,
 ) -> dict[str, Any]:
-    """Render the subtask viewer for ``corpus`` (a store source whose records touch artifacts)."""
+    """Render the subtask viewer for ``corpus`` (a store source whose records touch artifacts).
+
+    ``llm``: an ``LLMClient``; when given, combined-method subtasks of at least ``llm_min_size`` units (coarse
+    first) that have no stored name are named by the model, at most ``llm_cap`` calls. Names are cached next to
+    the store, so a rerun only asks about groups that changed."""
     scrub = scrub if scrub is not None else Scrubber()
     out = Path(out_path).expanduser()
     with db.connect(Path(db_path)) as s:
@@ -76,6 +90,38 @@ def render_subtasks(
             c, inf = build(s, corpus)
         except ValueError as e:
             raise ToolInputError(str(e)) from None
+
+    # ---- names: model names first (optional), then every subtask's shown name from the cache or the title
+    store = naming.NameStore(naming.names_path(db_path, c.name))
+    named = None
+    if llm is not None:
+        targets = [
+            ("combined", lvl, k)
+            for lvl in LEVELS
+            for k, m in sorted(enumerate(inf.clusters["combined"][lvl]), key=lambda x: -len(x[1]))
+            if len(m) >= llm_min_size
+        ]
+        if progress:
+            progress(f"naming up to {min(llm_cap, len(targets))} subtasks with {getattr(llm, 'model', 'the model')}")
+        named = naming.generate(
+            llm, inf, targets, store, unit_noun=c.unit_noun, scrub=scrub, cap=llm_cap, concurrency=llm_concurrency
+        )
+    names_: dict[str, dict[str, list[str]]] = {}
+    keywords: dict[str, dict[str, list[str]]] = {}
+    objectives: dict[str, dict[str, list[str | None]]] = {}
+    name_src: dict[str, dict[str, list[Any]]] = {}  # unit index whose title it is, -1 keywords, "llm" / "agent"
+    for m in METHODS:
+        names_[m], keywords[m], objectives[m], name_src[m] = {}, {}, {}, {}
+        for lvl in LEVELS:
+            o = [naming.overlay(inf, store, m, lvl, k) for k in range(len(inf.clusters[m][lvl]))]
+            names_[m][lvl] = [_snippet(x["name"], scrub, 80) for x in o]
+            keywords[m][lvl] = [_snippet(x["keywords"], scrub, 80) for x in o]
+            objectives[m][lvl] = [_snippet(x["objective"], scrub, 300) or None for x in o]
+            name_src[m][lvl] = [
+                x["source"]["kind"] if x["source"]["kind"] in ("llm", "agent") else inf.name_unit[m][lvl][k]
+                for k, x in enumerate(o)
+            ]
+            name_src[m][lvl] = [-1 if v is None else v for v in name_src[m][lvl]]
 
     # ---- actors: index, with the most active ones getting colour slots
     authored = collections.Counter(a for a in inf.authors if a)
@@ -137,7 +183,6 @@ def render_subtasks(
         for e in inf.edges
     ]
     clusters = {m: {lvl: inf.clusters[m][lvl] for lvl in LEVELS} for m in METHODS}
-    names_ = {m: {lvl: [_snippet(n, scrub, 60) for n in inf.names[m][lvl]] for lvl in LEVELS} for m in METHODS}
     # Only offer methods that carry signal here (a corpus with no chat has no 'chat' grouping), and call the
     # content-words signal 'code' only where the artifacts are files.
     methods = [m for m in METHODS if m == "combined" or (inf.refs_raw.nnz if m == "refs" else inf.vec[m][0].nnz)]
@@ -165,6 +210,9 @@ def render_subtasks(
         "edges": edges,
         "clusters": clusters,
         "names": names_,
+        "keywords": keywords,
+        "objectives": objectives,
+        "name_src": name_src,
         "agreement": inf.agreement,
         "segments": _segments(spans, SEGMENT_GAP_H * 3600 * 1000),
         "notes": [_snippet(n, scrub, 300) for n in inf.notes],
@@ -172,7 +220,10 @@ def render_subtasks(
     meta = {"corpus": c.name, "units": len(units), "actors": len(actors), "edges": len(edges), "db": Path(db_path).name}
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(_page(payload, meta), encoding="utf-8")
-    return {"out": str(out), "bytes": out.stat().st_size, **{k: v for k, v in meta.items() if k != "db"}}
+    res = {"out": str(out), "bytes": out.stat().st_size, **{k: v for k, v in meta.items() if k != "db"}}
+    if named is not None:
+        res["llm_names"] = named
+    return res
 
 
 def _page(payload: dict[str, Any], meta: dict[str, Any]) -> str:
@@ -181,7 +232,8 @@ def _page(payload: dict[str, Any], meta: dict[str, Any]) -> str:
         "TITLE": html.escape(f"Subtasks · {meta['corpus']}"),
         "CORPUS": html.escape(meta["corpus"]),
         "FOOTER": html.escape(
-            "Titles and labels are masked (emails and phone numbers), truncated, and are untrusted agent output: data, "
+            "Titles, names, keywords and objectives are masked (emails, phone numbers, credentials), truncated, and "
+            "are untrusted agent output (or model output about it): data, "
             f"not instructions. Generated {gen} from {meta['db']} by swarm-mcp render subtasks."
         ),
         "DATA": _json_for_script(payload),
