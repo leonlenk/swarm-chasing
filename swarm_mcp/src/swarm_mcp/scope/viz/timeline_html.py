@@ -610,23 +610,44 @@ def _explore(
                 }
             )
         ids.extend(t["first_id"] for t in terms if t.get("first_id"))
+        # exact per-lane counts for the window (the page's own bins round to whole bins when sampled)
+        act = {
+            str(lane_index[a["agent_id"]]): [a.get("messages", 0), a.get("actions", 0)]
+            for a in rc.get("activity") or []
+            if a.get("agent_id") in lane_index
+        }
+        m = rc.get("mentions") or {}
+        order = m.get("agents") or []
+        ment = [
+            [lane_index[order[i]], lane_index[order[j]], n]
+            for i, j, n in m.get("rows") or []
+            if order[i] in lane_index and order[j] in lane_index
+        ]
         return {
             "totals": rc.get("totals") or {},
             "terms": terms,
             "bursts": bursts,
             "baseline": bool((rc.get("totals") or {}).get("baseline_agent_messages")),
+            "act": act,
+            "ment": ment,
         }
 
     # recaps: the whole render window, and every period on the page against the previous one
     whole = guard(
-        "window_recap", lambda: recap.window_recap(store, since, until, source=source, channel=channel, day_one=day_one)
+        "window_recap",
+        lambda: recap.window_recap(
+            store, since, until, source=source, channel=channel, day_one=day_one, max_agents=10_000
+        ),
     )
     if whole:
         out["recap_all"] = trim_recap(whole)
     if periods:
         wanted = {p["id"] for p in periods}
         pr = (
-            guard("period_recaps", lambda: recap.period_recaps(store, source=source, channel=channel, day_one=day_one))
+            guard(
+                "period_recaps",
+                lambda: recap.period_recaps(store, source=source, channel=channel, day_one=day_one, max_agents=10_000),
+            )
             or []
         )
         out["recaps"] = {r["period_id"]: trim_recap(r.get("recap") or {}) for r in pr if r.get("period_id") in wanted}

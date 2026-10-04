@@ -339,6 +339,23 @@ def test_linked_panels_payload(store_path: Path, tmp_path: Path):
     assert all({"kind", "t", "why", "ids"} <= set(m) for m in x["moments"])
     assert all(s["groups"] and s["starts"] for s in x["series"])
     assert set(x["agent_rates"]["lanes"]) <= {str(i) for i in range(len(lane_ids))}
+    # each goal's recap carries exact per-lane counts (messages, actions) and lane-to-lane mentions
+    con = duckdb.connect(str(store_path), read_only=True)
+    try:
+        for pp in p.payload["periods"]:
+            rc = x["recaps"][pp["id"]]
+            end = pp["e"] if pp["e"] is not None else 10**15
+            want = dict(
+                con.execute(
+                    "SELECT author_id, count(*) FROM messages WHERE epoch_ms(ts) >= ? AND epoch_ms(ts) < ? GROUP BY 1",
+                    [pp["s"], end],
+                ).fetchall()
+            )
+            got = {lane_ids[int(i)]: v[0] for i, v in rc["act"].items() if v[0]}
+            assert got == {a: n for a, n in want.items() if a in lane_ids}, pp["label"]
+            assert all(0 <= i < len(lane_ids) and 0 <= j < len(lane_ids) and n > 0 for i, j, n in rc["ment"])
+    finally:
+        con.close()
     # every id the panels point at that falls inside the render is on the page
     on_page = {p.payload["idp"] + i for i in p.payload["id"]}
     for rc in x["recaps"].values():

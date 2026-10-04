@@ -754,10 +754,26 @@
   }
 
   // ---------------------------------------------------------------- the window on screen: mentions and activity
-  function windowBounds() { return [Math.max(S.v0, D.start), Math.min(S.v1, D.end)]; }
+  // The window the panels describe: a selected goal exactly, else the view.
+  function windowBounds() {
+    if (S.period >= 0) { var p = periods[S.period]; return [p.s, p.e == null ? D.end : p.e]; }
+    return [Math.max(S.v0, D.start), Math.min(S.v1, D.end)];
+  }
+  // Exact counts for the window from the precomputed recap (SQL over every message), when the window
+  // is a selected goal or the full range and no channel is hidden; null otherwise.
+  function exactRecap() {
+    if (chans.some(function (_, i) { return S.hidden[i]; })) return null;
+    var X = D.x || {};
+    if (S.period >= 0) return X.recaps ? X.recaps[periods[S.period].id] || null : null;
+    var full = S.v0 <= FULL0 + (FULL1 - FULL0) * 0.02 && S.v1 >= FULL1 - (FULL1 - FULL0) * 0.02;
+    return full ? X.recap_all || null : null;
+  }
   function mentionMatrix(a, b) {
     var n = lanes.length, M = [], k;
     for (k = 0; k < n; k++) { M.push(new Float64Array(n)); }
+    var ex = exactRecap();
+    if (ex && ex.ment) { ex.ment.forEach(function (r) { M[r[0]][r[1]] += r[2]; }); M.exact = true; return M; }
+    M.exact = !META.sampled;
     if (!META.sampled) {  // every lane message is on the page: count exactly, by timestamp
       (D.rc || []).forEach(function (r) {
         var i = r[0];
@@ -850,7 +866,7 @@
     });
     svgEl(svg, 'line', { x1: x0, x2: x0 + n * cell, y1: y0 - 0.5, y2: y0 - 0.5, 'class': 'axis-line' });
     svgEl(svg, 'line', { x1: x0 - 0.5, x2: x0 - 0.5, y1: y0, y2: y0 + n * cell, 'class': 'axis-line' });
-    return { max: max, pairs: pairs, recip: recip, total: rowT.reduce(function (a, b) { return a + b; }, 0), window: wb };
+    return { max: max, pairs: pairs, recip: recip, total: rowT.reduce(function (a, b) { return a + b; }, 0), window: wb, exact: !!M.exact };
   }
   function fitMx(s, w, fs) { return fit(s, w, { size: fs }); }
 
@@ -872,7 +888,11 @@
   function drawActivity(host, Wd, exp) {
     host.textContent = '';
     var wb = windowBounds();
-    var rows = lanes.map(function (L, li) { return { li: li, m: messagesIn(li, wb[0], wb[1]), a: actionsIn(li, wb[0], wb[1]) }; })
+    var ex = exactRecap(), exAct = ex && ex.act;
+    var rows = lanes.map(function (L, li) {
+      if (exAct) { var v = exAct[li] || [0, 0]; return { li: li, m: v[0], a: v[1] }; }
+      return { li: li, m: messagesIn(li, wb[0], wb[1]), a: actionsIn(li, wb[0], wb[1]) };
+    })
       .sort(function (p, q) { return q.m - p.m || q.a - p.a || p.li - q.li; });
     var hasActs = rows.some(function (r) { return r.a > 0; });
     var fs = exp ? 11.5 : (Wd < 560 ? 11 : 12), ts = fs - 0.5, rowH = exp ? 14 : 19, barH = Math.round(rowH * 0.56);
@@ -906,7 +926,7 @@
         svgEl(svg, 'text', { x: x0 + v * k + 4, y: y + barH / 2 + ts * 0.35, 'class': 'val' }, fmtK(v));
       });
     });
-    return { hasActs: hasActs, rows: rows, window: wb };
+    return { hasActs: hasActs, rows: rows, window: wb, exact: !!exAct || !META.sampled };
   }
   // Ticks from 0 in a 1/2/5 step; with cover=true the last tick is at or above max (axis tops).
   function niceTicks(max, n, cover) {
@@ -939,13 +959,14 @@
     s += 'Rows and columns follow Figure 1’s order; margins give the totals sent and received among these agents. ';
     if (m.pairs) s += m.recip + ' of the ' + m.pairs + ' pairs that mention each other at all (' + Math.round(100 * m.recip / m.pairs) + '%) do so in both directions. ';
     else s += 'No agent in the rows names another in this window. ';
-    s += 'Mentions are names found in the message text (the store’s recipient ids), counted over every message' + (META.sampled ? ' (not just the sample) in ' + durLabel(BIN) + ' bins, so the window edges are rounded to whole bins.' : '.');
+    s += 'Mentions are names found in the message text (the store’s recipient ids), counted over every message' + (m.exact ? '.' : ' (not just the sample) in ' + durLabel(BIN) + ' bins, so the window edges are rounded to whole bins.');
     return s;
   }
   function captionActivity(a) {
     var s = 'Figure 3: Who was active, ' + whenRange(a.window[0], a.window[1]) + '. ';
     s += 'Messages per agent' + (a.hasActs ? ' (left) and recorded actions such as session goals and summaries (right, own scale)' : '') + ', sorted by messages.';
     if (chans.some(function (_, i) { return S.hidden[i]; })) s += ' Messages exclude the hidden channels.';
+    if (!a.exact) s += ' Counts use ' + durLabel(BIN) + ' bins, so the window edges are rounded to whole bins.';
     return s;
   }
 
