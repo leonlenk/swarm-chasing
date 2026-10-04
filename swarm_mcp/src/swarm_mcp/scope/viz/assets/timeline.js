@@ -63,6 +63,11 @@
   function fmtDate(ms) { var d = new Date(ms); return d.getUTCDate() + ' ' + MON[d.getUTCMonth()] + ' ' + d.getUTCFullYear(); }
   function fmtTime(ms) { var d = new Date(ms); return pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes()); }
   function fmtDateTime(ms) { return fmtDate(ms) + ', ' + fmtTime(ms) + ' UTC'; }
+  // a span with its day: 'Day 5, 03:00–03:09 UTC' (Village) or '5 Jan 2026, 03:00–03:09 UTC'
+  function fmtSpan(a, b) {
+    function day(ms) { return DAYS ? 'Day ' + dayOf(ms) : fmtDate(ms); }
+    return day(a) + ', ' + fmtTime(a) + '–' + (day(b) === day(a) ? '' : day(b) + ', ') + fmtTime(b) + ' UTC';
+  }
   function isoS(ms) { return new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z'); }
   function dayOf(ms) { return DAYS ? DAYS.of(ms) : null; }
   function dayRange(a, b) {
@@ -1266,7 +1271,7 @@
       { label: '', get: function (t) { return t.first_id ? readLink([t.first_id], 'First use') : ''; } }
     ], r.baseline ? r.terms : [], r.baseline ? 'No term rose clearly.' : 'There are no messages before this window to compare with; pick a goal (each is compared with the previous one).');
     bookTable($('tbl-bursts'), 'Busiest threads in ' + cr.what + ': runs of messages in one channel with gaps of at most 20 minutes, by length.', [
-      { label: 'When', get: function (b) { return (DAYS ? 'Day ' + dayOf(b.s) + ', ' : '') + fmtTime(b.s) + '–' + fmtTime(b.e) + ' UTC'; } },
+      { label: 'When', get: function (b) { return fmtSpan(b.s, b.e); } },
       { label: 'Room', get: function (b) { return '#' + b.channel; } },
       { label: 'Msgs', num: true, get: function (b) { return fmtN(b.n); } },
       { label: 'Who', get: function (b) { var a = b.agents || []; return a.slice(0, 3).join(', ') + (a.length > 3 ? ' +' + (a.length - 3) : ''); } },
