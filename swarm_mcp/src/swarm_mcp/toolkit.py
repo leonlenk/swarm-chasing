@@ -6,6 +6,8 @@ Module authors mostly need:
 - ``untrusted``: the ONLY way to return dataset text (agent/human content) to a
   caller: masked, capped (default 500 chars) and wrapped as
   ``{"content": ..., "untrusted": true}`` so it is never mistaken for instructions.
+- ``safe_label``: dataset-supplied NAMES (agent, author, channel, actor) returned bare: one line, capped,
+  masked and neutralized. ``wrap_tool`` applies it to every value under a ``NAME_KEYS`` key of a result.
 - ``truncate`` / ``snippet``: cut long text (optionally around a match) and mark it.
 - ``Scrubber``: mask emails, phone numbers and credentials in returned text (``redact.mask_text``).
 - ``parse_time``: accept dates/datetimes in the formats an LLM is likely to send.
@@ -23,6 +25,7 @@ from typing import Any, Callable, Iterable
 
 import anyio.to_thread
 
+from swarm_mcp.fence import neutralize
 from swarm_mcp.redact import mask_text
 from swarm_mcp.sdk import ToolError
 
@@ -31,10 +34,14 @@ class ToolInputError(ValueError):
     """Bad tool input. The message is returned to the caller verbatim."""
 
 
-def wrap_tool(fn: Callable[..., Any], tool_name: str, log: logging.Logger) -> Callable[..., Any]:
+def wrap_tool(
+    fn: Callable[..., Any], tool_name: str, log: logging.Logger, scrub: Callable[[str], str] | None = None
+) -> Callable[..., Any]:
     """Wrap a tool function so that:
 
     - sync functions run in a worker thread (slow loads don't block the event loop);
+    - dataset-supplied names in the result (``NAME_KEYS``: author, channel, display_name, actor...)
+      go out through ``safe_label`` (``sanitize_names``), masked with ``scrub``;
     - ``ToolInputError`` becomes a clean error message for the caller;
     - unexpected exceptions are logged (with traceback) to stderr and reported
       to the caller as a one-line message, never a traceback.
@@ -48,8 +55,10 @@ def wrap_tool(fn: Callable[..., Any], tool_name: str, log: logging.Logger) -> Ca
     async def wrapper(*args: Any, **kwargs: Any) -> Any:
         try:
             if is_async:
-                return await fn(*args, **kwargs)
-            return await anyio.to_thread.run_sync(functools.partial(fn, *args, **kwargs))
+                out = await fn(*args, **kwargs)
+            else:
+                out = await anyio.to_thread.run_sync(functools.partial(fn, *args, **kwargs))
+            return sanitize_names(out, scrub) if isinstance(out, (dict, list)) else out
         except ToolError:
             raise
         except ToolInputError as e:
@@ -222,6 +231,70 @@ def parse_time(value: str | None, *, end: bool = False, field: str = "time") -> 
     if dt.tzinfo is not None:
         dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
     return dt.strftime(TS_FORMAT)
+
+
+# --------------------------------------------------------------------------- names
+
+NAME_MAX_CHARS = 80  # cap for a dataset-supplied name (agent, channel, actor, artifact) in tool output
+_INVISIBLE = re.compile(r"[\x00-\x08\x0e-\x1f\x7f-\x9f​‎‏‪-‮⁦-⁩﻿]")
+_FENCE_RUN = re.compile(r"`{3,}|~{3,}")
+_MD_LEAD = re.compile(r"^(?:#{1,6}(?=\s|$)|>|[-*+=_]{3,}(?=\s|$))\s*")
+# an evidence/agent id ('village:agent:<uuid>', 'rpg:artifact:src/x.js'): passed back for lookups, never altered
+_ID_LIKE = re.compile(r"[A-Za-z0-9_.-]+:[a-z_]+:[^\s<>`]+")
+
+
+def safe_label(value: object, scrub: Callable[[str], str] | None = None, max_chars: int = NAME_MAX_CHARS) -> str:
+    """A dataset-supplied name or identifier (agent display name, channel, actor, artifact name) made safe
+    to return bare: one line (whitespace runs, newlines and invisible characters collapsed), PII masked
+    (``scrub``, default ``redact.mask_text``), tag-like text neutralized (``fence.neutralize``), code-fence
+    runs and markdown heading/quote starters removed, capped at ``max_chars``. Benign names (``Claude Opus
+    4.5``, ``general``, ``#general``) come back unchanged, and applying it twice changes nothing. Strings
+    shaped like evidence ids are returned as they are so they still resolve."""
+    s = "" if value is None else str(value)
+    if _ID_LIKE.fullmatch(s):
+        return s
+    s = " ".join(_INVISIBLE.sub("", s).split())
+    s = scrub(s) if scrub is not None else mask_text(s)
+    s = _FENCE_RUN.sub(lambda m: m.group()[0], neutralize(s))
+    while (m := _MD_LEAD.match(s)) and m.end():
+        s = s[m.end() :]
+    if len(s) > max_chars:
+        s = s[: max_chars - 1].rstrip() + "…"
+    return s
+
+
+def label_matches(raw: object, query: str | None) -> bool:
+    """Does ``query`` equal ``raw`` as ``safe_label`` returns it (masked or not)? Lets a resolver accept a
+    name exactly as a tool returned it, even when sanitizing changed it."""
+    if not query or raw is None:
+        return False
+    q = query.strip()
+    return q in (safe_label(raw), safe_label(raw, scrub=str))
+
+
+# Output keys whose bare string values (or the strings in their lists) are dataset-supplied names.
+# ``wrap_tool`` passes them through ``safe_label`` on the way out, whichever module built the result.
+NAME_KEYS = frozenset(
+    {
+        "author", "agent", "actor", "from_actor", "to_actor", "actors", "display_name", "name", "names",
+        "agents", "humans", "channel", "channels", "group", "group_id", "source_name", "target_name", "from", "to",
+        "coined_by",
+    }
+)  # fmt: skip
+
+
+def sanitize_names(obj: Any, scrub: Callable[[str], str] | None = None, *, _key: str | None = None) -> Any:
+    """``obj`` with every string under a ``NAME_KEYS`` key replaced by ``safe_label`` (lists included;
+    ``{"content", "untrusted"}`` wrappers are left alone). Builds new containers; ``obj`` is not modified."""
+    if isinstance(obj, dict):
+        if obj.get("untrusted") is True and "content" in obj:
+            return obj
+        return {k: sanitize_names(v, scrub, _key=k) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [sanitize_names(v, scrub, _key=_key) for v in obj]
+    if isinstance(obj, str) and _key in NAME_KEYS:
+        return safe_label(obj, scrub)
+    return obj
 
 
 def iso(ts: str | None) -> str | None:

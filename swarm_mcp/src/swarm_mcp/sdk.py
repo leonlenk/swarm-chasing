@@ -9,12 +9,14 @@ file should need updating.
 from __future__ import annotations
 
 import contextlib
+import functools
 from typing import Any, Callable
 
 from mcp.server.mcpserver import MCPServer
-from mcp.server.mcpserver.exceptions import ToolError
+from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
 from mcp.shared.exceptions import MCPError
 from mcp.types import INVALID_PARAMS, ToolAnnotations
+from pydantic import ValidationError
 
 App = MCPServer
 
@@ -30,6 +32,7 @@ __all__ = [
     "add_resource",
     "add_prompt",
     "run_stdio",
+    "validation_message",
 ]
 
 
@@ -43,7 +46,76 @@ class PromptArgumentError(MCPError):
 
 def new_app(name: str, version: str, log_level: str = "INFO") -> MCPServer:
     level = log_level if log_level in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL") else "INFO"
-    return MCPServer(name, version=version, instructions="(loading modules)", log_level=level)  # type: ignore[arg-type]
+    app = MCPServer(name, version=version, instructions="(loading modules)", log_level=level)  # type: ignore[arg-type]
+    _short_validation_errors(app)
+    return app
+
+
+# ---------------------------------------------------------------------------- argument errors
+
+_KINDS = {
+    "int": "an integer", "float": "a number", "string": "a string", "bool": "true or false", "list": "a list",
+    "dict": "an object", "model": "an object", "literal": "one of the allowed values",
+}  # fmt: skip
+_BOUNDS = {"greater_than_equal": ">=", "less_than_equal": "<=", "greater_than": ">", "less_than": "<"}
+_BOUND_KEYS = {"greater_than_equal": "ge", "less_than_equal": "le", "greater_than": "gt", "less_than": "lt"}
+
+
+def _is_branch_tag(part: object) -> bool:
+    """A union-branch marker pydantic puts in an error location (``str``, ``list[str]``, ``function-after[...]``)."""
+    return isinstance(part, str) and (part in ("str", "int", "float", "bool", "list", "dict", "none") or "[" in part)
+
+
+def _got(value: object) -> str:
+    text = repr(value)
+    return text if len(text) <= 60 else text[:57] + "..."
+
+
+def validation_message(exc: ValidationError) -> str:
+    """Pydantic argument errors as one line, e.g. ``max_chars: must be >= 20 (got 19); n: required``."""
+    by_path: dict[str, list[dict[str, Any]]] = {}
+    for err in exc.errors(include_url=False):
+        path = ".".join(str(p) for p in err["loc"] if not _is_branch_tag(p)) or "arguments"
+        by_path.setdefault(path, []).append(err)
+    parts = []
+    for path, errs in by_path.items():
+        err = errs[0]
+        kind, ctx = err["type"], err.get("ctx") or {}
+        if len(errs) > 1 and all(_is_branch_tag(e["loc"][-1]) for e in errs):  # str | list[str] got neither
+            what = "must be " + " or ".join(_KINDS.get(e["type"].split("_")[0], str(e["loc"][-1])) for e in errs)
+        elif kind == "missing":
+            parts.append(f"{path}: required")
+            continue
+        elif kind in _BOUNDS:
+            what = f"must be {_BOUNDS[kind]} {ctx.get(_BOUND_KEYS[kind])}"
+        elif kind == "literal_error":
+            what = f"must be one of {ctx.get('expected')}"
+        elif kind.endswith(("_type", "_parsing")) and kind.split("_")[0] in _KINDS:
+            what = f"must be {_KINDS[kind.split('_')[0]]}"
+        else:
+            msg = str(err.get("msg") or kind)
+            what = msg[:1].lower() + msg[1:]
+        parts.append(f"{path}: {what} (got {_got(err.get('input'))})")
+    return "; ".join(parts)
+
+
+def _short_validation_errors(app: MCPServer) -> None:
+    """Report arguments that fail a tool's input schema as one line (``validation_message``) instead of
+    pydantic's multi-line text with documentation URLs. The SDK validates before our tool wrapper runs, so
+    this wraps the app's ``call_tool`` (used by both the stdio handler and in-process calls)."""
+    original = app.call_tool
+
+    @functools.wraps(original)
+    async def call_tool(name: str, arguments: dict[str, Any], context: Any = None) -> Any:
+        try:
+            return await original(name, arguments, context)
+        except ToolError as e:
+            cause = e.__cause__
+            if isinstance(e, UnexpectedToolError) or not isinstance(cause, ValidationError):
+                raise
+            raise ToolError(f"Error executing tool {name}: {validation_message(cause)}") from cause
+
+    app.call_tool = call_tool  # type: ignore[method-assign]
 
 
 def set_instructions(app: MCPServer, text: str) -> None:
