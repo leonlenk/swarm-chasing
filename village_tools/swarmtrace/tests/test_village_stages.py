@@ -83,3 +83,33 @@ def test_memories_checks_ideas_json_before_scanning(tmp_path, monkeypatch):
     with pytest.raises(SystemExit) as e:
         memories.main()
     assert "ideas.json is missing" in str(e.value.code) and "python ideas.py" in str(e.value.code)
+
+
+def _term_trace():
+    return {"version": 0, "id": "term-toy", "title": "Toy term", "kind": "term", "statement": "A coined toy word.",
+            "source": "Synthetic test fixture.", "start": "2031-01-01T00:00:00Z", "end": "2031-01-10T00:00:00Z",
+            "agents": [{"name": "alpha", "lab": "LabA", "joined": None, "left": None}],
+            "events": [{"id": "e1", "t": "2031-01-02T10:00:00Z", "agent": "alpha", "channel": "chat",
+                        "stance": "originates", "conf": None, "room": None, "snippet": "toyword is born"}],
+            "exposures": [], "adoptions": [], "edges": [], "persistence": [], "annotations": [], "quotes": [],
+            "metrics": {}}
+
+
+def test_trace_export_skips_sources_with_missing_inputs(tmp_path, monkeypatch, capsys):
+    import json
+
+    import trace_export
+    from swarmtrace.adapters import aivillage
+
+    def hostility():
+        raise FileNotFoundError(2, "No such file or directory", str(tmp_path / "hostility" / "results.json"))
+
+    monkeypatch.setattr(aivillage, "SOURCES", {"hostility": hostility, "terms": lambda: [_term_trace()]})
+    out = tmp_path / "traces"
+    assert trace_export.main(["--out", str(out)]) == 0
+    assert (out / "term-toy.json").exists()
+    assert [t["id"] for t in json.loads((out / "index.json").read_text())["traces"]] == ["term-toy"]
+    err = capsys.readouterr().err
+    assert "skipped source 'hostility'" in err and "results.json is missing" in err and "tracer_hostility.py" in err
+    # a single requested source with missing inputs fails cleanly, without a traceback
+    assert trace_export.main(["--out", str(out), "--source", "hostility"]) == 1
