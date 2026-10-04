@@ -14,6 +14,7 @@ from swarm_mcp import export as exp
 from swarm_mcp import llm
 from swarm_mcp.llm import FakeClient
 from swarm_mcp.scope import db, evidence
+from swarm_mcp.scope.adapters.mapped import MappedStoreAdapter
 from swarm_mcp.scope.ingest import ingest_mapped
 from swarm_mcp.scope.records import StoreRecordProvider, export_store, store_records
 from swarm_mcp.server import build_server
@@ -186,3 +187,24 @@ def test_masking_uses_the_redact_engine():
     assert Scrubber(False)("x@y.com") == "x@y.com"
     assert mask("mail help@agentvillage.org") == "mail [email]"  # setup masking: no allowlist
     assert show({"token": "ghp_" + "a1B2" * 9}) == '{"token": "[credential]"}'
+
+
+def test_ingest_refuses_a_store_with_another_schema(tmp_path: Path):
+    import duckdb
+
+    from swarm_mcp.scope.ingest import ingest
+
+    store = tmp_path / "other.duckdb"
+    con = duckdb.connect(str(store))
+    con.execute("CREATE TABLE events (evidence_id TEXT, source TEXT)")
+    con.execute("CREATE VIEW messages AS SELECT * FROM events")
+    con.close()
+    root = make_nested_jsonl(tmp_path / "crew")
+    with pytest.raises(ValueError, match="different schema"):
+        ingest(MappedStoreAdapter.from_file(_crew_mapping(tmp_path, root), root), root, store)
+
+
+def _crew_mapping(tmp_path: Path, root: Path) -> Path:
+    mapping = tmp_path / "crew.json"
+    mapping.write_text(json.dumps(draft_mapping(profile_path(root), "crew")))
+    return mapping

@@ -272,7 +272,8 @@ def cmd_export(args: argparse.Namespace, config: Config) -> int:
         "query": args.query,
     }
     out_dir = resolve_output(args.out)
-    rules = ["default"] + (["ip"] if args.redact_ips else [])
+    # the check rescans with every rule, so by default the export masks private IPs too
+    rules = ["default"] if args.keep_ips else ["all"]
     res = export_store(
         _db(args, config),
         out_dir,
@@ -359,7 +360,10 @@ def build_parser() -> argparse.ArgumentParser:
     e.add_argument("--until", help="exclusive UTC end; a bare date includes that day")
     e.add_argument("--query", help="only records whose text contains this (case-insensitive)")
     e.add_argument("--with-agents", action="store_true", help="also export the sources' agent records")
-    e.add_argument("--redact-ips", action="store_true", help="also mask private/loopback IPs")
+    e.add_argument(
+        "--keep-ips", action="store_true",
+        help="leave private/loopback IPs unmasked (the check then flags them unless --no-check)",
+    )  # fmt: skip
     e.add_argument("--no-check", action="store_true", help="skip the strict rescan of the export")
     e.add_argument("--json", action="store_true", help="print the summary as JSON")
     e.add_argument("--db", help="store path")

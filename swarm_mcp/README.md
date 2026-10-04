@@ -63,7 +63,7 @@ Start a session with `core_info`, or with the `investigate` prompt.
 | `swarm-mcp info [--json]` | modules (loaded or skipped, and why), sources with counts and date ranges, findings health, config. Exits 1 when a finding cites an id that does not resolve |
 | `swarm-mcp add <path> [--name SLUG] [--agent none\|api\|claude-code] [--mapping M] [--dry-run] [--db]` | add or refresh a dataset in the store (see above) |
 | `swarm-mcp render timeline [--since --until --channel --source --top --out]` | a self-contained HTML swimlane (one lane per agent, one mark per message, masked hover snippets). Default output `data/swarmscope-timeline.html` |
-| `swarm-mcp export --out DIR [--source --kind --channel --author --since --until --query] [--with-agents] [--redact-ips] [--no-check] [--json]` | export a redacted subset of the store for sharing, then rescan it (see Export) |
+| `swarm-mcp export --out DIR [--source --kind --channel --author --since --until --query] [--with-agents] [--keep-ips] [--no-check] [--json]` | export a redacted subset of the store for sharing, then rescan it (see Export) |
 
 Developer-only: `python -m swarm_mcp.bench generate|reference|score` (see ADDING_MODULES.md).
 
@@ -125,10 +125,10 @@ uv run --directory swarm_mcp swarm-mcp export --source village --channel general
 The export directory holds `events.jsonl` (standard records with full text, every
 string field redacted except the identity fields), optional `agents.jsonl`, and
 `manifest.json` (counts by source and kind, redaction counts by type, the policy, the
-filters, file hashes; never the redacted values). Afterwards the command rescans
-everything with the strictest rules (including private IPs) and exits 1 on any hit,
-hash mismatch or unlisted file; `--no-check` skips that. Emails at the
-`email_allowlist` domains are kept.
+filters, file hashes; never the redacted values). Exports mask private and loopback IPs
+too (`--keep-ips` leaves them). Afterwards the command rescans everything with every rule
+and exits 1 on any hit, hash mismatch or unlisted file; `--no-check` skips that. Emails
+at the `email_allowlist` domains are kept.
 
 ## Privacy
 
