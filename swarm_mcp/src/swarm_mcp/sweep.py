@@ -95,7 +95,10 @@ class SweepError(ToolInputError):
 
 @runtime_checkable
 class RecordProvider(Protocol):
-    """Yields standard event records (each with an ``event_id``) for a filter dict."""
+    """Yields standard event records (each with an ``event_id``) for a filter dict.
+
+    A provider may also have ``count(filters) -> int``, the number of matching records in all, so a capped
+    sweep can report its real total (``StoreRecordProvider`` does)."""
 
     def iter_records(self, filters: Mapping[str, Any], limit: int) -> Iterable[dict[str, Any]]: ...
 
@@ -414,8 +417,14 @@ def run(
     max_consecutive_errors: int = 3,
     sweep_id: str | None = None,
     meta: Mapping[str, Any] | None = None,
+    total: int | None = None,
+    cap_note: str | None = None,
 ) -> dict[str, Any]:
     """Apply ``rubric`` to at most ``cap`` records.
+
+    ``total`` is how many records matched when ``records`` holds only the first of them (default
+    ``len(records)``); it is reported as ``matching``. ``cap_note`` replaces the default note when
+    the cap leaves records unsent.
 
     ``dry_run`` sends nothing and writes nothing: it returns the estimate and a preview of the first
     prompt, and needs no client. Otherwise every verdict is appended to ``<directory>/<sweep_id>.jsonl``
@@ -435,15 +444,18 @@ def run(
         if not r.get("event_id"):
             raise SweepError("Every record needs an event_id (use standard event records).")
     chosen = list(records[:cap])
+    total = max(total or 0, len(records))
     notes: list[str] = []
-    if len(records) > cap:
-        notes.append(f"cap {cap} applied: {len(records) - cap} of {len(records)} records not sent")
+    if total > len(chosen):
+        n = len(chosen)
+        notes.append(cap_note or f"{n} of {total:,} records sent (the first {n} given; raise cap or split the sweep)")
     use_model = model or (client.model if client is not None else None) or "unknown"
     est = estimate(rubric, chosen, model=use_model, prices=prices)
 
     if dry_run:
         return {
             "dry_run": True,
+            "matching": total,
             "would_send": len(chosen),
             "event_ids": [r["event_id"] for r in chosen],
             "estimate": est,
@@ -468,7 +480,7 @@ def run(
             "rubric": rubric,
             "model": client.model,
             "cap": cap,
-            "n_input": len(records),
+            "n_input": total,
             "n_sent": len(chosen),
             "prompt_version": PROMPT_VERSION,
             "system_sha1": hashlib.sha1(SYSTEM_PROMPT.encode()).hexdigest()[:12],
@@ -523,6 +535,7 @@ def run(
         "sweep_id": sid,
         "file": str(path),
         "model": client.model,
+        "matching": total,
         "sent": len(done),
         "counts": summary["counts"],
         "tokens": summary["tokens"],
@@ -712,16 +725,34 @@ def pending_labels(sweep_id: str, directory: Path) -> list[dict[str, Any]]:
     return out
 
 
-def label(
-    sweep_id: str, event_id: str, correct: bool, directory: Path, note: str | None = None, labeler: str | None = None
-) -> dict[str, Any]:
-    """Record whether the sweep's verdict for ``event_id`` was correct (appends; the last label wins)."""
-    s = load(sweep_id, directory)
+def _labelable(s: Mapping[str, Any], sweep_id: str, event_id: str) -> dict[str, Any]:
+    """The verdict row for ``event_id`` in loaded sweep ``s``, or ``SweepError`` if it cannot be labeled."""
     row = next((v for v in s["verdicts"] if v["event_id"] == event_id), None)
     if row is None:
         raise SweepError(f"Event {event_id!r} is not part of sweep {sweep_id!r}.")
     if row.get("error"):
         raise SweepError(f"Event {event_id!r} has no verdict in sweep {sweep_id!r} (the call failed: {row['error']}).")
+    return row
+
+
+def check_labels(sweep_id: str, event_ids: Iterable[str], directory: Path) -> None:
+    """Raise one ``SweepError`` naming every event id that cannot be labeled, before any label is written."""
+    s = load(sweep_id, directory)
+    problems = []
+    for eid in event_ids:
+        try:
+            _labelable(s, sweep_id, eid)
+        except SweepError as e:
+            problems.append(str(e))
+    if problems:
+        raise SweepError("No labels were recorded. " + " ".join(problems))
+
+
+def label(
+    sweep_id: str, event_id: str, correct: bool, directory: Path, note: str | None = None, labeler: str | None = None
+) -> dict[str, Any]:
+    """Record whether the sweep's verdict for ``event_id`` was correct (appends; the last label wins)."""
+    row = _labelable(load(sweep_id, directory), sweep_id, event_id)
     rec = {"type": "label", "event_id": event_id, "correct": bool(correct), "verdict": row["verdict"],
            "labeled_at": _now()}  # fmt: skip
     if note:

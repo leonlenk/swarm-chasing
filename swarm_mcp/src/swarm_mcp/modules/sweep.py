@@ -23,6 +23,7 @@ DESCRIPTION = (
     "ids, then hand-label a sample and get precision with a 95% CI. Real runs need ANTHROPIC_API_KEY."
 )
 DEFAULT_PROVIDER = "store"
+PREVIEW_CHARS = 1500  # the dry-run prompt preview: rubric, record header and the start of the text
 
 Rubric = Annotated[
     str,
@@ -53,6 +54,10 @@ def register(mcp, ctx) -> None:
     def directory() -> Path:
         return engine.sweeps_dir(config)
 
+    def masked(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Rows with their rationale masked: model output about dataset text can repeat what it masks."""
+        return [{**r, "rationale": ctx.scrub(r["rationale"])} if r.get("rationale") else r for r in rows]
+
     def resolver() -> engine.Resolver:
         """Ids resolve through the store's get_record (the same path as core_get), as standard records."""
         api = getattr(ctx.registry, "store_api", None)
@@ -65,14 +70,20 @@ def register(mcp, ctx) -> None:
         return lambda eid: from_store_record(get_record(eid, max_chars=max_chars))
 
     def gather(ids: list[str] | None, filters: dict[str, Any] | None, limit: int):
-        """Records for a sweep, plus resolution errors, notes and the provider used."""
+        """Records for a sweep, plus resolution errors, notes, the provider used, how many records matched
+        in all and the note to show if the cap leaves some unsent."""
         if ids and filters is not None:
             raise ToolInputError("Pass either ids or filters, not both.")
         if ids:
             if len(ids) > engine.MAX_CAP * 4:
                 raise ToolInputError(f"At most {engine.MAX_CAP * 4} ids per call (got {len(ids)}).")
             records, errors = engine.resolve_ids(resolver(), ids, max_chars)
-            return records, errors, [], None
+            n = min(limit, len(records))
+            cap_note = (
+                f"{n} of {len(records):,} resolved ids sent (the first {n} in the order given; "
+                "pass the rest in another call or raise cap)"
+            )
+            return records, errors, [], None, len(records), cap_note
         if filters is not None:
             table = engine.providers(ctx.registry)
             if not table:
@@ -81,8 +92,19 @@ def register(mcp, ctx) -> None:
                     "`filters` cannot be used. Pass ids (from scope_search or other tools) instead."
                 )
             name = DEFAULT_PROVIDER if DEFAULT_PROVIDER in table else sorted(table)[0]
-            records = list(table[name].iter_records(filters, limit + 1))
-            return records, [], [f"records from provider {name!r}"], name
+            provider = table[name]
+            count = getattr(provider, "count", None)
+            total = count(filters) if callable(count) else None
+            # without a count, one record past the cap shows that some were left out
+            records = list(provider.iter_records(filters, limit if total is not None else limit + 1))
+            n = min(limit, len(records))
+            if total is None:
+                cap_note = (
+                    f"{n} of more than {n} matching records sent (the first {n}; narrow the filters or raise cap)"
+                )
+            else:
+                cap_note = f"{n} of {total:,} matching records sent (the oldest {n}; narrow since/until or raise cap)"
+            return records, [], [f"records from provider {name!r}"], name, total, cap_note
         raise ToolInputError(
             "Pass ids (from scope_search or other tools), or filters such as "
             "{'source': 'village', 'channel': 'general', 'since': '2026-01-05', 'until': '2026-01-12', "
@@ -131,7 +153,7 @@ def register(mcp, ctx) -> None:
                 client = llm.get_client(config)  # before any work: no key, nothing happens
             except llm.LLMUnavailable as e:
                 raise ToolInputError(str(e)) from None
-        records, errors, notes, provider = gather(ids, filters, cap)
+        records, errors, notes, provider, total, cap_note = gather(ids, filters, cap)
         if not records:
             if errors:
                 raise ToolInputError(
@@ -141,8 +163,10 @@ def register(mcp, ctx) -> None:
             raise ToolInputError("No records match these filters, so nothing was swept.")
         model = llm.configured_model(config)
         if dry_run:
-            out = engine.run(rubric, records, None, cap=cap, dry_run=True, model=model, prices=_prices(ctx))
+            out = engine.run(rubric, records, None, cap=cap, dry_run=True, model=model, prices=_prices(ctx),
+                             total=total, cap_note=cap_note)  # fmt: skip
             out["notes"] = notes + out["notes"] + ["call again with dry_run=false to run it"]
+            out["preview"]["prompt"] = ctx.untrusted(out["preview"]["prompt"], PREVIEW_CHARS)
         else:
             out = engine.run(
                 rubric,
@@ -154,8 +178,11 @@ def register(mcp, ctx) -> None:
                 prices=_prices(ctx),
                 concurrency=config.llm_concurrency,
                 meta={"source_tool": "sweep_run", "unresolved": len(errors), "provider": provider},
+                total=total,
+                cap_note=cap_note,
             )
             out["notes"] = notes + out.get("notes", [])
+            out["verdicts"] = masked(out["verdicts"])
         out["unresolved"] = errors
         if errors:
             out["notes"].append(f"{len(errors)} id(s) could not be resolved and were skipped (see unresolved)")
@@ -196,7 +223,7 @@ def register(mcp, ctx) -> None:
             "total_matches": len(rows),
             "returned": len(page),
             "has_more": offset + len(page) < len(rows),
-            "verdicts": [engine._public(r) for r in page],
+            "verdicts": masked([engine._public(r) for r in page]),
             "notes": [n for n in [note] if n],
         }
 
@@ -226,6 +253,7 @@ def register(mcp, ctx) -> None:
         'yes' verdicts with a Wilson 95% CI."""
         d = directory()
         if labels:
+            engine.check_labels(sweep_id, [lb.event_id for lb in labels], d)  # all or nothing
             recorded = [engine.label(sweep_id, lb.event_id, lb.correct, d, note=lb.note) for lb in labels]
             return {
                 "sweep_id": sweep_id,
@@ -241,7 +269,7 @@ def register(mcp, ctx) -> None:
             items += drawn["items"]
         out: dict[str, Any] = {
             "sweep_id": sweep_id,
-            "to_label": items,
+            "to_label": masked(items),
             "pending_from_earlier": min(len(pending), n),
             "newly_drawn": drawn["sampled"] if drawn else 0,
             "precision": engine.precision(sweep_id, d),
