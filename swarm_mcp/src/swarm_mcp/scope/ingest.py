@@ -5,6 +5,11 @@ transaction; findings and other sources are untouched. Rows are validated
 against the pydantic models, spooled to temporary NDJSON files next to the
 store (deleted afterwards) and bulk-loaded with DuckDB's ``read_json``, which
 is far faster than row-by-row inserts.
+
+``ingest`` takes an adapter name (``ai_village``) or an adapter instance; an
+adapter's optional ``source_meta`` dict is merged into ``sources.meta``.
+``ingest_mapped(mapping, path, db)`` ingests a dataset described by a
+``swarm_mcp.setup`` mapping (see ``scope.adapters.mapped``).
 """
 
 from __future__ import annotations
@@ -19,7 +24,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from swarm_mcp.scope import db, schema
-from swarm_mcp.scope.adapters import get_adapter
+from swarm_mcp.scope.adapters import Adapter, get_adapter
 
 log = logging.getLogger("swarm_mcp.scope.ingest")
 
@@ -36,16 +41,17 @@ def _columns_struct(table: str) -> str:
 
 
 def ingest(
-    adapter_name: str,
+    adapter_name: str | Adapter,
     path: Path,
     db_path: Path,
     *,
     include_events: bool = True,
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
-    """Ingest ``path`` with adapter ``adapter_name`` into ``db_path``. Returns counts and timing."""
+    """Ingest ``path`` with adapter ``adapter_name`` (a name or an adapter instance) into ``db_path``.
+    Returns counts and timing."""
     say = progress or (lambda msg: log.info(msg))
-    adapter = get_adapter(adapter_name)
+    adapter = get_adapter(adapter_name) if isinstance(adapter_name, str) else adapter_name
     path = Path(path)
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -91,7 +97,13 @@ def ingest(
                     str(path),
                     datetime.now(timezone.utc).replace(tzinfo=None),
                     json.dumps(counts),
-                    json.dumps({"include_events": include_events, "schema_version": schema.SCHEMA_VERSION}),
+                    json.dumps(
+                        {
+                            "include_events": include_events,
+                            "schema_version": schema.SCHEMA_VERSION,
+                            **(getattr(adapter, "source_meta", None) or {}),
+                        }
+                    ),
                 ],
             )
             con.execute("COMMIT")
@@ -115,3 +127,23 @@ def ingest(
         "counts": stored,
         "seconds": round(time.perf_counter() - t0, 1),
     }
+
+
+def ingest_mapped(
+    mapping: str | Path,
+    path: str | Path | None,
+    db_path: Path,
+    *,
+    progress: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """Ingest the dataset at ``path`` (default: the mapping's ``root``) through the declarative
+    ``mapping`` JSON into ``db_path``. Idempotent: the mapping's source is replaced as a whole."""
+    from swarm_mcp.scope.adapters.mapped import MappedStoreAdapter
+
+    adapter = MappedStoreAdapter.from_file(mapping, path)
+    result = ingest(adapter, adapter.mapped.root, db_path, progress=progress)
+    result["mapping"] = str(mapping)
+    stats = {k: v for k, v in adapter.mapped.stats.items() if v}
+    if stats:
+        result["mapping_stats"] = stats
+    return result

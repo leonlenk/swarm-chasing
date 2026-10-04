@@ -24,12 +24,14 @@ from typing import Annotated, Any, Literal
 import duckdb
 from pydantic import Field
 
+from swarm_mcp import sweep
 from swarm_mcp.events import EventNotFound, event_record
 from swarm_mcp.scope import evidence
 from swarm_mcp.scope.analysis import graph as graph_analysis
 from swarm_mcp.scope.analysis import timeline as timeline_analysis
 from swarm_mcp.scope.analysis.timeline import record_filters, ts_iso
 from swarm_mcp.scope.db import HUMAN, Store, label_for
+from swarm_mcp.scope.records import StoreRecordProvider
 from swarm_mcp.toolkit import ToolInputError, parse_time
 
 NAME = "scope"
@@ -223,21 +225,34 @@ def register(mcp, ctx) -> None:
         return resolve
 
     with ctx.store() as s:
-        store_sources = [r["source"] for r in s.all("SELECT source FROM sources ORDER BY source")]
-    for src in store_sources:
+        store_sources = {
+            r["source"]: evidence.source_kinds(s, r["source"])
+            for r in s.all("SELECT source FROM sources ORDER BY source")
+        }
+    for src, mapped_kinds in store_sources.items():
         if src in ctx.registry.events.by_name:
             ctx.log.warning("event source %r already registered; store records for it are not resolvable", src)
             continue
+        kinds = {
+            "chat": "a chat message; context = previous/next messages in the same room",
+            "event": "an agent action (session goal/summary); context = the same agent's adjacent actions",
+            "agent": "an agent (roster entry)",
+            "goal": "a dataset period (AI Village: a weekly goal)",
+        }
+        if mapped_kinds:  # a source ingested through a declarative mapping uses its own kinds
+            kinds = {"agent": kinds["agent"], **mapped_kinds}
         ctx.event_source(
-            kinds={
-                "chat": "a chat message; context = previous/next messages in the same room",
-                "event": "an agent action (session goal/summary); context = the same agent's adjacent actions",
-                "agent": "an agent (roster entry)",
-                "goal": "a dataset period (AI Village: a weekly goal)",
-            },
+            kinds=kinds,
             source=src,
             description=f"SwarmScope store records for source {src!r}.",
         )(make_resolver(src))
+
+    # sweep_run(filters=...) reads records straight from the store (masked like every tool result)
+    sweep.register_provider(
+        ctx.registry,
+        "store",
+        StoreRecordProvider(lambda: ctx.store_path, max_chars=sweep.DEFAULT_RECORD_CHARS, mask=ctx.scrub),
+    )
 
     # ------------------------------------------------------------------ list_sources
 

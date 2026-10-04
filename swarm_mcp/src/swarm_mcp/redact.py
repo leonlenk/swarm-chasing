@@ -367,7 +367,7 @@ def _r_keyword_secret(m: re.Match[str], r: Redactor) -> str | None:
 
 # --------------------------------------------------------------------------- email
 
-# Same shape as toolkit._EMAIL_RE, so record-level masking and exports agree.
+# The email pattern record-level masking (toolkit.Scrubber, via mask_text) and exports share.
 _EMAIL = re.compile(r"(?<![\w.+%-])[A-Za-z0-9._%+-]+@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})(?![\w-])")
 
 
@@ -400,8 +400,8 @@ _PHONE = re.compile(
     # international: '+', then 8-15 digits with at most two separators between digits
     r"\+[1-9](?:[ .()-]{0,2}[0-9]){7,14}"
     # North American 3-3-4: optional leading 1, separators required. Any digits are accepted
-    # (not just valid NANP area codes/exchanges) to match toolkit.Scrubber, which masks
-    # placeholder-style numbers such as 555-123-4567 too.
+    # (not just valid NANP area codes/exchanges), keeping the recall of the old regex-only
+    # toolkit.Scrubber, which masked placeholder-style numbers such as 555-123-4567 too.
     r"|(?:1[ .-])?(?:\([0-9]{3}\)[ .-]?|[0-9]{3}[ .-])[0-9]{3}[ .-][0-9]{4}"
     r")(?![\w-]|\.[0-9])"
 )
@@ -678,9 +678,9 @@ def mask_text(
 ) -> str:
     """Mask ``text`` with the default rules (or ``rules``); None becomes ``""``.
 
-    Drop-in for record-level masking: ``toolkit.Scrubber.__call__`` can return
+    Record-level masking: ``toolkit.Scrubber.__call__`` returns
     ``mask_text(text, self.allow)`` when enabled. Pass ``rules=("email", "phone")``
-    to reproduce the old email+phone-only behaviour exactly; the default also
+    for email+phone-only masking; the default also
     masks credentials and credentialed URLs. Redactors are cached per config.
     """
     if not text:
